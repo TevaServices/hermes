@@ -1,0 +1,83 @@
+# Hermes agent containers — one service per profile.
+#
+# Local:  mise run up   (renders + creates the network first, via task deps)
+# Komodo: deployed as the "hermes-agents" Stack (komodo/resources.toml).
+#
+# Secrets: each service reads /etc/hermes/hermes-<profile>.env on the
+# host (set HERMES_ENV_DIR to override for local dev, e.g. ./secrets).
+# The same file is mounted to /data/.env because Hermes reads keys from
+# its .env file. NEVER commit real secret files.
+#
+# All services join the shared external `hermes-net` network so the
+# agents can reach honcho-mcp / firecrawl-api by service name.
+
+services:
+  hermes-main:
+    build:
+      context: ../docker/hermes
+      args:
+        HERMES_REF: ${HERMES_REF:-v2026.3.23}
+    image: hermes-agent:${HERMES_REF:-v2026.3.23}
+    container_name: hermes-main
+    restart: unless-stopped
+    environment:
+      HERMES_HOME: /data
+      HERMES_MODE: gateway
+      TZ: ${TZ:-UTC}
+      # In-place updates (alternative to the git-pinned rebuild flow):
+      # uncomment both this and the hermes-main-code volume below. The
+      # code volume must stay mounted or updates are lost on recreate,
+      # and image rebuilds will NOT update running code while mounted.
+      # HERMES_UPDATE_ON_START: "true"
+    env_file:
+      - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/hermes-main.env
+    volumes:
+      - hermes-main-data:/data
+      # Rendered overlay from this repo (build/main/ — see mise.toml).
+      - ../build/main:/overlay:ro
+      # Hermes reads keys from $HERMES_HOME/.env
+      - ${HERMES_ENV_DIR:?}/hermes-main.env:/data/.env
+      # Uncomment to enable Hermes' "docker" terminal backend, letting
+      # the agent run sibling containers on the host docker daemon.
+      # This is a wide grant of host privilege — only do it for
+      # profiles you fully trust.
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # In-place update mode (see HERMES_UPDATE_ON_START above):
+      # - hermes-main-code:/usr/local/lib/hermes-agent
+    networks:
+      hermes-net:
+        aliases: [hermes-main]
+
+  # Second profile example. Rendered from config/profiles/researcher/.
+  # Uncomment to run; profiles are independent agents with separate
+  # memory, sessions, and gateway config.
+  # hermes-researcher:
+  #   build:
+  #     context: ../docker/hermes
+  #     args:
+  #       HERMES_REF: ${HERMES_REF:-v2026.3.23}
+  #   image: hermes-agent:${HERMES_REF:-v2026.3.23}
+  #   container_name: hermes-researcher
+  #   restart: unless-stopped
+  #   environment:
+  #     HERMES_HOME: /data
+  #     HERMES_MODE: gateway
+  #     TZ: ${TZ:-UTC}
+  #   env_file:
+  #     - ${HERMES_ENV_DIR:?}/hermes-researcher.env
+  #   volumes:
+  #     - hermes-researcher-data:/data
+  #     - ../build/researcher:/overlay:ro
+  #     - ${HERMES_ENV_DIR:?}/hermes-researcher.env:/data/.env
+  #   networks:
+  #     hermes-net:
+  #       aliases: [hermes-researcher]
+
+networks:
+  hermes-net:
+    external: true
+
+volumes:
+  hermes-main-data:
+  # hermes-researcher-data:
+  # hermes-main-code:

@@ -1,0 +1,72 @@
+# Komodo Resource Sync definitions — the GitOps control plane.
+#
+# This file is the git source of truth for the Komodo resources that
+# deploy this stack. Komodo Core clones the repo (configured via the
+# Resource Sync resource in the UI — see komodo/README.md), applies
+# these definitions, and a git webhook on push re-executes the sync,
+# which redeploys anything that changed.
+#
+# Cross-check field names against the Resource Sync docs for your
+# Komodo version before first sync — the TOML schema follows
+# https://komo.do/docs/automate/sync-resources :
+#   [[stack]] / [stack.config]
+#
+# You MUST adjust before first sync:
+#   - <owner>/hermes   -> your fork/clone of this repo (3 places)
+#   - "homelab"        -> the name of your Komodo Server (Periphery host)
+#   - environment vars -> secrets live on the host (not in git); keep
+#     the version pins in sync with mise.toml [env], which is where
+#     local runs get them (Komodo does not run mise)
+
+# ---------------------------------------------------------------- Stacks
+
+[[stack]]
+name = "hermes-agents"
+[stack.config]
+server = "homelab"
+repo = "<owner>/hermes"
+branch = "main"
+git_provider = "github"
+# git_account = "my-github-user"      # for private repos
+file_paths = ["compose/hermes.compose.yml"]
+deploy = true
+# HERMES_ENV_DIR points the env_file/mount paths at the host secrets
+# directory (created by scripts/bootstrap-host.sh). The version pins
+# mirror mise.toml [env] so the deployed tags stay git-managed.
+environment = { HERMES_ENV_DIR = "/etc/hermes", HERMES_REF = "v2026.3.23", TZ = "UTC" }
+
+[[stack]]
+name = "hermes-honcho"
+[stack.config]
+server = "homelab"
+repo = "<owner>/hermes"
+branch = "main"
+git_provider = "github"
+file_paths = ["compose/honcho.compose.yml"]
+deploy = true
+environment = { HERMES_ENV_DIR = "/etc/hermes", HONCHO_VERSION = "main" }
+
+[[stack]]
+name = "hermes-firecrawl"
+[stack.config]
+server = "homelab"
+repo = "<owner>/hermes"
+branch = "main"
+git_provider = "github"
+file_paths = ["compose/firecrawl.compose.yml"]
+deploy = true
+environment = { HERMES_ENV_DIR = "/etc/hermes", FIRECRAWL_VERSION = "latest" }
+
+# ------------------------------------------------------------ Repo + update
+# Used by the "deploy-changed-stacks" Procedure (created in the UI; see
+# komodo/README.md): it pulls this repo and batch-deploys only the
+# stacks whose compose files changed — the recommended monorepo pattern,
+# since stack-level webhooks would otherwise clone the whole repo three
+# times per push.
+
+[[repo]]
+name = "hermes-stack"
+[repo.config]
+git_provider = "github"
+repo = "<owner>/hermes"
+branch = "main"

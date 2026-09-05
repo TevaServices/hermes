@@ -1,0 +1,87 @@
+# mise — the single entrypoint for this repo's toolchain, build variables,
+# and tasks (replaces a Makefile).
+#
+#   mise trust        # once, after cloning
+#   mise tasks       # list tasks
+#   mise run up      # build + start everything locally
+#
+# Build-time variables (version pins, paths) live in [env] below and are
+# exported to every task — docker compose interpolation reads them from
+# the process environment, so no --env-file is needed.
+#
+# Per-machine overrides belong in mise.local.toml (gitignored), set via:
+#   mise set TZ=UTC
+#   mise set HERMES_ENV_DIR=/etc/hermes
+#
+# Runtime container secrets (API keys, bot tokens) are NOT build
+# variables: they live in env files under $HERMES_ENV_DIR — see
+# secrets/*.env.example. komodo/resources.toml repeats the version pins
+# for the Komodo side, which does not run mise.
+
+[tools]
+# Everything needed to build this repo; mise installs these into its
+# own data dir and exposes them on PATH inside the project.
+python = "3.12" # render.py needs 3.11+ (stdlib tomllib)
+uv = "latest"   # ad-hoc deps, e.g. `uv run --with pyyaml python ...`
+
+[env]
+# Absolute path to the secrets dir — compose env_file/volume paths
+# resolve against it. ({{config_root}} expands to this file's dir.)
+HERMES_ENV_DIR = "{{config_root}}/secrets"
+
+# Upstream version pins — the single knob for "keep it up to date".
+# scripts/check-updates.sh reads these; bump, commit, push, and the
+# Komodo webhook-driven rebuild/deploy does the rest.
+HERMES_REF = "v2026.3.23"     # ref on github.com/NousResearch/hermes-agent
+HONCHO_VERSION = "main"       # ref on github.com/plastic-labs/honcho
+FIRECRAWL_VERSION = "latest"  # tag on the ghcr.io/firecrawl/* images
+
+# Optional — override locally with `mise set FIRECRAWL_PORT=3002`:
+# FIRECRAWL_PORT = "3002"
+
+# ------------------------------------------------------------------ tasks
+
+[tasks.render]
+description = "Compile config/ into build/<profile>/ overlays"
+run = "python render.py"
+
+[tasks.validate]
+description = "Validate config without writing build output"
+run = "python render.py --check"
+
+[tasks.net]
+description = "Create the shared external docker network (idempotent)"
+run = "docker network inspect hermes-net >/dev/null 2>&1 || docker network create hermes-net"
+
+[tasks.up]
+description = "Build and start all three stacks (hermes, honcho, firecrawl)"
+depends = ["render", "net"]
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml up -d --build"
+
+[tasks.down]
+description = "Stop all three stacks (volumes preserved)"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml down"
+
+[tasks.ps]
+description = "Show stack status"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml ps"
+
+[tasks.logs]
+description = "Tail logs across the stack"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml logs -f --tail=100"
+
+[tasks.pull]
+description = "Pre-pull images (useful before a Komodo-side deploy)"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml pull --ignore-buildable"
+
+[tasks.chat]
+description = "Interactive CLI chat with the main agent"
+run = "docker compose -f compose/hermes.compose.yml run --rm hermes-main chat"
+
+[tasks.check-updates]
+description = "Report drift between pins (mise.toml [env]) and upstream"
+run = "./scripts/check-updates.sh"
+
+[tasks.clean]
+description = "Remove generated build output"
+run = "rm -rf build"

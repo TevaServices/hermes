@@ -1,0 +1,28 @@
+# "main" agent profile — one Hermes agent = one container (compose/hermes.compose.yml).
+#
+# Everything here compiles into build/main/ via `mise run render`, which is
+# mounted into the container as its config overlay. Instead of editing a
+# long Hermes config.yaml, change a line here and re-render.
+
+# Model aliases from config/models.toml
+model = "smart"
+fallback_model = "fast"
+
+# Enabled integrations from config/integrations.toml
+integrations = ["honcho", "firecrawl"]
+
+# Messaging platforms for `hermes gateway` (honest limitation: the env
+# var names below are the conventional ones — verify against the
+# gateway docs before relying on a platform).
+# Available: telegram, discord, slack, whatsapp, signal
+platforms = ["telegram"]
+
+# Free-form Hermes config passthrough: every key under [config_extra]
+# is merged verbatim into the generated config.yaml top level. Use it
+# for settings render.py has no abstraction for (check the Hermes
+# configuration reference for valid keys).
+[config_extra]
+
+# Extra env var placeholders render.py should list in .env.example.
+# [env]
+# MY_TOOL_TOKEN = ""

@@ -1,0 +1,20 @@
+# Generated per-profile overlays (render.py output)
+build/
+
+# Per-machine mise overrides (mise set ...) — may contain local paths
+mise.local.toml
+
+# Real secrets — only *.env.example files are committed. bootstrap-host.sh
+# copies the templates to /etc/hermes on the host.
+secrets/*.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+# Claude Code local settings
+.claude/settings.local.json

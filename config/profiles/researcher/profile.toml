@@ -1,0 +1,16 @@
+# "researcher" agent profile — a second, web-heavy agent demonstrating
+# multi-profile deployment. Rendered to build/researcher/ and run as a
+# separate container (see the commented hermes-researcher service in
+# compose/hermes.compose.yml).
+
+model = "fast"
+fallback_model = "cheap_local"
+integrations = ["honcho", "firecrawl"]
+platforms = []
+
+[config_extra]
+# Example passthrough: Hermes config keys you want set only for this
+# profile go here.
+# max_tokens = 8192
+
+# [env]

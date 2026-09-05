@@ -1,0 +1,111 @@
+# Firecrawl — self-hosted web scraping/crawling
+# (https://docs.firecrawl.dev/contributing/self-host).
+#
+# Local:  mise run up
+# Komodo: deployed as the "hermes-firecrawl" Stack (komodo/resources.toml).
+#
+# Uses the images Firecrawl publishes to ghcr.io, tagged via
+# mise.toml [env] -> FIRECRAWL_VERSION. The self-host API is intentionally
+# minimal: USE_DB_AUTHENTICATION=false (trusted networks only — nothing
+# is published off-host here) and TEST_API_KEY acts as the API key the
+# firecrawl-mcp server sends (secrets/firecrawl.env -> FIRECRAWL_API_KEY).
+#
+# The env wiring below mirrors Firecrawl's upstream docker-compose.yaml
+# (services: api, playwright-service, redis, rabbitmq, nuq-postgres).
+# When bumping FIRECRAWL_VERSION, diff against upstream's compose file
+# for that release — variable names occasionally change:
+#   https://github.com/firecrawl/firecrawl/blob/main/docker-compose.yaml
+#
+# Secrets (TEST_API_KEY, POSTGRES_*) flow in via env_file from
+# HERMES_ENV_DIR — compose does NOT interpolate ${...} from env_file
+# entries, so nothing secret is referenced with ${} below. The
+# rabbitmq/postgres credentials are internal to the compose network;
+# the API key is the only one clients (the Hermes agents) use.
+
+x-firecrawl-common: &firecrawl-common
+  environment: &firecrawl-env
+    USE_DB_AUTHENTICATION: "false"
+    REDIS_URL: redis://firecrawl-redis:6379
+    REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
+    PLAYWRIGHT_SERVICE_URL: http://firecrawl-playwright:3000
+    RABBITMQ_URL: amqp://firecrawl:firecrawl@firecrawl-rabbitmq:5672/%2F
+    POSTGRES_HOST: firecrawl-db
+    POSTGRES_PORT: "5432"
+
+services:
+  firecrawl-api:
+    image: ghcr.io/firecrawl/firecrawl:${FIRECRAWL_VERSION:-latest}
+    container_name: firecrawl-api
+    restart: unless-stopped
+    env_file:
+      - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/firecrawl.env
+    <<: *firecrawl-common
+    depends_on:
+      - firecrawl-db
+      - firecrawl-redis
+      - firecrawl-rabbitmq
+    networks:
+      hermes-net:
+        aliases: [firecrawl-api]
+    # Only the Hermes agents need this API (via hermes-net). Publish to
+    # loopback only if you want to curl it from the host.
+    ports:
+      - "127.0.0.1:${FIRECRAWL_PORT:-3002}:3002"
+
+  firecrawl-playwright:
+    image: ghcr.io/firecrawl/playwright-service:${FIRECRAWL_VERSION:-latest}
+    container_name: firecrawl-playwright
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      BLOCK_MEDIA: "false"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4g
+    networks:
+      - hermes-net
+
+  firecrawl-redis:
+    image: redis:alpine
+    container_name: firecrawl-redis
+    restart: unless-stopped
+    volumes:
+      - firecrawl-redis-data:/data
+    networks:
+      - hermes-net
+
+  firecrawl-rabbitmq:
+    image: rabbitmq:3-management
+    container_name: firecrawl-rabbitmq
+    restart: unless-stopped
+    environment:
+      # Internal to the compose network; matches RABBITMQ_URL above.
+      # Change both together if you need different credentials.
+      RABBITMQ_DEFAULT_USER: firecrawl
+      RABBITMQ_DEFAULT_PASS: firecrawl
+    volumes:
+      - firecrawl-rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - hermes-net
+
+  firecrawl-db:
+    image: ghcr.io/firecrawl/nuq-postgres:${FIRECRAWL_VERSION:-latest}
+    container_name: firecrawl-db
+    restart: unless-stopped
+    env_file:
+      - ${HERMES_ENV_DIR:?}/firecrawl.env
+    volumes:
+      - firecrawl-db-data:/var/lib/postgresql/data
+    networks:
+      - hermes-net
+
+networks:
+  hermes-net:
+    external: true
+
+volumes:
+  firecrawl-redis-data:
+  firecrawl-rabbitmq-data:
+  firecrawl-db-data:

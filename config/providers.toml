@@ -1,0 +1,59 @@
+# Provider registry — every LLM endpoint Hermes can reach.
+#
+# Each provider here abstracts away Hermes' raw `model.provider` /
+# `model.base_url` / `providers:` config.yaml plumbing. You should never
+# need to hand-edit a Hermes config file — set providers and model IDs
+# here, pick them per-profile in profiles/<name>/profile.toml, and run
+# `mise run render`.
+#
+# Keys:
+#   label      — human-readable name (cosmetic)
+#   base_url   — empty string = the provider's standard endpoint.
+#               Set it to override/proxy (emitted as a Hermes `providers:`
+#               entry with `api:` + `transport:`).
+#   api_mode   — chat_completions | anthropic_messages | responses ...
+#               (Hermes calls this `api_mode` in `model:` and `transport`
+#               in `providers:` entries; render.py maps it for you)
+#   api_key_env— name of the environment variable in secrets/*.env that
+#               holds the key. Empty = no key required.
+#               NEVER put keys in this file.
+#
+# NOTE: the set of provider names Hermes recognizes natively (without a
+# base_url) evolves — check https://hermes-agent.nousresearch.com/docs/integrations/providers
+# when adding a new one.
+
+[providers.openrouter]
+label = "OpenRouter"
+api_mode = "chat_completions"
+api_key_env = "OPENROUTER_API_KEY"
+
+[providers.nous]
+label = "Nous Portal"
+api_mode = "chat_completions"
+api_key_env = "NOUS_PORTAL_API_KEY"
+
+[providers.openai]
+label = "OpenAI"
+api_mode = "chat_completions"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.anthropic]
+label = "Anthropic"
+api_mode = "anthropic_messages"
+api_key_env = "ANTHROPIC_API_KEY"
+
+# Example of a self-hosted / custom endpoint. Because base_url is set,
+# render.py emits it as a named Hermes `providers:` entry and points
+# `model.provider` at the key name.
+[providers.ollama]
+label = "Local Ollama on the Docker host"
+base_url = "http://host.docker.internal:11434/v1"
+api_mode = "chat_completions"
+api_key_env = "" # no key required
+
+# Uncomment to route through a proxy/gateway:
+# [providers.anthropic_proxy]
+# label = "Anthropic via gateway"
+# base_url = "https://gateway.internal/anthropic"
+# api_mode = "anthropic_messages"
+# api_key_env = "ANTHROPIC_API_KEY"

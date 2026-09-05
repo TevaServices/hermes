@@ -1,0 +1,53 @@
+# Hermes agent image.
+#
+# Built from compose/hermes.compose.yml:
+#   docker compose -f compose/hermes.compose.yml build
+#
+# The image runs the official Nous Research installer at a pinned ref
+# (versions.env -> HERMES_REF), which sets up:
+#   - the agent code at /usr/local/lib/hermes-agent (root/FHS layout)
+#   - a `hermes` launcher at /usr/local/bin/hermes
+#   - a managed Node.js runtime under $HERMES_HOME/node (used by npx-
+#     based MCP servers like firecrawl-mcp)
+#
+# Agent state (config.yaml, .env, memories, sessions, skills) lives in a
+# volume mounted at /data, set via HERMES_HOME. The rendered profile
+# overlay is mounted read-only at /overlay and applied by entrypoint.sh
+# on every start — the git repo is the source of truth for config.
+#
+# Rebuilding the image after bumping HERMES_REF IS the update path:
+# the code lives in the image, state lives in the volume.
+FROM ubuntu:24.04
+
+ARG HERMES_REF=v2026.3.23
+ENV HERMES_HOME=/data \
+    DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8
+
+# curl/git/certs: installer + updates. docker.io: the CLI for Hermes'
+# "docker" terminal backend (mount /var/run/docker.sock to use it —
+# see compose/hermes.compose.yml). openssh-client: ssh backend.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git openssh-client docker.io tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
+# Official installer. --commit pins the checkout; the installer refuses
+# to roll an existing install backward without --force-commit, which
+# never applies here since the layer is always fresh.
+# If your ref is a tag and the installer insists on a raw SHA, resolve
+# it with:  git ls-remote https://github.com/NousResearch/hermes-agent <tag>
+RUN curl -fsSL \
+      https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_REF}/scripts/install.sh \
+      -o /tmp/hermes-install.sh \
+ && bash /tmp/hermes-install.sh --commit ${HERMES_REF} \
+ && rm -f /tmp/hermes-install.sh
+
+COPY entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
+RUN chmod +x /usr/local/bin/hermes-entrypoint.sh \
+ && mkdir -p /data
+
+VOLUME ["/data"]
+
+ENTRYPOINT ["/usr/local/bin/hermes-entrypoint.sh"]
+CMD ["gateway"]

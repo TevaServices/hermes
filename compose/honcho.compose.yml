@@ -1,0 +1,112 @@
+# Honcho — durable agent memory (https://github.com/plastic-labs/honcho).
+#
+# Local:  mise run up
+# Komodo: deployed as the "hermes-honcho" Stack (komodo/resources.toml).
+#
+# Honcho has no prebuilt registry image, so compose builds straight from
+# the upstream git repo at a pinned ref (mise.toml [env] ->
+# HONCHO_VERSION). Bumping the pin and redeploying is the update path.
+# git must be installed on the machine running `docker compose up`
+# (git build contexts are resolved client-side).
+
+services:
+  honcho-api:
+    build:
+      context: https://github.com/plastic-labs/honcho.git#${HONCHO_VERSION:-main}
+    image: honcho:${HONCHO_VERSION:-main}
+    container_name: honcho-api
+    restart: unless-stopped
+    # Matches upstream docker-compose.yml.example
+    entrypoint: ["sh", "docker/entrypoint.sh"]
+    env_file:
+      - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/honcho.env
+    environment:
+      # Upstream default is trust auth (POSTGRES_HOST_AUTH_METHOD=trust,
+      # honcho-db never leaves the compose network), so the URI needs no
+      # password. If you switch honcho-db to password auth, set
+      # POSTGRES_PASSWORD in secrets/honcho.env (flows in via env_file),
+      # drop trust, and put the password in the URI here.
+      DB_CONNECTION_URI: postgresql://postgres@honcho-db:5432/postgres
+      CACHE_URL: redis://honcho-redis:6379
+      CACHE_ENABLED: "true"
+    depends_on:
+      - honcho-db
+      - honcho-redis
+    networks:
+      hermes-net:
+        aliases: [honcho-api]
+    # Expose only if you want to hit the API from off-host; the agents
+    # and the MCP server reach it over hermes-net. Bind to loopback.
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+
+  honcho-deriver:
+    # Background worker that derives dialectic/symbolic representations.
+    # Same image as the API.
+    image: honcho:${HONCHO_VERSION:-main}
+    container_name: honcho-deriver
+    restart: unless-stopped
+    command: ["python", "-m", "src.deriver"]
+    env_file:
+      - ${HERMES_ENV_DIR:?}/honcho.env
+    environment:
+      DB_CONNECTION_URI: postgresql://postgres@honcho-db:5432/postgres
+      CACHE_URL: redis://honcho-redis:6379
+      CACHE_ENABLED: "true"
+    depends_on:
+      - honcho-db
+      - honcho-redis
+    networks:
+      - hermes-net
+
+  honcho-mcp:
+    # Honcho's MCP server — what Hermes' mcp_servers.honcho entry
+    # points at (http://honcho-mcp:3000/mcp).
+    build:
+      context: https://github.com/plastic-labs/honcho.git#${HONCHO_VERSION:-main}
+      dockerfile: mcp/Dockerfile
+    image: honcho-mcp:${HONCHO_VERSION:-main}
+    container_name: honcho-mcp
+    restart: unless-stopped
+    environment:
+      HONCHO_API_URL: http://honcho-api:8000
+    depends_on:
+      - honcho-api
+    networks:
+      hermes-net:
+        aliases: [honcho-mcp]
+
+  honcho-db:
+    image: pgvector/pgvector:pg15
+    container_name: honcho-db
+    restart: unless-stopped
+    env_file:
+      - ${HERMES_ENV_DIR:?}/honcho.env
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      # Upstream default. For anything exposed beyond the compose
+      # network, switch to password auth (see the DB_CONNECTION_URI
+      # note in honcho-api above).
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - honcho-pgdata:/var/lib/postgresql/data
+    networks:
+      - hermes-net
+
+  honcho-redis:
+    image: redis:8.2
+    container_name: honcho-redis
+    restart: unless-stopped
+    volumes:
+      - honcho-redis-data:/data
+    networks:
+      - hermes-net
+
+networks:
+  hermes-net:
+    external: true
+
+volumes:
+  honcho-pgdata:
+  honcho-redis-data:

@@ -1,0 +1,38 @@
+# Container integrations — Honcho (memory) and Firecrawl (web).
+#
+# Each integration defines the MCP server block render.py emits into
+# every profile that lists it. Endpoints are service names on the shared
+# `hermes-net` Docker network, so they work identically in local
+# compose runs and Komodo-managed deployments.
+#
+# Honcho runs via compose/honcho.compose.yml:
+#   honcho-api  — FastAPI server (port 8000)
+#   honcho-mcp  — Honcho's MCP server for agent clients (port 3000)
+# Firecrawl runs via compose/firecrawl.compose.yml:
+#   firecrawl-api — Firecrawl API server (port 3002)
+
+[integrations.honcho]
+label = "Honcho durable memory"
+enabled = true
+# MCP endpoint of the honcho-mcp container. If your Honcho version
+# serves MCP at a different path (e.g. /mcp vs /sse), change it here —
+# this is the only place you need to touch.
+mcp_url = "http://honcho-mcp:3000/mcp"
+# Only needed if you enable auth on your Honcho instance.
+required_env = []
+
+[integrations.firecrawl]
+label = "Firecrawl web scraping/crawling"
+enabled = true
+# firecrawl-mcp is an npx stdio MCP server pointed at the self-hosted
+# API container. Hermes substitutes ${VAR} from its .env at runtime.
+mcp_command = "npx"
+mcp_args = ["-y", "firecrawl-mcp"]
+mcp_env = { FIRECRAWL_API_URL = "http://firecrawl-api:3002", FIRECRAWL_API_KEY = "${FIRECRAWL_API_KEY}" }
+# TEST_API_KEY is what the self-hosted Firecrawl API accepts when
+# USE_DB_AUTHENTICATION=false.
+required_env = ["FIRECRAWL_API_KEY"]
+
+# Add further MCP integrations the same way — either url-based (see
+# honcho) or stdio command-based (see firecrawl) — then list the
+# integration key in a profile's `integrations = [...]`.

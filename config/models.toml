@@ -1,0 +1,33 @@
+# Model catalog — short, memorable aliases for models.
+#
+# Profiles reference models BY ALIAS (see profiles/<name>/profile.toml),
+# so switching an agent from one model to another is a one-line change.
+#
+# Keys:
+#   provider       — must match a key in providers.toml
+#   model          — the provider's model ID exactly as the provider
+#                    expects it (check `hermes model` picker or your
+#                    provider dashboard for available IDs)
+#   context_length — optional; emitted to Hermes `model.context_length`
+#   description    — free-form note shown by `mise run render`
+
+[models.fast]
+provider = "openrouter"
+model = "google/gemini-2.5-flash"
+description = "Cheap and quick; good default for casual chat"
+
+[models.smart]
+provider = "openrouter"
+model = "anthropic/claude-opus-4.7"
+description = "Frontier reasoning; good default for the main agent"
+
+[models.coder]
+provider = "openrouter"
+model = "qwen/qwen3-coder"
+description = "Code-focused model for development work"
+
+[models.cheap_local]
+provider = "ollama"
+model = "qwen2.5-coder:32b"
+context_length = 64000
+description = "Self-hosted via Ollama on the host; no API cost"
