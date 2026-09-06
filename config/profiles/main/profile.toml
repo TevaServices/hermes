@@ -4,11 +4,14 @@
 # mounted into the container as its config overlay. Instead of editing a
 # long Hermes config.yaml, change a line here and re-render.
 
-# Model aliases from config/models.toml. "fast" (gpt-oss:20b) keeps token
-# usage minimal; "smart" (gpt-oss:120b) covers provider failures. Bump to
-# "frontier" here if this agent ever needs heavy reasoning.
-model = "fast"
-fallback_model = "smart"
+# Model aliases from config/models.toml. Primary work (tool calling,
+# multi-step tasks) runs on "smart" (gpt-oss:120b — capable enough to be
+# effective as an agent brain); smart_model_routing below sends short/
+# simple turns to the cheap "fast" model (gpt-oss:20b), so everyday
+# chit-chat costs the minimum. "frontier" (glm-5.3) remains one line away
+# if this agent ever needs heavy reasoning.
+model = "smart"
+fallback_model = "fast"
 
 # Enabled integrations from config/integrations.toml
 integrations = ["honcho", "firecrawl"]
@@ -26,6 +29,16 @@ platforms = []
 # for settings render.py has no abstraction for (check the Hermes
 # configuration reference for valid keys).
 [config_extra]
+# Least-costly-while-effective routing: short, single-line messages with
+# no code/tools/URLs go to the cheap model; everything else uses the
+# primary. `provider` is the named custom provider from providers.toml
+# (rendered into config.yaml `providers:`), so it shares the same
+# OLLAMA_API_KEY.
+[config_extra.smart_model_routing]
+enabled = true
+[config_extra.smart_model_routing.cheap_model]
+provider = "ollama_cloud"
+model = "gpt-oss:20b"
 
 # Extra env var placeholders render.py should list in .env.example.
 # [env]

@@ -2,7 +2,7 @@
 # Edit config/ sources and run `mise run render` instead.
 model:
   provider: ollama_cloud
-  default: gpt-oss:20b
+  default: gpt-oss:120b
   base_url: https://ollama.com/v1
   context_length: 32768
   api_mode: chat_completions
@@ -26,3 +26,8 @@ mcp_servers:
     env:
       FIRECRAWL_API_URL: http://firecrawl-api:3002
       FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY}
+smart_model_routing:
+  enabled: true
+  cheap_model:
+    provider: ollama_cloud
+    model: gpt-oss:20b

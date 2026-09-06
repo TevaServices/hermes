@@ -3,8 +3,10 @@
 # separate container (see the commented hermes-researcher service in
 # compose/hermes.compose.yml).
 
-model = "fast"
-fallback_model = "smart"
+# Research is multi-step tool-heavy work — run it on the capable tier
+# ("smart" = gpt-oss:120b) with the cheap model as failure fallback.
+model = "smart"
+fallback_model = "fast"
 integrations = ["honcho", "firecrawl"]
 platforms = []
 
