@@ -41,7 +41,11 @@ RUN curl -fsSL \
       https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_REF}/scripts/install.sh \
       -o /tmp/hermes-install.sh \
  && bash /tmp/hermes-install.sh --branch ${HERMES_REF} --skip-setup \
- && rm -f /tmp/hermes-install.sh
+ && rm -f /tmp/hermes-install.sh \
+# The v2026.3.x installer --skip-setup lands the code + venv in
+# $HOME/.hermes (no /usr/local/bin launcher). Expose the venv entry
+# point at the conventional location the entrypoint execs.
+ && ln -sf /root/.hermes/hermes-agent/venv/bin/hermes /usr/local/bin/hermes
 
 COPY entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
 RUN chmod +x /usr/local/bin/hermes-entrypoint.sh \
