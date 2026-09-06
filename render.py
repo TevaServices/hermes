@@ -97,11 +97,19 @@ def to_yaml(value, indent: int = 0) -> str:
                 else:
                     lines.append(f"{pad}{key}:")
                     lines.append(to_yaml(val, indent + 1))
-            elif isinstance(val, list) and all(
+            elif isinstance(val, list) and val and all(
                 not isinstance(x, (dict, list)) for x in val
             ):
                 inner = ", ".join(_scalar(x, flow=True) for x in val)
                 lines.append(f"{pad}{key}: [{inner}]")
+            elif isinstance(val, list):
+                # list of dicts/lists (e.g. custom_providers): block form,
+                # emitted by the list branch below.
+                if not val:
+                    lines.append(f"{pad}{key}: []")
+                else:
+                    lines.append(f"{pad}{key}:")
+                    lines.append(to_yaml(val, indent + 1))
             else:
                 lines.append(f"{pad}{key}: {_scalar(val)}")
     elif isinstance(value, list):
@@ -142,7 +150,16 @@ def validate(models: dict, providers: dict, integrations: dict) -> None:
 
 
 def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[dict, dict]:
-    """Return (model block, custom providers dict) for a model alias."""
+    """Return (model block, custom_providers entries) for a model alias.
+
+    Hermes resolves `model.provider` at runtime through the
+    `custom_providers` LIST in config.yaml (hermes_cli/runtime_provider.py:
+    _resolve_named_custom_runtime) — not a `providers:` dict; nothing in
+    v2026.3.x consumes the dict form. Each entry carries base_url +
+    api_mode + an `api_key` that Hermes ${VAR}-expands from the agent's
+    environment at load time, so the key itself never lands in config.
+    The entry `name` must match the provider key in providers.toml.
+    """
     model = models[model_key]
     provider = providers[model["provider"]]
     model_block = {
@@ -156,14 +173,18 @@ def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[d
     if provider.get("api_mode"):
         model_block["api_mode"] = provider["api_mode"]
 
-    custom_providers = {}
+    custom_providers = []
     for name, prov in providers.items():
         if not prov.get("base_url"):
             continue
-        entry = {"api": prov["base_url"]}
-        if prov.get("api_mode"):
-            entry["transport"] = prov["api_mode"]
-        custom_providers[name] = entry
+        entry = {
+            "name": name,
+            "base_url": prov["base_url"],
+            "api_mode": prov.get("api_mode") or "chat_completions",
+        }
+        if prov.get("api_key_env"):
+            entry["api_key"] = "${%s}" % prov["api_key_env"]
+        custom_providers.append(entry)
     return model_block, custom_providers
 
 
@@ -243,7 +264,7 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
 
     config = {"model": model_block}
     if custom_providers:
-        config["providers"] = custom_providers
+        config["custom_providers"] = custom_providers
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
