@@ -32,15 +32,15 @@ RUN apt-get update \
       ca-certificates curl git openssh-client docker.io tzdata \
  && rm -rf /var/lib/apt/lists/*
 
-# Official installer. --commit pins the checkout; the installer refuses
-# to roll an existing install backward without --force-commit, which
-# never applies here since the layer is always fresh.
-# If your ref is a tag and the installer insists on a raw SHA, resolve
-# it with:  git ls-remote https://github.com/NousResearch/hermes-agent <tag>
+# Official installer. --branch pins the checkout (accepts a tag or
+# branch ref); --skip-setup skips the interactive onboarding that has
+# no TTY inside docker build. The installer refuses to roll an existing
+# install backward without --force-commit, which never applies here
+# since the layer is always fresh.
 RUN curl -fsSL \
       https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_REF}/scripts/install.sh \
       -o /tmp/hermes-install.sh \
- && bash /tmp/hermes-install.sh --commit ${HERMES_REF} \
+ && bash /tmp/hermes-install.sh --branch ${HERMES_REF} --skip-setup \
  && rm -f /tmp/hermes-install.sh
 
 COPY entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
