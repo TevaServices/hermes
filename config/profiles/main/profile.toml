@@ -15,7 +15,9 @@ integrations = ["honcho", "firecrawl"]
 # var names below are the conventional ones — verify against the
 # gateway docs before relying on a platform).
 # Available: telegram, discord, slack, whatsapp, signal
-platforms = ["telegram"]
+# Empty until a TELEGRAM_BOT_TOKEN exists — add it + "telegram" here,
+# set the token in /etc/hermes/hermes-main.env, then re-render/redeploy.
+platforms = []
 
 # Free-form Hermes config passthrough: every key under [config_extra]
 # is merged verbatim into the generated config.yaml top level. Use it

@@ -18,3 +18,4 @@ __pycache__/
 .vscode/
 # Claude Code local settings
 .claude/settings.local.json
+admin-api-key.txt

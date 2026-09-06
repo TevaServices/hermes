@@ -45,6 +45,12 @@ api_key_env = "ANTHROPIC_API_KEY"
 # Example of a self-hosted / custom endpoint. Because base_url is set,
 # render.py emits it as a named Hermes `providers:` entry and points
 # `model.provider` at the key name.
+[providers.ollama_cloud]
+label = "Ollama Cloud"
+base_url = "https://ollama.com/v1"
+api_mode = "chat_completions"
+api_key_env = "OLLAMA_API_KEY"
+
 [providers.ollama]
 label = "Local Ollama on the Docker host"
 base_url = "http://host.docker.internal:11434/v1"
