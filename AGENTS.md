@@ -79,7 +79,12 @@ Key wiring to keep consistent:
 - `hermes-main.env`: `OLLAMA_API_KEY`, the `AUXILIARY_*` overrides,
   `FIRECRAWL_API_KEY` (must equal `TEST_API_KEY` in `firecrawl.env`),
   `HONCHO_API_KEY` (any non-empty value while honcho-api runs no-auth; must
-  match honcho-api if auth is enabled).
+  match honcho-api if auth is enabled). `OPENAI_API_KEY` +
+  `OPENAI_BASE_URL` mirror the Ollama Cloud endpoint for Hermes'
+  registry-based fallbacks — `hermes chat`'s first-run gate only inspects
+  registry env vars (never config.yaml's `custom_providers`) and exits
+  with setup guidance without them, even though the gateway resolves the
+  provider fine.
 - `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`, `OPENAI_API_KEY` +
   `OPENAI_BASE_URL` + `MODEL_NAME` (LLM extract/generate).
 - `honcho.env`: `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_MODEL`
