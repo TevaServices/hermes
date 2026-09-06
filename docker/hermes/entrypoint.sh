@@ -4,9 +4,9 @@
 # Responsibilities:
 #   1. Apply the rendered config overlay (/overlay, read-only) onto the
 #      persistent state dir ($HERMES_HOME). The overlay covers
-#      config.yaml, SOUL.md and skills/ — everything git-managed. It
-#      deliberately does NOT touch .env, memories/, sessions/, or
-#      auth state — those are runtime-owned secrets and data.
+#      config.yaml, honcho.json, SOUL.md and skills/ — everything
+#      git-managed. It deliberately does NOT touch .env, memories/,
+#      sessions/, or auth state — those are runtime-owned secrets and data.
 #   2. Optionally run `hermes update` in place (HERMES_UPDATE_ON_START)
 #      — see the "in-place updates" notes in compose/hermes.compose.yml.
 #   3. Exec the requested mode: gateway (headless, messaging platforms),
@@ -22,6 +22,9 @@ mkdir -p "$HERMES_HOME"
 apply_overlay() {
   [ -d /overlay ] || return 0
   [ -f /overlay/config.yaml ] && cp -f /overlay/config.yaml "$HERMES_HOME/config.yaml"
+  # honcho.json disables the agent's built-in Honcho integration so the
+  # honcho-mcp server owns the "honcho" toolset alias (see render.py).
+  [ -f /overlay/honcho.json ] && cp -f /overlay/honcho.json "$HERMES_HOME/honcho.json"
   [ -f /overlay/SOUL.md ] && cp -f /overlay/SOUL.md "$HERMES_HOME/SOUL.md"
   if [ -d /overlay/skills ]; then
     # Merge: overlay skills overwrite same-named ones; existing others

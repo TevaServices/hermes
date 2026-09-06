@@ -116,6 +116,13 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   forwards the Bearer token to honcho-api, so the agent's MCP config carries
   `Authorization: Bearer ${HONCHO_API_KEY}` (emitted by `render.py` from
   `config/integrations.toml` `mcp_headers`).
+- **The agent's BUILT-IN Honcho integration must stay off**: it
+  auto-enables from the mere presence of `HONCHO_API_KEY` in the
+  environment, then fails against the *hosted* Honcho API ("Invalid API
+  key") and its `honcho` toolset shadows the MCP server alias (the MCP
+  tools get skipped). `render.py` ships an `honcho.json`
+  (`{"enabled": false}`) in every profile overlay to suppress it — Honcho
+  reaches the agent through MCP only.
 - **hermes-agent image**: the v2026.3.x installer with `--skip-setup` lands
   the code+venv under `/root/.hermes/hermes-agent` with NO launcher — the
   Dockerfile symlinks the venv `hermes` onto PATH, and the venv is uv-managed

@@ -23,6 +23,7 @@ Requires Python 3.11+ (stdlib tomllib). No third-party dependencies.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 import tomllib
@@ -277,6 +278,17 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
         f"# Edit config/ sources and run `mise run render` instead.\n"
     )
     (out_dir / "config.yaml").write_text(header + to_yaml(config) + "\n")
+
+    # $HERMES_HOME/honcho.json: the agent's BUILT-IN Honcho integration
+    # auto-enables whenever HONCHO_API_KEY is in the environment (it is,
+    # for the honcho-mcp Authorization header) and then fails against the
+    # hosted Honcho API with "Invalid API key" — its "honcho" toolset also
+    # shadows the MCP server alias, skipping the MCP tools. This stack
+    # wires Honcho through MCP (config/integrations.toml), so the built-in
+    # is disabled by an explicit honcho.json in every profile overlay.
+    (out_dir / "honcho.json").write_text(
+        json.dumps({"enabled": False}, indent=2) + "\n"
+    )
 
     soul = profile_dir / "SOUL.md"
     if soul.is_file():
