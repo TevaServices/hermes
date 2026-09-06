@@ -282,10 +282,13 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     # $HERMES_HOME/honcho.json: the agent's BUILT-IN Honcho integration
     # auto-enables whenever HONCHO_API_KEY is in the environment (it is,
     # for the honcho-mcp Authorization header) and then fails against the
-    # hosted Honcho API with "Invalid API key" — its "honcho" toolset also
-    # shadows the MCP server alias, skipping the MCP tools. This stack
-    # wires Honcho through MCP (config/integrations.toml), so the built-in
-    # is disabled by an explicit honcho.json in every profile overlay.
+    # hosted Honcho API with "Invalid API key" — its honcho_* tools also
+    # land on the tool surface in a dead state. An explicit enabled:false
+    # keeps the built-in off in every profile: this stack wires Honcho
+    # through MCP (config/integrations.toml) only. The startup banner
+    # still prints "Skipping MCP toolset alias 'honcho'" — cosmetic: the
+    # built-in honcho TOOLSET owns the alias, but the MCP server's tools
+    # (mcp_honcho_*) still register into the hermes-* umbrella toolsets.
     (out_dir / "honcho.json").write_text(
         json.dumps({"enabled": False}, indent=2) + "\n"
     )

@@ -87,8 +87,15 @@ Key wiring to keep consistent:
   provider fine.
 - `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`, `OPENAI_API_KEY` +
   `OPENAI_BASE_URL` + `MODEL_NAME` (LLM extract/generate).
-- `honcho.env`: `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_MODEL`
-  (deriver), optional `HONCHO_POSTGRES_PASSWORD`.
+- `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (Ollama Cloud;
+  bare `OPENAI_API_KEY` is NOT read — Honcho uses `LLM_`-prefixed settings,
+  and every default model config reuses the client built from these two),
+  per-section `*_MODEL_CONFIG__MODEL=gpt-oss:20b` overrides (deriver,
+  summaries, dream, dialectic levels — defaults point at OpenAI models
+  Ollama Cloud doesn't serve), and the embedding block:
+  `EMBEDDING_MODEL_CONFIG__*` → the stack-local `ollama` service with
+  `nomic-embed-text` (768 dims; Ollama Cloud has **no embeddings endpoint**)
+  + `EMBEDDING_VECTOR_DIMENSIONS=768`. Optional `HONCHO_POSTGRES_PASSWORD`.
 
 ## Stack particulars (hard-won)
 
@@ -119,10 +126,12 @@ right-sizing). Do not "fix" the small numbers in the compose files:
 - **The agent's BUILT-IN Honcho integration must stay off**: it
   auto-enables from the mere presence of `HONCHO_API_KEY` in the
   environment, then fails against the *hosted* Honcho API ("Invalid API
-  key") and its `honcho` toolset shadows the MCP server alias (the MCP
-  tools get skipped). `render.py` ships an `honcho.json`
-  (`{"enabled": false}`) in every profile overlay to suppress it — Honcho
-  reaches the agent through MCP only.
+  key") and leaves dead `honcho_*` tools on the surface. `render.py`
+  ships an `honcho.json` (`{"enabled": false}`) in every profile overlay
+  to suppress it — Honcho reaches the agent through MCP only. The banner
+  still prints "Skipping MCP toolset alias 'honcho'" — cosmetic: the
+  built-in toolset owns the alias, but the MCP tools register as
+  `mcp_honcho_*` in the hermes-* umbrella toolsets regardless.
 - **hermes-agent image**: the v2026.3.x installer with `--skip-setup` lands
   the code+venv under `/root/.hermes/hermes-agent` with NO launcher — the
   Dockerfile symlinks the venv `hermes` onto PATH, and the venv is uv-managed

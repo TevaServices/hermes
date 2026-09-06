@@ -62,6 +62,35 @@ services:
     networks:
       - hermes-net
 
+  # Ollama Cloud — the stack's chat-LLM provider — has no embeddings
+  # endpoint, so Honcho's semantic search needs a stack-local embedder.
+  # This server runs nomic-embed-text ONLY (274 MB, 768-dim vectors);
+  # EMBEDDING_VECTOR_DIMENSIONS in honcho.env MUST match (768).
+  ollama:
+    image: ollama/ollama:0.33.3
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - hermes-net
+
+  # One-shot model pull: retries until the server is up, then exits.
+  # Idempotent — re-runs harmlessly after a reboot or volume wipe.
+  ollama-init:
+    image: ollama/ollama:0.33.3
+    container_name: ollama-init
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - until ollama pull nomic-embed-text; do echo "waiting for ollama..."; sleep 5; done; echo "nomic-embed-text ready"
+    depends_on:
+      - ollama
+    networks:
+      - hermes-net
+
   honcho-mcp:
     # Honcho's MCP server — what Hermes' mcp_servers.honcho entry
     # points at (http://honcho-mcp:3000/mcp). The Dockerfile lives in
@@ -115,3 +144,4 @@ networks:
 volumes:
   honcho-pgdata:
   honcho-redis-data:
+  ollama-models:

@@ -22,8 +22,8 @@ mkdir -p "$HERMES_HOME"
 apply_overlay() {
   [ -d /overlay ] || return 0
   [ -f /overlay/config.yaml ] && cp -f /overlay/config.yaml "$HERMES_HOME/config.yaml"
-  # honcho.json disables the agent's built-in Honcho integration so the
-  # honcho-mcp server owns the "honcho" toolset alias (see render.py).
+  # honcho.json disables the agent's built-in Honcho integration (see
+  # render.py); Honcho reaches the agent via the honcho-mcp server only.
   [ -f /overlay/honcho.json ] && cp -f /overlay/honcho.json "$HERMES_HOME/honcho.json"
   [ -f /overlay/SOUL.md ] && cp -f /overlay/SOUL.md "$HERMES_HOME/SOUL.md"
   if [ -d /overlay/skills ]; then
