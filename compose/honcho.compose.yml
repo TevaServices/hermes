@@ -61,10 +61,12 @@ services:
 
   honcho-mcp:
     # Honcho's MCP server — what Hermes' mcp_servers.honcho entry
-    # points at (http://honcho-mcp:3000/mcp).
+    # points at (http://honcho-mcp:3000/mcp). The Dockerfile lives in
+    # mcp/ and COPYs its sources from there, so the git build context
+    # uses the "#ref:subdir" form.
     build:
-      context: https://github.com/plastic-labs/honcho.git#${HONCHO_VERSION:-main}
-      dockerfile: mcp/Dockerfile
+      context: https://github.com/plastic-labs/honcho.git#${HONCHO_VERSION:-main}:mcp
+      dockerfile: Dockerfile
     image: honcho-mcp:${HONCHO_VERSION:-main}
     container_name: honcho-mcp
     restart: unless-stopped
