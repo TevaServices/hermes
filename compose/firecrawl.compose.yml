@@ -27,11 +27,13 @@ x-firecrawl-common: &firecrawl-common
   environment: &firecrawl-env
     USE_DB_AUTHENTICATION: "false"
     # Right-sized for a 1-CPU / 6GB host. The upstream defaults
-    # (8 workers/queue, 10 concurrent requests, 5 browsers) spawn a
-    # dozen node processes that starve the box — the API then misses its
-    # hardcoded 60s "port must be up" deadline and the harness restarts,
-    # forever. 1 worker per queue keeps it comfortably inside that
-    # window (and leaves CPU for the agent + honcho).
+    # (NUM_WORKERS_PER_QUEUE=8, NUQ_WORKER_COUNT=5, 10 concurrent
+    # requests, 5 browsers) spawn a dozen node processes that starve the
+    # box — the API then misses its hardcoded 60s "port must be up"
+    # deadline and the harness restarts, forever. One worker per queue
+    # keeps it comfortably inside that window (and leaves CPU for the
+    # agent + honcho).
+    NUQ_WORKER_COUNT: "1"
     NUM_WORKERS_PER_QUEUE: "1"
     MAX_CONCURRENT_JOBS: "2"
     CRAWL_CONCURRENT_REQUESTS: "2"
