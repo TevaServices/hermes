@@ -128,13 +128,15 @@ right-sizing). Do not "fix" the small numbers in the compose files:
 - **litellm**: the proxy runs DB-less (no `DATABASE_URL`) — fine for pure
   routing; key management/budgeting features need a DB and are unused here.
   The image is pulled by Komodo (`auto_pull=false`) — `docker pull
-  ghcr.io/berriai/litellm:main-v1.23.9` on the host before the first deploy.
-  `routing_strategy: latency-based-routing` picks the lowest-latency member
-  of a group; Ollama Cloud is typically fastest, so it wins the mixed
-  groups and OpenRouter free is the resilience fallback. The `firecrawl`
-  group is OpenRouter-only by design (json_schema). Bumping the image tag
-  is a one-line change in `compose/litellm.compose.yml` + the komodo repo
-  stack environment (no Build resource — the image is public).
+  ghcr.io/berriai/litellm:main-latest` on the host before the first deploy.
+  **The versioned tags (`main-v1.x.y`) are amd64-only; the host is aarch64,
+  so this uses the multi-arch `main-latest`.** auto_pull=false pins the
+  local image — it only changes when someone re-pulls on the host and
+  redeploys (that IS the update path; no Build resource, the image is
+  public). `routing_strategy: latency-based-routing` picks the
+  lowest-latency member of a group; Ollama Cloud is typically fastest, so
+  it wins the mixed groups and OpenRouter free is the resilience fallback.
+  The `firecrawl` group is OpenRouter-only by design (json_schema).
 - **firecrawl**: `NUQ_WORKER_COUNT=1` (the real knob — `NUM_WORKERS_PER_QUEUE`
   only affects the legacy worker), `MAX_CONCURRENT_JOBS=2`,
   `CRAWL_CONCURRENT_REQUESTS=2`, `BROWSER_POOL_SIZE=1`; playwright has a

@@ -12,10 +12,15 @@
 # Joins the shared external `hermes-net` network so the apps reach it by
 # service name. The image is pulled by Komodo (auto_pull=false) — pull
 # it on the host before the first deploy.
+#
+# Tag: the versioned tags (main-v1.x.y) are amd64-only; the host is
+# aarch64, so this uses the multi-arch `main-latest`. auto_pull=false
+# pins the local image — it only changes when someone re-pulls on the
+# host (docker pull ghcr.io/berriai/litellm:main-latest) and redeploys.
 
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:main-v1.23.9
+    image: ghcr.io/berriai/litellm:main-latest
     container_name: litellm
     restart: unless-stopped
     command: ["--config", "/app/config.yaml"]
