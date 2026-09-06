@@ -1,7 +1,8 @@
 # Hermes agent containers — one service per profile.
 #
 # Local:  mise run up   (renders + creates the network first, via task deps)
-# Komodo: deployed as the "hermes-agents" Stack (komodo/resources.toml).
+# Komodo: part of the "hermes" Stack (<owner>/komodo -> resources.toml),
+# which merges this file with honcho.compose.yml + firecrawl.compose.yml.
 #
 # Secrets: each service reads /etc/hermes/hermes-<profile>.env on the
 # host (set HERMES_ENV_DIR to override for local dev, e.g. ./secrets).

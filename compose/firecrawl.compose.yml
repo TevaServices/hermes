@@ -2,7 +2,8 @@
 # (https://docs.firecrawl.dev/contributing/self-host).
 #
 # Local:  mise run up
-# Komodo: deployed as the "hermes-firecrawl" Stack (komodo/resources.toml).
+# Komodo: part of the "hermes" Stack (<owner>/komodo -> resources.toml),
+# which merges this file with hermes.compose.yml + honcho.compose.yml.
 #
 # Uses the images Firecrawl publishes to ghcr.io, tagged via
 # mise.toml [env] -> FIRECRAWL_VERSION. The self-host API is intentionally

@@ -1,7 +1,8 @@
 # Honcho — durable agent memory (https://github.com/plastic-labs/honcho).
 #
 # Local:  mise run up
-# Komodo: deployed as the "hermes-honcho" Stack (komodo/resources.toml).
+# Komodo: part of the "hermes" Stack (<owner>/komodo -> resources.toml),
+# which merges this file with hermes.compose.yml + firecrawl.compose.yml.
 #
 # Honcho has no prebuilt registry image, so compose builds straight from
 # the upstream git repo at a pinned ref (mise.toml [env] ->

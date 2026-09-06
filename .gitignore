@@ -1,5 +1,8 @@
-# Generated per-profile overlays (render.py output)
-build/
+# Rendered overlays (render.py output) are COMMITTED: Komodo/periphery
+# deploys straight from git and mounts build/<profile>/ into the agent
+# containers, so a push to main is both the render step and the deploy
+# trigger. After editing config/, run `mise run render` and commit the
+# output along with the config change.
 
 # Per-machine mise overrides (mise set ...) — may contain local paths
 mise.local.toml
