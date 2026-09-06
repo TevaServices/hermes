@@ -106,6 +106,13 @@ services:
     image: ghcr.io/firecrawl/nuq-postgres:${FIRECRAWL_VERSION:-latest}
     container_name: firecrawl-db
     restart: unless-stopped
+    # nuq-postgres runs /docker-entrypoint-initdb.d/010-nuq.sql on a
+    # virgin data dir, and that script CREATE EXTENSIONs pg_cron — which
+    # only works in the database named by cron.database_name (default
+    # "postgres"; upstream compose uses POSTGRES_DB=postgres). We use
+    # POSTGRES_DB=firecrawl, so pin the GUC; the postgres entrypoint
+    # applies the command args to the initdb temp server too.
+    command: postgres -c cron.database_name=firecrawl
     env_file:
       - ${HERMES_ENV_DIR:?}/firecrawl.env
     volumes:
