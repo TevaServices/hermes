@@ -4,7 +4,7 @@
 # compose/hermes.compose.yml).
 
 model = "fast"
-fallback_model = "cheap_local"
+fallback_model = "smart"
 integrations = ["honcho", "firecrawl"]
 platforms = []
 
