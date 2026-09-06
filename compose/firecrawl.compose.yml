@@ -62,8 +62,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2"
-          memory: 4g
+          # Host is a 1-CPU / 6GB box — a cpus limit above 1.0 is
+          # unschedulable, so cap memory only.
+          memory: 1g
     networks:
       - hermes-net
 
