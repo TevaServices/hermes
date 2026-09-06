@@ -64,11 +64,23 @@ Periphery, wired via the stack `environment` `HERMES_ENV_DIR=/etc/hermes`.
 Templates are in `secrets/*.env.example`; nothing secret is ever committed.
 Key wiring to keep consistent:
 
-- `hermes-main.env`: model provider keys, `FIRECRAWL_API_KEY` (must equal
-  `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any non-empty value
-  while honcho-api runs no-auth; must match honcho-api if auth is enabled).
-- `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`.
-- `honcho.env`: `OPENAI_*` (deriver), optional `HONCHO_POSTGRES_PASSWORD`.
+- **Every LLM in the stack uses the Ollama Cloud key Open WebUI uses**
+  (`OLLAMA_API_KEY` in `hermes-main.env`, `OPENAI_API_KEY` in `honcho.env`
+  and `firecrawl.env` — same value everywhere). Model selection is tuned
+  for lowest token usage: agents run `gpt-oss:20b` (`fast` alias, 32k
+  context cap) with `gpt-oss:120b` as fallback; Honcho's deriver and
+  Firecrawl's LLM features (`MODEL_NAME`) use `gpt-oss:20b`; Hermes'
+  auxiliary side tasks are pinned there via `AUXILIARY_*_{BASE_URL,API_KEY,MODEL}`
+  env overrides. `glm-5.3` remains available as the `frontier` alias —
+  opt in per-profile; it burns heavy thinking tokens.
+- `hermes-main.env`: `OLLAMA_API_KEY`, the `AUXILIARY_*` overrides,
+  `FIRECRAWL_API_KEY` (must equal `TEST_API_KEY` in `firecrawl.env`),
+  `HONCHO_API_KEY` (any non-empty value while honcho-api runs no-auth; must
+  match honcho-api if auth is enabled).
+- `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`, `OPENAI_API_KEY` +
+  `OPENAI_BASE_URL` + `MODEL_NAME` (LLM extract/generate).
+- `honcho.env`: `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_MODEL`
+  (deriver), optional `HONCHO_POSTGRES_PASSWORD`.
 
 ## Stack particulars (hard-won)
 

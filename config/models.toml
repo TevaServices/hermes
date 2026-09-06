@@ -13,13 +13,22 @@
 
 [models.fast]
 provider = "ollama_cloud"
-model = "gpt-oss:120b"
-description = "Quick general model on Ollama Cloud"
+model = "gpt-oss:20b"
+# Capping the window below gpt-oss' 128k native context keeps per-call
+# history lean — the biggest token-usage lever there is.
+context_length = 32768
+description = "Smallest Ollama Cloud model; lowest token usage — agent default"
 
 [models.smart]
 provider = "ollama_cloud"
+model = "gpt-oss:120b"
+context_length = 32768
+description = "Capable tier on Ollama Cloud; fallback for the agents"
+
+[models.frontier]
+provider = "ollama_cloud"
 model = "glm-5.3"
-description = "Frontier reasoning on Ollama Cloud; main agent default"
+description = "Frontier reasoning on Ollama Cloud; burns heavy thinking tokens — opt in per-profile only"
 
 [models.coder]
 provider = "ollama_cloud"

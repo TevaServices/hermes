@@ -4,9 +4,11 @@
 # mounted into the container as its config overlay. Instead of editing a
 # long Hermes config.yaml, change a line here and re-render.
 
-# Model aliases from config/models.toml
-model = "smart"
-fallback_model = "fast"
+# Model aliases from config/models.toml. "fast" (gpt-oss:20b) keeps token
+# usage minimal; "smart" (gpt-oss:120b) covers provider failures. Bump to
+# "frontier" here if this agent ever needs heavy reasoning.
+model = "fast"
+fallback_model = "smart"
 
 # Enabled integrations from config/integrations.toml
 integrations = ["honcho", "firecrawl"]
