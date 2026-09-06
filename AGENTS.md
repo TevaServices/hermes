@@ -70,12 +70,15 @@ Key wiring to keep consistent:
   least-costly-while-effective: agents run `gpt-oss:120b` (`smart` alias,
   32k context cap) as primary — effective at tool calling — with
   `smart_model_routing` sending short/simple turns to `gpt-oss:20b`
-  (`fast` alias); Honcho's deriver, Firecrawl's LLM features (`MODEL_NAME`),
-  and Hermes' auxiliary side tasks (via `AUXILIARY_*_{BASE_URL,API_KEY,MODEL}`
-  env overrides) all run on `gpt-oss:20b` — they're background/structured
-  work where the smallest model is fully effective. `glm-5.3` remains
-  available as the `frontier` alias — opt in per-profile; it burns heavy
-  thinking tokens.
+  (`fast` alias); Honcho's LLM consumers (deriver, summaries, dialectic,
+  dream — `*_MODEL_CONFIG__MODEL` envs) all run on `gpt-oss:20b` —
+  background/structured work where the smallest model is fully effective.
+  Firecrawl's LLM features (`MODEL_NAME`) run on `kimi-k2.6`: its v2 json
+  extraction needs a model that fills the wrapped `extractedData` schema
+  field, which gpt-oss:20b reliably mangles. Hermes' auxiliary side tasks
+  (via `AUXILIARY_*_{BASE_URL,API_KEY,MODEL}` env overrides) run
+  `gpt-oss:20b`. `glm-5.3` remains available as the `frontier` alias — opt
+  in per-profile; it burns heavy thinking tokens.
 - `hermes-main.env`: `OLLAMA_API_KEY`, the `AUXILIARY_*` overrides,
   `FIRECRAWL_API_KEY` (must equal `TEST_API_KEY` in `firecrawl.env`),
   `HONCHO_API_KEY` (any non-empty value while honcho-api runs no-auth; must
