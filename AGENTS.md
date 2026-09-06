@@ -155,7 +155,16 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   them. `DISCORD_ALLOWED_USERS` (comma-separated user IDs; usernames
   also work, resolved via the Members intent) gates who the bot
   answers; empty = anyone who mentions it. `DISCORD_REQUIRE_MENTION`
-  defaults true (responds to @mentions and DMs only).
+  defaults true (responds to @mentions and DMs only). Runtime writes
+  resolved env (token + resolved allowlist) back into
+  `$HERMES_HOME/.env`, and `load_hermes_dotenv` loads it with
+  `override=True` — that file SHADOWS the compose-injected env for any
+  key it holds. Two gotchas when scripting the Discord REST API from
+  the container: bare `urllib` User-Agents get Cloudflare-blocked with
+  `error 1010` (set a real UA string), and bot DMs fail with
+  403/code 50278 "no mutual guilds" when the recipient's server-DM
+  privacy setting blocks server members — @mention in a server channel
+  pings them instead.
 - **GitHub access** is skills-based, not an integration: the agent's
   `github-*` skills drive `gh` CLI + git, and the image installs gh
   (pinned arm64 tarball — rebuild required to bump). `GH_TOKEN` (in
