@@ -41,7 +41,9 @@ x-firecrawl-common: &firecrawl-common
     REDIS_URL: redis://firecrawl-redis:6379
     REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
     PLAYWRIGHT_SERVICE_URL: http://firecrawl-playwright:3000
-    RABBITMQ_URL: amqp://firecrawl:firecrawl@firecrawl-rabbitmq:5672/%2F
+    # RabbitMQ wiring was renamed RABBITMQ_URL -> NUQ_RABBITMQ_URL in
+    # current releases; matches RABBITMQ_DEFAULT_USER/PASS below.
+    NUQ_RABBITMQ_URL: amqp://firecrawl:firecrawl@firecrawl-rabbitmq:5672/%2F
     POSTGRES_HOST: firecrawl-db
     POSTGRES_PORT: "5432"
 
