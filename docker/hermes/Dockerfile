@@ -42,6 +42,13 @@ RUN curl -fsSL \
       -o /tmp/hermes-install.sh \
  && bash /tmp/hermes-install.sh --branch ${HERMES_REF} --skip-setup \
  && rm -f /tmp/hermes-install.sh \
+# Hermes pins mcp>=1.2.0 (no upper bound), so the installer resolves the
+# newest SDK — 2.x renamed streamablehttp_client -> streamable_http_client
+# and Hermes' HTTP transport check then fails with "not available".
+# Hold the 1.x line until a HERMES_REF that supports mcp 2.x. The venv is
+# uv-managed (no pip) — uv itself was installed by the installer to
+# /root/.local/bin.
+ && /root/.local/bin/uv pip install --python /root/.hermes/hermes-agent/venv/bin/python 'mcp>=1.2.0,<2' \
 # The v2026.3.x installer --skip-setup lands the code + venv in
 # $HOME/.hermes (no /usr/local/bin launcher). Expose the venv entry
 # point at the conventional location the entrypoint execs.
