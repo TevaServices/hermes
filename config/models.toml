@@ -21,9 +21,9 @@ description = "Smallest model in the gpt-oss:20b group; lowest token usage — s
 
 [models.smart]
 provider = "litellm"
-model = "gpt-oss:120b"
+model = "mistral-large-3:675b"
 context_length = 32768
-description = "Capable tier in the gpt-oss:120b group; agent primary — effective at tool use without frontier-model token burn"
+description = "Ollama Cloud's 675B Mistral flagship (via LiteLLM); agent primary — much more capable than gpt-oss:120b for general work, no reasoning-field token burn"
 
 [models.frontier]
 provider = "litellm"

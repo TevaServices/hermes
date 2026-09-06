@@ -4,7 +4,7 @@
 # compose/hermes.compose.yml).
 
 # Research is multi-step tool-heavy work — run it on the capable tier
-# ("smart" = gpt-oss:120b) with the cheap model as failure fallback.
+# ("smart" = mistral-large-3:675b) with the cheap model as failure fallback.
 model = "smart"
 fallback_model = "fast"
 integrations = ["honcho", "firecrawl"]

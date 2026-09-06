@@ -2,7 +2,7 @@
 # Edit config/ sources and run `mise run render` instead.
 model:
   provider: litellm
-  default: gpt-oss:120b
+  default: mistral-large-3:675b
   base_url: http://litellm:4000
   context_length: 32768
   api_mode: chat_completions

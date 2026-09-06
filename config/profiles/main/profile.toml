@@ -5,11 +5,11 @@
 # long Hermes config.yaml, change a line here and re-render.
 
 # Model aliases from config/models.toml. Primary work (tool calling,
-# multi-step tasks) runs on "smart" (gpt-oss:120b — capable enough to be
-# effective as an agent brain); smart_model_routing below sends short/
-# simple turns to the cheap "fast" model (gpt-oss:20b), so everyday
-# chit-chat costs the minimum. "frontier" (glm-5.3) remains one line away
-# if this agent ever needs heavy reasoning.
+# multi-step tasks) runs on "smart" (mistral-large-3:675b — Ollama Cloud's
+# 675B Mistral flagship, a real step up from gpt-oss:120b); smart_model_routing
+# below sends short/simple turns to the cheap "fast" model (gpt-oss:20b), so
+# everyday chit-chat costs the minimum. "frontier" (glm-5.3) remains one
+# line away if this agent ever needs heavy reasoning.
 model = "smart"
 fallback_model = "fast"
 

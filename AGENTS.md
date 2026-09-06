@@ -75,10 +75,12 @@ Key wiring to keep consistent:
   (`LITELLM_MASTER_KEY` in `litellm.env`), mirrored into each app's env
   file as `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` / `OPENAI_API_KEY` —
   same value everywhere. Model selection follows
-  least-costly-while-effective: agents run `gpt-oss:120b` (`smart` alias,
-  32k context cap) as primary — effective at tool calling — with
-  `smart_model_routing` sending short/simple turns to `gpt-oss:20b`
-  (`fast` alias); Honcho's LLM consumers (deriver, summaries, dialectic,
+  least-costly-while-effective: agents run `mistral-large-3:675b` (`smart`
+  alias, 32k context cap) as primary — Ollama Cloud's 675B Mistral flagship,
+  a real step up from gpt-oss:120b for general work, with an OpenRouter free
+  550B as the group's fallback member — with `smart_model_routing` sending
+  short/simple turns to `gpt-oss:20b` (`fast` alias); Honcho's LLM consumers
+  (deriver, summaries, dialectic,
   dream — `*_MODEL_CONFIG__MODEL` envs) all run on `gpt-oss:20b` —
   background/structured work where the smallest model is fully effective.
   Firecrawl's LLM features (`MODEL_NAME`) run on the `firecrawl` group,

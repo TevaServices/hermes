@@ -18,16 +18,18 @@
 # model_name) are routed among by the router_settings strategy.
 
 model_list:
-  # ── gpt-oss:120b — Hermes primary (smart). Ollama Cloud preferred;
-  #    OpenRouter free as the latency/availability fallback.
-  - model_name: gpt-oss:120b
+  # ── mistral-large-3:675b — Hermes primary (smart). Ollama Cloud's
+  #    biggest general model (675B, Mistral flagship — much more capable
+  #    than gpt-oss:120b, no reasoning-field output noise). OpenRouter
+  #    free 550B as the latency/availability fallback.
+  - model_name: mistral-large-3:675b
     litellm_params:
-      model: openai/gpt-oss:120b
+      model: openai/mistral-large-3:675b
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
-  - model_name: gpt-oss:120b
+  - model_name: mistral-large-3:675b
     litellm_params:
-      model: openrouter/google/gemma-4-31b-it:free
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
   # ── gpt-oss:20b — Hermes fast routing + Honcho's LLM consumers.
@@ -78,6 +80,6 @@ router_settings:
   # mixed groups; OpenRouter free is the resilience fallback.
   routing_strategy: "latency-based-routing"
   fallbacks:
-    - { "gpt-oss:120b": ["gpt-oss:20b"] }
+    - { "mistral-large-3:675b": ["gpt-oss:20b"] }
     - { "gpt-oss:20b": ["firecrawl"] }
     - { "firecrawl": ["gpt-oss:20b"] }
