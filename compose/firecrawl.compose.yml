@@ -26,6 +26,10 @@
 x-firecrawl-common: &firecrawl-common
   environment: &firecrawl-env
     USE_DB_AUTHENTICATION: "false"
+    # Upstream sets HOST=0.0.0.0; the app defaults to "localhost", which
+    # binds IPv6 loopback only — the in-container harness check and the
+    # published port both fail with ECONNREFUSED. Keep all-interfaces.
+    HOST: 0.0.0.0
     # Right-sized for a 1-CPU / 6GB host. The upstream defaults
     # (NUM_WORKERS_PER_QUEUE=8, NUQ_WORKER_COUNT=5, 10 concurrent
     # requests, 5 browsers) spawn a dozen node processes that starve the
