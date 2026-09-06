@@ -1,0 +1,33 @@
+# LiteLLM proxy — the stack's single LLM gateway.
+#
+# Every app (Hermes, Honcho, Firecrawl) points at http://litellm:4000
+# with the LITELLM_MASTER_KEY and sends a model name from
+# config/litellm.yaml. LiteLLM routes among group members (latency-based)
+# and falls back on failure.
+#
+# Secrets: /etc/hermes/litellm.env on the host (set HERMES_ENV_DIR to
+# override for local dev). Holds LITELLM_MASTER_KEY, OLLAMA_API_KEY,
+# OPENROUTER_API_KEY. NEVER commit real secret files.
+#
+# Joins the shared external `hermes-net` network so the apps reach it by
+# service name. The image is pulled by Komodo (auto_pull=false) — pull
+# it on the host before the first deploy.
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.23.9
+    container_name: litellm
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml"]
+    env_file:
+      - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/litellm.env
+    volumes:
+      # Config from this repo (config/litellm.yaml — see mise.toml).
+      - ../config/litellm.yaml:/app/config.yaml:ro
+    networks:
+      hermes-net:
+        aliases: [litellm]
+
+networks:
+  hermes-net:
+    external: true

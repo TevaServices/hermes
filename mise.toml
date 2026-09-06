@@ -54,25 +54,25 @@ description = "Create the shared external docker network (idempotent)"
 run = "docker network inspect hermes-net >/dev/null 2>&1 || docker network create hermes-net"
 
 [tasks.up]
-description = "Build and start all three stacks (hermes, honcho, firecrawl)"
+description = "Build and start all four stacks (hermes, honcho, firecrawl, litellm)"
 depends = ["render", "net"]
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml up -d --build"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml up -d --build"
 
 [tasks.down]
-description = "Stop all three stacks (volumes preserved)"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml down"
+description = "Stop all four stacks (volumes preserved)"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml down"
 
 [tasks.ps]
 description = "Show stack status"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml ps"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml ps"
 
 [tasks.logs]
 description = "Tail logs across the stack"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml logs -f --tail=100"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml logs -f --tail=100"
 
 [tasks.pull]
 description = "Pre-pull images (useful before a Komodo-side deploy)"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml pull --ignore-buildable"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml pull --ignore-buildable"
 
 [tasks.chat]
 description = "Interactive CLI chat with the main agent"

@@ -33,12 +33,12 @@ platforms = ["discord"]
 # Least-costly-while-effective routing: short, single-line messages with
 # no code/tools/URLs go to the cheap model; everything else uses the
 # primary. `provider` is the named custom provider from providers.toml
-# (rendered into config.yaml `providers:`), so it shares the same
-# OLLAMA_API_KEY.
+# (rendered into config.yaml `custom_providers:`), so it shares the same
+# LITELLM_API_KEY.
 [config_extra.smart_model_routing]
 enabled = true
 [config_extra.smart_model_routing.cheap_model]
-provider = "ollama_cloud"
+provider = "litellm"
 model = "gpt-oss:20b"
 
 # Extra env var placeholders render.py should list in .env.example.

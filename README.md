@@ -3,8 +3,8 @@
 A GitOps-managed [Hermes agent](https://github.com/NousResearch/hermes-agent) stack:
 the agent in Docker, its configuration rendered from small declarative files, and
 [Honcho](https://github.com/plastic-labs/honcho) (memory) + [Firecrawl](https://docs.firecrawl.dev/contributing/self-host)
-(web) as sibling containers — all deployed and kept up to date on a Linux host by
-[Komodo](https://komo.do).
+(web) + [LiteLLM](https://docs.litellm.ai/) (LLM gateway) as sibling containers —
+all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
 
 ```
                     git push (this repo)
@@ -23,6 +23,9 @@ the agent in Docker, its configuration rendered from small declarative files, an
    │      ▼                                                 │
    │  firecrawl-mcp (in-agent, stdio) ──► firecrawl-api       │
    │         firecrawl-playwright / redis / rabbitmq / db    │
+   │                                                        │
+   │  hermes-main / honcho / firecrawl ──► litellm ──►       │
+   │        Ollama Cloud + OpenRouter free (auto-routed)     │
    └────────────────────────────────────────────────────────┘
 ```
 
@@ -36,6 +39,7 @@ the agent in Docker, its configuration rendered from small declarative files, an
 | GitOps on the Linux host | Komodo Resource Sync applies `komodo/resources.toml`; Stacks deploy the compose files from this repo ([komodo/README.md](komodo/README.md)) |
 | Easy model/provider config | providers and models are two small TOML files; profiles pick models by alias — no hand-editing Hermes' config.yaml |
 | Honcho + Firecrawl in containers | `compose/honcho.compose.yml`, `compose/firecrawl.compose.yml`, wired into each agent as MCP servers via `config/integrations.toml` |
+| One LLM gateway for every app | `compose/litellm.compose.yml` + `config/litellm.yaml` — LiteLLM routes each model name among Ollama Cloud + OpenRouter free members (latency-based, with fallbacks) |
 
 ## Repo layout
 
@@ -50,7 +54,7 @@ render.py               compiles config/ -> build/<profile>/ (config.yaml, .env.
 build/<profile>/        rendered overlay (COMMITTED — periphery deploys from
                         git and mounts it into the agent container)
 docker/hermes/          agent image (official installer at pinned ref) + entrypoint
-compose/                three stacks: hermes, honcho, firecrawl (shared hermes-net)
+compose/                four stacks: hermes, honcho, firecrawl, litellm (shared hermes-net)
 secrets/                *.env.example templates (real files never committed)
 komodo/                 Resource Sync definitions + setup guide
 scripts/                bootstrap-host.sh, check-updates.sh
@@ -85,7 +89,8 @@ mise trust                       # once, after cloning
 cp secrets/hermes-main.env.example secrets/hermes-main.env   # fill in real keys
 cp secrets/honcho.env.example secrets/honcho.env
 cp secrets/firecrawl.env.example secrets/firecrawl.env
-mise run up                       # render -> network -> build & start all three stacks
+cp secrets/litellm.env.example secrets/litellm.env
+mise run up                       # render -> network -> build & start all four stacks
 mise run logs                    # watch it come up
 ```
 
@@ -141,12 +146,14 @@ from the Stack `environment` in `komodo/resources.toml` instead.
 ## Keeping up to date
 
 ```bash
-mise run check-updates   # pins vs upstream (hermes/honcho/firecrawl)
+mise run check-updates   # pins vs upstream (hermes/honcho/firecrawl/litellm)
 ```
 
 - **Hermes / Honcho / Firecrawl**: bump the pin in `mise.toml` `[env]` (and the
   matching `environment` value in `komodo/resources.toml`), commit, push. The
   webhook triggers rebuild/redeploy with all state preserved.
+- **LiteLLM**: bump the image tag in `compose/litellm.compose.yml` (public
+  image — no Build resource; pull it on the host before deploy).
 - **Firecrawl caveat**: its self-host stack's env var names change between
   releases — when bumping, diff `compose/firecrawl.compose.yml` against
   upstream's `docker-compose.yaml` for the new tag.

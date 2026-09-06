@@ -3,17 +3,18 @@
 A GitOps-managed [Hermes agent](https://github.com/NousResearch/hermes-agent)
 stack: the agent in Docker, its configuration rendered from small declarative
 files (`config/` → `render.py` → `build/<profile>/`), plus
-[Honcho](https://github.com/plastic-labs/honcho) (memory) and
-[Firecrawl](https://docs.firecrawl.dev/contributing/self-host) (web) as sibling
-containers. Everything runs on the homelab host under **Komodo GitOps** —
-read [the komodo repo's AGENTS.md](https://github.com/<owner>/komodo) for the
-control plane, API cheatsheet, and deploy mechanics. This file covers this
-stack's particulars.
+[Honcho](https://github.com/plastic-labs/honcho) (memory),
+[Firecrawl](https://docs.firecrawl.dev/contributing/self-host) (web), and a
+[LiteLLM](https://docs.litellm.ai/) proxy (the stack's single LLM gateway) as
+sibling containers. Everything runs on the homelab host under **Komodo
+GitOps** — read [the komodo repo's AGENTS.md](https://github.com/<owner>/komodo)
+for the control plane, API cheatsheet, and deploy mechanics. This file covers
+this stack's particulars.
 
 ## Deployment model
 
 Deployed as the Komodo Stack **`hermes`** (server `homelab`): one compose
-project merging all three files, cloned from this repo at deploy time.
+project merging all four files, cloned from this repo at deploy time.
 
 - **The compose project name is `hermes`** — all named volumes are prefixed
   `hermes_*` (agent state, honcho Postgres/Redis, firecrawl
@@ -64,30 +65,41 @@ Periphery, wired via the stack `environment` `HERMES_ENV_DIR=/etc/hermes`.
 Templates are in `secrets/*.env.example`; nothing secret is ever committed.
 Key wiring to keep consistent:
 
-- **Every LLM in the stack uses the Ollama Cloud key Open WebUI uses**
-  (`OLLAMA_API_KEY` in `hermes-main.env`, `OPENAI_API_KEY` in `honcho.env`
-  and `firecrawl.env` — same value everywhere). Model selection follows
+- **Every LLM in the stack goes through the LiteLLM proxy**
+  (`http://litellm:4000`, `compose/litellm.compose.yml` +
+  `config/litellm.yaml`). The proxy holds the real upstream keys —
+  `OLLAMA_API_KEY` (Ollama Cloud, the key Open WebUI uses) and
+  `OPENROUTER_API_KEY` (OpenRouter free models) — in `litellm.env`, and
+  routes each model name among its group members (latency-based, with
+  fallbacks). The apps authenticate with the proxy's master key
+  (`LITELLM_MASTER_KEY` in `litellm.env`), mirrored into each app's env
+  file as `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` / `OPENAI_API_KEY` —
+  same value everywhere. Model selection follows
   least-costly-while-effective: agents run `gpt-oss:120b` (`smart` alias,
   32k context cap) as primary — effective at tool calling — with
   `smart_model_routing` sending short/simple turns to `gpt-oss:20b`
   (`fast` alias); Honcho's LLM consumers (deriver, summaries, dialectic,
   dream — `*_MODEL_CONFIG__MODEL` envs) all run on `gpt-oss:20b` —
   background/structured work where the smallest model is fully effective.
-  Firecrawl's LLM features (`MODEL_NAME`) run on `gpt-oss:20b`, with one
-  known gap: **schema-bound extraction (/v1/extract, v2 json format)
-  cannot work over Ollama Cloud** — ollama.com strips
-  `response_format: json_schema`, so no cloud model fills Firecrawl's
-  SmartScrape envelope and those calls return `json: null` + warning.
-  Prompt-only LLM paths (deep-research, llms-txt) work. Hermes' auxiliary
-  side tasks
+  Firecrawl's LLM features (`MODEL_NAME`) run on the `firecrawl` group,
+  which is **OpenRouter free models ONLY** (`google/gemma-4-31b-it:free`,
+  `nvidia/nemotron-3-super-120b-a12b:free`) — this FIXES the old
+  schema-bound extraction gap: Ollama Cloud strips
+  `response_format: json_schema`, so /v1/extract and v2 json-format
+  scrapes returned `json: null`; OpenRouter passes json_schema through,
+  so SmartScrape extraction works. Hermes' auxiliary side tasks
   (via `AUXILIARY_*_{BASE_URL,API_KEY,MODEL}` env overrides) run
   `gpt-oss:20b`. `glm-5.3` remains available as the `frontier` alias — opt
   in per-profile; it burns heavy thinking tokens.
-- `hermes-main.env`: `OLLAMA_API_KEY`, the `AUXILIARY_*` overrides,
+- `litellm.env`: `LITELLM_MASTER_KEY` (generate: `openssl rand -hex 32`),
+  `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` (free tier — create at
+  https://openrouter.ai/keys).
+- `hermes-main.env`: `LITELLM_API_KEY` (the master key), the
+  `AUXILIARY_*` overrides (BASE_URL=http://litellm:4000),
   `FIRECRAWL_API_KEY` (must equal `TEST_API_KEY` in `firecrawl.env`),
   `HONCHO_API_KEY` (any non-empty value while honcho-api runs no-auth; must
   match honcho-api if auth is enabled). `OPENAI_API_KEY` +
-  `OPENAI_BASE_URL` mirror the Ollama Cloud endpoint for Hermes'
+  `OPENAI_BASE_URL` mirror the LiteLLM endpoint for Hermes'
   registry-based fallbacks — `hermes chat`'s first-run gate only inspects
   registry env vars (never config.yaml's `custom_providers`) and exits
   with setup guidance without them, even though the gateway resolves the
@@ -95,16 +107,17 @@ Key wiring to keep consistent:
   (gateway), `GH_TOKEN` + optional `GH_GIT_NAME`/`GH_GIT_EMAIL`
   (GitHub — see below).
 - `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`, `OPENAI_API_KEY` +
-  `OPENAI_BASE_URL` + `MODEL_NAME` (LLM extract/generate).
-- `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (Ollama Cloud;
+  `OPENAI_BASE_URL` (LiteLLM) + `MODEL_NAME=firecrawl` (LLM extract/generate).
+- `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (LiteLLM;
   bare `OPENAI_API_KEY` is NOT read — Honcho uses `LLM_`-prefixed settings,
   and every default model config reuses the client built from these two),
   per-section `*_MODEL_CONFIG__MODEL=gpt-oss:20b` overrides (deriver,
   summaries, dream, dialectic levels — defaults point at OpenAI models
   Ollama Cloud doesn't serve), and the embedding block:
-  `EMBEDDING_MODEL_CONFIG__*` → the stack-local `ollama` service with
-  `nomic-embed-text` (768 dims; Ollama Cloud has **no embeddings endpoint**)
-  + `EMBEDDING_VECTOR_DIMENSIONS=768`. Optional `HONCHO_POSTGRES_PASSWORD`.
+  `EMBEDDING_MODEL_CONFIG__*` → LiteLLM's `nomic-embed-text` entry, which
+  proxies to the stack-local `ollama` service (768 dims; Ollama Cloud has
+  **no embeddings endpoint**) + `EMBEDDING_VECTOR_DIMENSIONS=768`.
+  Optional `HONCHO_POSTGRES_PASSWORD`.
 
 ## Stack particulars (hard-won)
 
@@ -112,6 +125,16 @@ The host is **1 CPU / 6 GB** — upstream defaults for these stacks assume a
 real server and will starve it into crash-loops (load was ~15 before
 right-sizing). Do not "fix" the small numbers in the compose files:
 
+- **litellm**: the proxy runs DB-less (no `DATABASE_URL`) — fine for pure
+  routing; key management/budgeting features need a DB and are unused here.
+  The image is pulled by Komodo (`auto_pull=false`) — `docker pull
+  ghcr.io/berriai/litellm:main-v1.23.9` on the host before the first deploy.
+  `routing_strategy: latency-based-routing` picks the lowest-latency member
+  of a group; Ollama Cloud is typically fastest, so it wins the mixed
+  groups and OpenRouter free is the resilience fallback. The `firecrawl`
+  group is OpenRouter-only by design (json_schema). Bumping the image tag
+  is a one-line change in `compose/litellm.compose.yml` + the komodo repo
+  stack environment (no Build resource — the image is public).
 - **firecrawl**: `NUQ_WORKER_COUNT=1` (the real knob — `NUM_WORKERS_PER_QUEUE`
   only affects the legacy worker), `MAX_CONCURRENT_JOBS=2`,
   `CRAWL_CONCURRENT_REQUESTS=2`, `BROWSER_POOL_SIZE=1`; playwright has a

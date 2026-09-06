@@ -1,0 +1,83 @@
+# LiteLLM proxy config — the stack's single LLM gateway.
+#
+# Every app (Hermes, Honcho, Firecrawl) points at http://litellm:4000
+# with the LITELLM_MASTER_KEY and sends a model name from the list
+# below. LiteLLM routes each request to a member of that model's group
+# (latency-based) and falls back to another member on failure.
+#
+# Upstreams:
+#   - Ollama Cloud (https://ollama.com/v1) — the chat LLM provider the
+#     stack already used; key from OLLAMA_API_KEY in litellm.env.
+#   - OpenRouter free models — json_schema-capable (Ollama Cloud strips
+#     response_format json_schema, which broke Firecrawl's SmartScrape
+#     extraction); key from OPENROUTER_API_KEY in litellm.env.
+#   - Local ollama (http://ollama:11434) — nomic-embed-text embeddings
+#     only (Ollama Cloud has no embeddings endpoint).
+#
+# Model names are what the apps send. Groups (multiple entries sharing a
+# model_name) are routed among by the router_settings strategy.
+
+model_list:
+  # ── gpt-oss:120b — Hermes primary (smart). Ollama Cloud preferred;
+  #    OpenRouter free as the latency/availability fallback.
+  - model_name: gpt-oss:120b
+    litellm_params:
+      model: openai/gpt-oss:120b
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: gpt-oss:120b
+    litellm_params:
+      model: openrouter/google/gemma-4-31b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ── gpt-oss:20b — Hermes fast routing + Honcho's LLM consumers.
+  - model_name: gpt-oss:20b
+    litellm_params:
+      model: openai/gpt-oss:20b
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: gpt-oss:20b
+    litellm_params:
+      model: openrouter/minimax/minimax-m3:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). OpenRouter
+  #    ONLY: schema-bound extraction needs response_format json_schema,
+  #    which Ollama Cloud strips. Both members are json_schema-capable.
+  - model_name: firecrawl
+    litellm_params:
+      model: openrouter/google/gemma-4-31b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: firecrawl
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-super-120b-a12b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ── nomic-embed-text — Honcho embeddings, proxied to the stack-local
+  #    ollama service (Ollama Cloud has no embeddings endpoint).
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://ollama:11434
+
+  # ── Opt-in profile models (frontier/coder) — direct Ollama Cloud.
+  - model_name: glm-5.3
+    litellm_params:
+      model: openai/glm-5.3
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: kimi-k2.7-code
+    litellm_params:
+      model: openai/kimi-k2.7-code
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+
+router_settings:
+  # Pick the lowest-latency member of a group; on failure fall back to
+  # the next member. Ollama Cloud is typically fastest, so it wins the
+  # mixed groups; OpenRouter free is the resilience fallback.
+  routing_strategy: "latency-based-routing"
+  fallbacks:
+    - { "gpt-oss:120b": ["gpt-oss:20b"] }
+    - { "gpt-oss:20b": ["firecrawl"] }
+    - { "firecrawl": ["gpt-oss:20b"] }

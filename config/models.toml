@@ -12,25 +12,25 @@
 #   description    — free-form note shown by `mise run render`
 
 [models.fast]
-provider = "ollama_cloud"
+provider = "litellm"
 model = "gpt-oss:20b"
 # Capping the window below gpt-oss' 128k native context keeps per-call
 # history lean — the biggest token-usage lever there is.
 context_length = 32768
-description = "Smallest Ollama Cloud model; lowest token usage — simple-turn router + side tasks"
+description = "Smallest model in the gpt-oss:20b group; lowest token usage — simple-turn router + side tasks"
 
 [models.smart]
-provider = "ollama_cloud"
+provider = "litellm"
 model = "gpt-oss:120b"
 context_length = 32768
-description = "Capable tier on Ollama Cloud; agent primary — effective at tool use without frontier-model token burn"
+description = "Capable tier in the gpt-oss:120b group; agent primary — effective at tool use without frontier-model token burn"
 
 [models.frontier]
-provider = "ollama_cloud"
+provider = "litellm"
 model = "glm-5.3"
-description = "Frontier reasoning on Ollama Cloud; burns heavy thinking tokens — opt in per-profile only"
+description = "Frontier reasoning (Ollama Cloud via LiteLLM); burns heavy thinking tokens — opt in per-profile only"
 
 [models.coder]
-provider = "ollama_cloud"
+provider = "litellm"
 model = "kimi-k2.7-code"
-description = "Code-focused model on Ollama Cloud"
+description = "Code-focused model (Ollama Cloud via LiteLLM)"
