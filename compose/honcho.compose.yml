@@ -24,10 +24,12 @@ services:
     environment:
       # Upstream default is trust auth (POSTGRES_HOST_AUTH_METHOD=trust,
       # honcho-db never leaves the compose network), so the URI needs no
-      # password. If you switch honcho-db to password auth, set
-      # POSTGRES_PASSWORD in secrets/honcho.env (flows in via env_file),
-      # drop trust, and put the password in the URI here.
-      DB_CONNECTION_URI: postgresql://postgres@honcho-db:5432/postgres
+      # password. The +psycopg driver suffix matters: the image ships
+      # psycopg v3, and a bare postgresql:// URI selects the psycopg2
+      # dialect, which is not installed. If you switch honcho-db to
+      # password auth, set POSTGRES_PASSWORD in honcho.env (flows in via
+      # env_file), drop trust, and put the password in the URI here.
+      DB_CONNECTION_URI: postgresql+psycopg://postgres@honcho-db:5432/postgres
       CACHE_URL: redis://honcho-redis:6379
       CACHE_ENABLED: "true"
     depends_on:
@@ -51,7 +53,7 @@ services:
     env_file:
       - ${HERMES_ENV_DIR:?}/honcho.env
     environment:
-      DB_CONNECTION_URI: postgresql://postgres@honcho-db:5432/postgres
+      DB_CONNECTION_URI: postgresql+psycopg://postgres@honcho-db:5432/postgres
       CACHE_URL: redis://honcho-redis:6379
       CACHE_ENABLED: "true"
     depends_on:
