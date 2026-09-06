@@ -91,7 +91,9 @@ Key wiring to keep consistent:
   registry-based fallbacks — `hermes chat`'s first-run gate only inspects
   registry env vars (never config.yaml's `custom_providers`) and exits
   with setup guidance without them, even though the gateway resolves the
-  provider fine.
+  provider fine. Also: `DISCORD_BOT_TOKEN` + `DISCORD_ALLOWED_USERS`
+  (gateway), `GH_TOKEN` + optional `GH_GIT_NAME`/`GH_GIT_EMAIL`
+  (GitHub — see below).
 - `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`, `OPENAI_API_KEY` +
   `OPENAI_BASE_URL` + `MODEL_NAME` (LLM extract/generate).
 - `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (Ollama Cloud;
@@ -143,6 +145,27 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   the code+venv under `/root/.hermes/hermes-agent` with NO launcher — the
   Dockerfile symlinks the venv `hermes` onto PATH, and the venv is uv-managed
   (no pip; use `/root/.local/bin/uv pip install --python <venv>/bin/python`).
+- **Discord gateway** (`platforms = ["discord"]` in the main profile):
+  enabled by the mere presence of `DISCORD_BOT_TOKEN` in the env
+  (gateway/config.py `_apply_env_overrides` — config.yaml carries no
+  platform state, so the render's `platforms` list only documents/env-
+  examples the vars). The bot MUST have "Message Content Intent" AND
+  "Server Members Intent" toggled in the Discord developer portal —
+  the adapter requests both and discord.py refuses to connect without
+  them. `DISCORD_ALLOWED_USERS` (comma-separated user IDs; usernames
+  also work, resolved via the Members intent) gates who the bot
+  answers; empty = anyone who mentions it. `DISCORD_REQUIRE_MENTION`
+  defaults true (responds to @mentions and DMs only).
+- **GitHub access** is skills-based, not an integration: the agent's
+  `github-*` skills drive `gh` CLI + git, and the image installs gh
+  (pinned arm64 tarball — rebuild required to bump). `GH_TOKEN` (in
+  hermes-main.env) authenticates everything: gh reads it natively, and
+  entrypoint.sh wires git's github.com credential helper through
+  `gh auth git-credential` so the token never touches disk — /root is
+  ephemeral, the entrypoint re-runs the config on every start.
+  entrypoint.sh also sets a default commit identity from
+  `GH_GIT_NAME`/`GH_GIT_EMAIL`. Prefer a fine-grained PAT scoped to the
+  specific repos (Contents/Issues/Pull requests read+write).
 
 ## Local development (this repo)
 
