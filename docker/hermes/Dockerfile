@@ -69,7 +69,8 @@ RUN curl -fsSL \
  && ln -sf /root/.hermes/hermes-agent/venv/bin/hermes /usr/local/bin/hermes
 
 COPY entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
-RUN chmod +x /usr/local/bin/hermes-entrypoint.sh \
+COPY github-app-token.sh /usr/local/bin/github-app-token.sh
+RUN chmod +x /usr/local/bin/hermes-entrypoint.sh /usr/local/bin/github-app-token.sh \
  && mkdir -p /data
 
 VOLUME ["/data"]

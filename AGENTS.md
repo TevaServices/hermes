@@ -167,14 +167,21 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   pings them instead.
 - **GitHub access** is skills-based, not an integration: the agent's
   `github-*` skills drive `gh` CLI + git, and the image installs gh
-  (pinned arm64 tarball — rebuild required to bump). `GH_TOKEN` (in
-  hermes-main.env) authenticates everything: gh reads it natively, and
-  entrypoint.sh wires git's github.com credential helper through
-  `gh auth git-credential` so the token never touches disk — /root is
-  ephemeral, the entrypoint re-runs the config on every start.
-  entrypoint.sh also sets a default commit identity from
-  `GH_GIT_NAME`/`GH_GIT_EMAIL`. Prefer a fine-grained PAT scoped to the
-  specific repos (Contents/Issues/Pull requests read+write).
+  (pinned arm64 tarball — rebuild required to bump). Two auth modes,
+  both env-driven from hermes-main.env (entrypoint.sh re-runs the
+  config on every start since /root is ephemeral, and sets a default
+  commit identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`):
+  - **GitHub App (preferred)**: `GITHUB_APP_ID` + `GITHUB_APP_INSTALLATION_ID`
+    + `GITHUB_APP_PRIVATE_KEY_PATH` (PEM at `/etc/hermes/github-app.pem`,
+    root:ubuntu 640, bind-mounted read-only — the file must exist before
+    deploy). Installation tokens last 1h, so git's credential helper calls
+    `github-app-token.sh` (openssl JWT → installation token) fresh per
+    operation, and a background refresher re-runs `gh auth login
+    --with-token` every 30 min. Hermes' skills hub has native app support
+    too (tools/skills_hub.py `GitHubAuth`, priority PAT → gh → app).
+  - **PAT fallback**: `GH_TOKEN` authenticates gh natively; git routes
+    through `gh auth git-credential`. Prefer a fine-grained PAT scoped
+    to the specific repos (Contents/Issues/Pull requests read+write).
 
 ## Local development (this repo)
 
