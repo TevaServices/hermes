@@ -33,12 +33,13 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config"
 BUILD = ROOT / "build"
 
-# Env vars conventionally required per gateway platform. Hermes reads
-# these from .env. If a platform fails to connect, check the gateway
-# docs for the current variable names.
+# Env vars per gateway platform (required + the optional ones worth
+# surfacing). Verified against gateway/config.py: a platform is enabled
+# by the mere presence of its *_BOT_TOKEN var. Hermes reads these from
+# .env (locally) or the stack env_file (Komodo: /etc/hermes/*.env).
 GATEWAY_ENV = {
     "telegram": ["TELEGRAM_BOT_TOKEN"],
-    "discord": ["DISCORD_BOT_TOKEN"],
+    "discord": ["DISCORD_BOT_TOKEN", "DISCORD_ALLOWED_USERS"],
     "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
     "whatsapp": ["WHATSAPP_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"],
     "signal": ["SIGNAL_NUMBER"],

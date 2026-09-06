@@ -36,6 +36,19 @@ apply_overlay() {
 
 apply_overlay
 
+# GitHub access: GH_TOKEN (from $HERMES_ENV_DIR/hermes-main.env, never
+# committed) authenticates both the gh CLI (which reads it natively)
+# and git-over-HTTPS — the credential helper below routes git through
+# `gh auth git-credential`, so the token never lands in a config file.
+# /root is ephemeral, so this runs on every start, before exec'ing the
+# gateway. Commit identity is a default the agent can override per-repo;
+# without it any commit it makes fails with "Please tell me who you are".
+git config --global user.name "${GH_GIT_NAME:-hermes-agent}"
+git config --global user.email "${GH_GIT_EMAIL:-hermes-agent@localhost}"
+if [ -n "${GH_TOKEN:-}" ]; then
+  git config --global credential."https://github.com".helper '!gh auth git-credential'
+fi
+
 if [ "${HERMES_UPDATE_ON_START:-false}" = "true" ]; then
   # In-place update of the agent code. Requires the code directory to be
   # a mounted volume (see compose/hermes.compose.yml), otherwise the

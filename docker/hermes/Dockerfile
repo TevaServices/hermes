@@ -32,6 +32,20 @@ RUN apt-get update \
       ca-certificates curl git openssh-client docker.io tzdata xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
+# gh CLI (pinned arm64 tarball — this image is only ever built on the
+# aarch64 homelab host): the agent's github-* skills (github-issues,
+# github-pr-workflow, github-repo-management, github-code-review) work
+# through gh when present. Auth is GH_TOKEN env only (see
+# secrets/hermes-main.env.example) — gh reads it natively, so there is
+# no `gh auth login` state to persist.
+ARG GH_VERSION=2.100.0
+RUN curl -fsSL \
+      https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_arm64.tar.gz \
+      -o /tmp/gh.tgz \
+ && tar -xzf /tmp/gh.tgz -C /tmp \
+ && install -m 0755 /tmp/gh_${GH_VERSION}_linux_arm64/bin/gh /usr/local/bin/gh \
+ && rm -rf /tmp/gh*
+
 # Official installer. --branch pins the checkout (accepts a tag or
 # branch ref); --skip-setup skips the interactive onboarding that has
 # no TTY inside docker build. The installer refuses to roll an existing
