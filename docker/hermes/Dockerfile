@@ -29,7 +29,7 @@ ENV HERMES_HOME=/data \
 # see compose/hermes.compose.yml). openssh-client: ssh backend.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl git openssh-client docker.io tzdata \
+      ca-certificates curl git openssh-client docker.io tzdata xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Official installer. --branch pins the checkout (accepts a tag or
