@@ -73,9 +73,13 @@ Key wiring to keep consistent:
   (`fast` alias); Honcho's LLM consumers (deriver, summaries, dialectic,
   dream — `*_MODEL_CONFIG__MODEL` envs) all run on `gpt-oss:20b` —
   background/structured work where the smallest model is fully effective.
-  Firecrawl's LLM features (`MODEL_NAME`) run on `kimi-k2.6`: its v2 json
-  extraction needs a model that fills the wrapped `extractedData` schema
-  field, which gpt-oss:20b reliably mangles. Hermes' auxiliary side tasks
+  Firecrawl's LLM features (`MODEL_NAME`) run on `gpt-oss:20b`, with one
+  known gap: **schema-bound extraction (/v1/extract, v2 json format)
+  cannot work over Ollama Cloud** — ollama.com strips
+  `response_format: json_schema`, so no cloud model fills Firecrawl's
+  SmartScrape envelope and those calls return `json: null` + warning.
+  Prompt-only LLM paths (deep-research, llms-txt) work. Hermes' auxiliary
+  side tasks
   (via `AUXILIARY_*_{BASE_URL,API_KEY,MODEL}` env overrides) run
   `gpt-oss:20b`. `glm-5.3` remains available as the `frontier` alias — opt
   in per-profile; it burns heavy thinking tokens.
