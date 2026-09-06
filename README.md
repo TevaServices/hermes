@@ -47,7 +47,8 @@ config/
   integrations.toml     Honcho / Firecrawl (and any other MCP) wiring
   profiles/<name>/      per-agent model choice, platforms, SOUL.md, skills/
 render.py               compiles config/ -> build/<profile>/ (config.yaml, .env.example)
-build/<profile>/        generated overlay (gitignored) — mounted into the agent container
+build/<profile>/        rendered overlay (COMMITTED — periphery deploys from
+                        git and mounts it into the agent container)
 docker/hermes/          agent image (official installer at pinned ref) + entrypoint
 compose/                three stacks: hermes, honcho, firecrawl (shared hermes-net)
 secrets/                *.env.example templates (real files never committed)
