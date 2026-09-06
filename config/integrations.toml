@@ -18,8 +18,12 @@ enabled = true
 # serves MCP at a different path (e.g. /mcp vs /sse), change it here —
 # this is the only place you need to touch.
 mcp_url = "http://honcho-mcp:3000/mcp"
-# Only needed if you enable auth on your Honcho instance.
-required_env = []
+# honcho-mcp refuses requests without a Bearer token and forwards it to
+# honcho-api as the API key. With honcho-api's default no-auth self-host
+# any non-empty value passes; set a real key here only if you enable auth
+# on honcho-api (it must match there).
+mcp_headers = { Authorization = "Bearer ${HONCHO_API_KEY}" }
+required_env = ["HONCHO_API_KEY"]
 
 [integrations.firecrawl]
 label = "Firecrawl web scraping/crawling"

@@ -16,6 +16,8 @@ mcp_servers:
   honcho:
     url: http://honcho-mcp:3000/mcp
     enabled: true
+    headers:
+      Authorization: Bearer ${HONCHO_API_KEY}
   firecrawl:
     command: npx
     args: ["-y", "firecrawl-mcp"]

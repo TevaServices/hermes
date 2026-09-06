@@ -180,6 +180,11 @@ def build_mcp_servers(profile: dict, integrations: dict) -> dict:
             continue
         if integ.get("mcp_url"):
             servers[key] = {"url": integ["mcp_url"], "enabled": True}
+            # honcho-mcp (and any OAuth-style MCP endpoint) requires an
+            # Authorization header; Hermes interpolates ${VAR} from the
+            # agent's env at connect time.
+            if integ.get("mcp_headers"):
+                servers[key]["headers"] = dict(integ["mcp_headers"])
         else:
             block = {
                 "command": integ["mcp_command"],
