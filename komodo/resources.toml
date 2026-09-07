@@ -33,7 +33,7 @@ deploy = true
 # HERMES_ENV_DIR points the env_file/mount paths at the host secrets
 # directory (created by scripts/bootstrap-host.sh). The version pins
 # mirror mise.toml [env] so the deployed tags stay git-managed.
-environment = { HERMES_ENV_DIR = "/etc/hermes", HERMES_REF = "v2026.3.23", TZ = "UTC" }
+environment = { HERMES_ENV_DIR = "/etc/hermes", HERMES_REF = "v2026.8.31", TZ = "UTC" }
 
 [[stack]]
 name = "hermes-honcho"

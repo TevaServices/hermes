@@ -33,7 +33,7 @@ project merging all four files, cloned from this repo at deploy time.
 ## Images are built by Komodo Builds — never compose build
 
 The stack runs with `run_build = false` and `auto_pull = false`; the images
-`hermes-agent:v2026.3.23`, `honcho:main`, and `honcho-mcp:main` are produced
+`hermes-agent:v2026.8.31`, `honcho:main`, and `honcho-mcp:main` are produced
 by three **Build** resources defined in the komodo control plane repo
 (`builder = "homelab"`). Therefore:
 

@@ -17,8 +17,8 @@ services:
     build:
       context: ../docker/hermes
       args:
-        HERMES_REF: ${HERMES_REF:-v2026.3.23}
-    image: hermes-agent:${HERMES_REF:-v2026.3.23}
+        HERMES_REF: ${HERMES_REF:-v2026.8.31}
+    image: hermes-agent:${HERMES_REF:-v2026.8.31}
     container_name: hermes-main
     restart: unless-stopped
     environment:
@@ -59,8 +59,8 @@ services:
   #   build:
   #     context: ../docker/hermes
   #     args:
-  #       HERMES_REF: ${HERMES_REF:-v2026.3.23}
-  #   image: hermes-agent:${HERMES_REF:-v2026.3.23}
+  #       HERMES_REF: ${HERMES_REF:-v2026.8.31}
+  #   image: hermes-agent:${HERMES_REF:-v2026.8.31}
   #   container_name: hermes-researcher
   #   restart: unless-stopped
   #   environment:
