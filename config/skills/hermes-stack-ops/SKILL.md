@@ -80,8 +80,9 @@ baked helper — do NOT `git clone` into your own space:
   helper creates a session branch `s/<slug>` instead — push it with
   `git push origin HEAD:<branch>`.
 - `git-repo.sh list` shows all repos + worktrees; `git-repo.sh prune
-  --days 7` (weekly) removes session dirs idle > N days and prunes the
-  bare repos' worktree admin. `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`
+  --days 30` (weekly) removes worktrees that are CLEAN (no uncommitted
+  or untracked changes) or DIRTY but idle > N days — dirty-but-recent
+  worktrees are always kept. `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`
   override the locations.
 
 ## Pitfalls
