@@ -11,6 +11,8 @@
 # upstream doesn't know about:
 #   1. hermes-bootstrap-profiles.sh — apply baked overlays into profile
 #      dirs, provision missing profiles (first boot).
+#   1b. Claim the data volume for the runtime user (root-run legacy
+#      volumes can't be traversed by the unprivileged hermes user).
 #   2. Sync the mounted GitHub App PEM (read-only host mount, unreadable
 #      by the unprivileged runtime user) into the persistent tool-home
 #      ($HERMES_HOME/home), owned by the runtime user, and point
@@ -36,6 +38,23 @@ S6_SETUIDGID="$(command -v s6-setuidgid || echo /command/s6-setuidgid)"
 if [ -x /usr/local/bin/hermes-bootstrap-profiles.sh ]; then
   /usr/local/bin/hermes-bootstrap-profiles.sh true
 fi
+
+# --- 1b. Data volume ownership: claim it for the runtime user -------------
+# The volume root must be writable by the runtime UID before anything
+# drops to `hermes` below (git/gh config) and before the s6 services run
+# as it. Legacy volumes were populated by root-run images (v2026.3.x era)
+# and are root-owned 0700 at the top level — the unprivileged runtime
+# user can't even traverse them, and upstream's stage2 chown only runs
+# after our `exec /init`, i.e. after this script has already died. Do the
+# chown HERE instead. A full recursive chown is safe because this is a
+# named Docker volume holding agent state only (compose binds no host
+# paths inside it) — upstream stays targeted for host-bind volumes, and
+# its targeted chown would also leave root-owned top-level state files
+# (config.yaml, kanban.db, auth.json) unusable for the runtime user.
+# Unconditional: it self-heals root-owned strays that
+# `docker exec` writes, and costs ~1s against a 17k-file volume.
+chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME" 2>/dev/null || \
+  echo "hermes-stack: warning: chown of $HERMES_HOME failed" >&2
 
 # --- 2. Runtime .env: host env file -> persistent volume ------------------
 # s6 services run as the unprivileged `hermes` user; the env file is
