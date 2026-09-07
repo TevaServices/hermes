@@ -50,8 +50,12 @@ config/
   providers.toml        LLM endpoints + API-key env names (no keys here)
   models.toml           short aliases -> provider/model IDs
   integrations.toml     Honcho / Firecrawl (and any other MCP) wiring
+  skills/               stack-wide skills (merged into EVERY profile)
   profiles/default/     the ROOT profile (one agent): model choice, platforms,
                         SOUL.md, skills/
+  profiles/planner/     team PM+design agent (issues, boards, specs; Discord #planning)
+  profiles/developer/   team implementation agent (draft PRs, never merges; #dev)
+  profiles/reviewer/    team quality gate (reviews, merges after human gate; #reviews)
 render.py               compiles config/ -> /overlay/<profile> at image build
                         time (no committed build output)
 docker/hermes/          thin image over the official agent image + entrypoint
@@ -60,6 +64,27 @@ secrets/                *.env.example templates (real files never committed)
 komodo/                 Resource Sync definitions + setup guide
 scripts/                bootstrap-host.sh, check-updates.sh
 ```
+
+## The agile SaaS team (planner / developer / reviewer)
+
+Three named Hermes profiles work as a GitHub-first agile team — **GitHub
+is the system of record, Discord is the discussion surface**. The
+`team-conventions` skill (config/skills/, shared by every profile)
+defines the workflow: idea → issue → assigned developer → **draft PR** →
+reviewer gates (`team-reviewer`) → human gate (the user) → reviewer
+merges. Repos join the workflow via the planner's `team-onboarding`
+skill (adds the `hermes-team` topic tag, a per-repo board or status
+label set, branch protection, CI).
+
+Enforcement is identity-based, not trust-based: each role is its own
+GitHub App (least-privilege permission set, PEM at
+`/etc/hermes/github-app-<profile>.pem`) and its own Discord bot token
+(`PROFILE_<NAME>_*` entries in hermes-main.env, mapped by the
+entrypoint into each profile's own `.env`). planner cannot push
+(Read-only code + issue/project writes); developer cannot merge
+(branch protection + no merge rights); reviewer merges only after
+the user's approval. The default profile's `gateway.profile_routes` sends
+each team channel to its profile.
 
 ## How configuration works (the abstraction)
 

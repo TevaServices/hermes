@@ -288,7 +288,13 @@ def collect_env_keys(profile: dict, model_key: str, models: dict,
     for key in profile.get("integrations", []):
         for env in integrations.get(key, {}).get("required_env", []):
             add(env)
-    add(str(profile.get("env", {}).get("placeholder", "") or ""))
+    # Profile-declared env vars ([env] table: keys are var names, values
+    # are placeholder documentation). Every key lands in .env.example so
+    # the operator's host env file can supply secrets per profile
+    # (mapped into the profile's own .env by entrypoint.sh
+    # PROFILE_<NAME>_<VAR>).
+    for key in profile.get("env", {}):
+        add(str(key))
     return keys
 
 

@@ -12,14 +12,23 @@
 #   1. hermes-bootstrap-profiles.sh — apply baked overlays into profile
 #      dirs, provision missing profiles (first boot).
 #   1b. Claim the data volume for the runtime user.
-#   2. Sync the mounted GitHub App PEM (read-only host mount, unreadable
-#      by the unprivileged runtime user) into the persistent tool-home
-#      ($HERMES_HOME/home), owned by the runtime user, and point
-#      GITHUB_APP_PRIVATE_KEY_PATH at the copy for all child processes.
-#   3. Configure git identity + gh auth (as the runtime user, via
-#      s6-setuidgid) in every profile's tool-home, plus a background
-#      token refresher (installation tokens expire after 1h).
-#   4. Exec the upstream dispatcher — s6 takes over from there.
+#   2. Sync the mounted env file into $HERMES_HOME/.env AND synthesize
+#      each named profile's own .env: the host env file plus
+#      PROFILE_<NAME>_<VAR> entries mapped to their bare names (so a
+#      profile-specific Discord token or GitHub App credential lands at
+#      the var name Hermes expects, per profile).
+#   3. Sync GitHub App PEM mounts (read-only host mounts, unreadable by
+#      the unprivileged runtime user) into the persistent tool-homes
+#      ($HERMES_HOME/home and $HERMES_HOME/profiles/<name>/home), owned
+#      by the runtime user — one PEM per App (main + one per team
+#      profile), each pointed at by its own env var.
+#   4. Configure git identity + gh auth (as the runtime user, via
+#      s6-setuidgid) in every profile's tool-home — each profile with
+#      its OWN App credentials when declared (PROFILE_<NAME>_GITHUB_APP*)
+#      and its OWN git identity (PROFILE_<NAME>_GH_GIT_NAME) — plus a
+#      background token refresher per home (installation tokens expire
+#      after 1h).
+#   5. Exec the upstream dispatcher — s6 takes over from there.
 set -euo pipefail
 
 export HERMES_HOME="${HERMES_HOME:-/opt/data}"
@@ -58,27 +67,87 @@ chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME" 2>/dev/null || \
 # runtime owns) on every boot — the mounted file stays the source of
 # truth. Compose still injects the same file as container env so this
 # entrypoint sees GITHUB_APP_ID etc.
+#
+# Team profiles: each named profile gets its own .env = the host env
+# file PLUS any PROFILE_<NAME>_<VAR> entries mapped to their bare names
+# (e.g. PROFILE_DEVELOPER_DISCORD_BOT_TOKEN -> DISCORD_BOT_TOKEN), so a
+# profile's own Discord bot token lands at the var name the gateway's
+# per-profile credential resolution expects (the multiplexer reads each
+# profile's own .env scope).
 ENV_MOUNT="${HERMES_ENV_FILE_MOUNT:-/run/hermes-env/hermes-main.env}"
 if [ -f "$ENV_MOUNT" ]; then
   cp -f "$ENV_MOUNT" "$HERMES_HOME/.env"
   chown "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME/.env"
   chmod 600 "$HERMES_HOME/.env"
+  if [ -d "$HERMES_HOME/profiles" ]; then
+    for profile_dir in "$HERMES_HOME/profiles"/*/; do
+      [ -d "$profile_dir" ] || continue
+      profile_name="$(basename "${profile_dir%/}")"
+      profile_env="${profile_dir%/}/.env"
+      # Copy the host env file MINUS every PROFILE_* line (teammates'
+      # secrets stay out of each profile's own .env scope), then append
+      # THIS profile's mapped vars: PROFILE_<NAME>_<VAR> -> <VAR>, so
+      # PROFILE_DEVELOPER_DISCORD_BOT_TOKEN reaches the developer
+      # profile as DISCORD_BOT_TOKEN.
+      grep -vE '^PROFILE_[A-Z0-9]+_[A-Z0-9_]+=' "$ENV_MOUNT" > "$profile_env" || true
+      prefix="PROFILE_${profile_name^^}_"
+      env | grep -E "^${prefix}[A-Z0-9_]+=" | while IFS='=' read -r key value; do
+        printf '%s=%s\n' "${key#"$prefix"}" "$value" >> "$profile_env"
+      done
+      chown "$RUNTIME_UID:$RUNTIME_UID" "$profile_env"
+      chmod 600 "$profile_env"
+    done
+  fi
 fi
 
-# --- 3. GitHub App PEM: host mount -> persistent tool-home ----------------
-# The PEM is bind-mounted read-only from /etc/hermes (root:ubuntu 640 on
-# the host); the s6 services run as UID 10000 and could never read it
-# there. Copy it onto the data volume (which the runtime owns) and aim
-# the env var at the copy. The mounted file stays the source of truth —
-# refreshed from it on every boot.
+# --- 3. GitHub App PEMs: host mounts -> persistent tool-homes -------------
+# PEMs are bind-mounted read-only from /etc/hermes (root:ubuntu 640 on
+# the host); the s6 services run as UID 10000 and could never read them
+# there. Copy each onto the data volume (which the runtime owns) and
+# aim its env var at the copy. The mounted files stay the source of
+# truth — refreshed from them on every boot.
+#
+# Layout: the main App's PEM at $GITHUB_APP_PEM_MOUNT
+# (default /run/hermes-pem/github-app-main.pem); team-profile Apps'
+# PEMs at /run/hermes-pem/github-app-<profile>.pem (compose mounts
+# them there; see compose/hermes.compose.yml).
+copy_pem() {  # copy_pem <mount> <tool_home> <dest_name>
+  mount="$1"; tool_home="$2"; dest_name="$3"
+  if [ -f "$mount" ]; then
+    mkdir -p "$tool_home"
+    dest="$tool_home/$dest_name"
+    cp -f "$mount" "$dest"
+    chown "$RUNTIME_UID:$RUNTIME_UID" "$dest" "$tool_home"
+    chmod 600 "$dest"
+  fi
+}
+
 PEM_MOUNT="${GITHUB_APP_PEM_MOUNT:-/run/hermes-pem/github-app-main.pem}"
-if [ -f "$PEM_MOUNT" ]; then
-  PEM_DEST="$HERMES_HOME/home/github-app-main.pem"
-  mkdir -p "$HERMES_HOME/home"
-  cp -f "$PEM_MOUNT" "$PEM_DEST"
-  chown "$RUNTIME_UID:$RUNTIME_UID" "$PEM_DEST" "$HERMES_HOME/home"
-  chmod 600 "$PEM_DEST"
-  export GITHUB_APP_PRIVATE_KEY_PATH="$PEM_DEST"
+copy_pem "$PEM_MOUNT" "$HERMES_HOME/home" "github-app-main.pem"
+if [ -f "$HERMES_HOME/home/github-app-main.pem" ]; then
+  export GITHUB_APP_PRIVATE_KEY_PATH="$HERMES_HOME/home/github-app-main.pem"
+fi
+
+if [ -d "$HERMES_HOME/profiles" ]; then
+  for profile_dir in "$HERMES_HOME/profiles"/*/; do
+    [ -d "$profile_dir" ] || continue
+    profile_name="$(basename "${profile_dir%/}")"
+    copy_pem "/run/hermes-pem/github-app-${profile_name}.pem" \
+      "${profile_dir%/}/home" "github-app-${profile_name}.pem"
+    # Point the profile's own .env at the runtime-owned copy (replace
+    # the rendered placeholder line if present, else append it — the
+    # host env file deliberately omits the var; the entrypoint owns it).
+    if [ -f "${profile_dir%/}/home/github-app-${profile_name}.pem" ] \
+       && [ -f "${profile_dir%/}/.env" ]; then
+      pem_env="${profile_dir%/}/.env"
+      pem_dest="${profile_dir%/}/home/github-app-${profile_name}.pem"
+      if grep -q '^GITHUB_APP_PRIVATE_KEY_PATH=' "$pem_env"; then
+        sed -i "s#^GITHUB_APP_PRIVATE_KEY_PATH=.*#GITHUB_APP_PRIVATE_KEY_PATH=${pem_dest}#" "$pem_env"
+      else
+        printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$pem_dest" >> "$pem_env"
+      fi
+    fi
+  done
 fi
 
 # --- 4. git + gh for the runtime user, per tool-home -----------------------
@@ -87,58 +156,84 @@ fi
 # mode); named profiles get $HERMES_HOME/profiles/<name>/home. Configure
 # each home that exists, AS the runtime user, so credential state is
 # owned by it. App mode is preferred; PAT (GH_TOKEN) is the fallback.
-# The gh token refresher runs in the background, orphaned to PID 1
-# (s6 reaps orphans), so it survives the exec below.
-configure_github_for_home() {
+# The gh token refreshers run in the background, orphaned to PID 1
+# (s6 reaps orphans), so they survive the exec below.
+#
+# Team profiles carry their own App credentials via PROFILE_<NAME>_*
+# vars in the container env (from the host env file): their gh auth and
+# token refresh mint from THOSE, so commits/PRs/reviews/merges carry
+# the role's own bot identity. Profiles without own credentials fall
+# back to the main App.
+#
+# Git identity: PROFILE_<NAME>_GH_GIT_NAME / _GH_GIT_EMAIL override the
+# main GH_GIT_NAME / GH_GIT_EMAIL per profile — each role commits as
+# its own bot (distinct attribution in GitHub), never impersonating.
+configure_github_for_home() {  # <tool_home> [profile_name]
   tool_home="$1"
+  profile="${2:-}"
+  if [ -n "$profile" ] \
+     && [ -n "$(eval "echo \${PROFILE_${profile^^}_GITHUB_APP_ID:-}")" ]; then
+    # Team profile with its own GitHub App credentials (PROFILE_<NAME>_*
+    # vars come from the host env file via the container environment).
+    APP_ID="$(eval "echo \${PROFILE_${profile^^}_GITHUB_APP_ID}")"
+    APP_INSTALLATION_ID="$(eval "echo \${PROFILE_${profile^^}_GITHUB_APP_INSTALLATION_ID:-}")"
+    APP_PEM="$tool_home/github-app-${profile}.pem"
+    GIT_NAME="$(eval "echo \${PROFILE_${profile^^}_GH_GIT_NAME:-\${GH_GIT_NAME:-hermes-agent}}")"
+    GIT_EMAIL="$(eval "echo \${PROFILE_${profile^^}_GH_GIT_EMAIL:-\${GH_GIT_EMAIL:-hermes-agent@localhost}}")"
+  else
+    APP_ID="${GITHUB_APP_ID:-}"
+    APP_INSTALLATION_ID="${GITHUB_APP_INSTALLATION_ID:-}"
+    APP_PEM="${GITHUB_APP_PRIVATE_KEY_PATH:-}"
+    GIT_NAME="${GH_GIT_NAME:-hermes-agent}"
+    GIT_EMAIL="${GH_GIT_EMAIL:-hermes-agent@localhost}"
+  fi
+
   mkdir -p "$tool_home"
   chown "$RUNTIME_UID:$RUNTIME_UID" "$tool_home" 2>/dev/null || true
-  if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_INSTALLATION_ID:-}" ] \
-     && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
-    # git identity + credential helper. Git routes through gh's OWN
-    # credential store (`gh auth git-credential`): the entrypoint's
-    # background refresher keeps gh logged in with a fresh installation
-    # token (minted at boot + every 30 min, so the stored token is always
-    # < 1h old). This needs NO env inheritance — Hermes strips credential
-    # vars from tool subprocesses by design (GHSA-rhgp-j443-p4rf), and
-    # gh reads its token from the tool-home's ~/.config/gh/hosts.yml.
+  # git identity + credential helper. Git routes through gh's OWN
+  # credential store (`gh auth git-credential`): the entrypoint's
+  # background refresher keeps gh logged in with a fresh installation
+  # token (minted at boot + every 30 min, so the stored token is always
+  # < 1h old). This needs NO env inheritance — Hermes strips credential
+  # vars from tool subprocesses by design (GHSA-rhgp-j443-p4rf), and
+  # gh reads its token from the tool-home's ~/.config/gh/hosts.yml.
+  "$S6_SETUIDGID" hermes /bin/sh -c '
+    export HOME="$1"
+    git config --global user.name  "$2"
+    git config --global user.email "$3"
+    git config --global credential.https://github.com.helper \
+      "!gh auth git-credential"
+  ' sh "$tool_home" "$GIT_NAME" "$GIT_EMAIL"
+
+  if [ -n "$APP_ID" ] && [ -n "$APP_INSTALLATION_ID" ] && [ -n "$APP_PEM" ]; then
+    # Initial auth + background refresher for THIS home's App identity.
     "$S6_SETUIDGID" hermes /bin/sh -c '
-      export HOME="$1"
-      git config --global user.name  "${GH_GIT_NAME:-hermes-agent}"
-      git config --global user.email "${GH_GIT_EMAIL:-hermes-agent@localhost}"
-      git config --global credential.https://github.com.helper \
-        "!gh auth git-credential"
-    ' sh "$tool_home"
-    if "$S6_SETUIDGID" hermes /bin/sh -c '
-      export HOME="$1" </dev/null
+      export HOME="$1" GITHUB_APP_ID="$2" \
+             GITHUB_APP_INSTALLATION_ID="$3" GITHUB_APP_PRIVATE_KEY_PATH="$4"
+      </dev/null
       t="$(/usr/local/bin/github-app-token.sh)" || exit 1
       [ -n "$t" ] || { echo "empty installation token" >&2; exit 1; }
       printf %s "$t" | gh auth login --with-token
-    ' sh "$tool_home"; then
-      echo "hermes-stack: gh authed via GitHub App (home=$tool_home)"
-    else
-      echo "hermes-stack: initial gh auth failed (refresher will retry)" >&2
-    fi
+    ' sh "$tool_home" "$APP_ID" "$APP_INSTALLATION_ID" "$APP_PEM" \
+      && echo "hermes-stack: gh authed via GitHub App (home=$tool_home, app id=${APP_ID})" \
+      || echo "hermes-stack: initial gh auth failed for $tool_home (refresher will retry)" >&2
     # Installation tokens expire after 1h — refresh gh every 30 min so
     # the stored token (`gh auth status` in the tool-home) is always
     # fresh. Guarded: a failed/empty token never reaches gh, so the loop
     # can never fall into gh's interactive device-flow prompt.
     "$S6_SETUIDGID" hermes /bin/sh -c '
-      export HOME="$1" </dev/null
+      export HOME="$1" GITHUB_APP_ID="$2" \
+             GITHUB_APP_INSTALLATION_ID="$3" GITHUB_APP_PRIVATE_KEY_PATH="$4"
+      </dev/null
       while true; do
         sleep 1800
         t="$(/usr/local/bin/github-app-token.sh)" || continue
         [ -n "$t" ] || continue
         printf %s "$t" | gh auth login --with-token || true
       done
-    ' sh "$tool_home" &
+    ' sh "$tool_home" "$APP_ID" "$APP_INSTALLATION_ID" "$APP_PEM" &
   elif [ -n "${GH_TOKEN:-}" ]; then
-    "$S6_SETUIDGID" hermes /bin/sh -c '
-      export HOME="$1"
-      git config --global user.name  "${GH_GIT_NAME:-hermes-agent}"
-      git config --global user.email "${GH_GIT_EMAIL:-hermes-agent@localhost}"
-      git config --global credential.https://github.com.helper "!gh auth git-credential"
-    ' sh "$tool_home"
+    echo "hermes-stack: no App credentials for $tool_home; PAT fallback (git identity only)" >&2
   fi
 }
 
@@ -148,7 +243,7 @@ configure_github_for_home "$HERMES_HOME/home"
 if [ -d "$HERMES_HOME/profiles" ]; then
   for profile_dir in "$HERMES_HOME/profiles"/*/; do
     [ -d "$profile_dir" ] || continue
-    configure_github_for_home "${profile_dir%/}/home"
+    configure_github_for_home "${profile_dir%/}/home" "$(basename "${profile_dir%/}")"
   done
 fi
 
