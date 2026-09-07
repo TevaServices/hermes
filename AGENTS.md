@@ -80,7 +80,9 @@ Therefore:
 Update the pinned ref in **all** of: the `hermes-agent` Build's `image_tag` AND
 `build_args`, the stack `environment` in the komodo repo's resources.toml,
 and the compose/mise defaults here (`mise.toml [env]`; the Dockerfile ARG
-defaults through compose, so only mise.toml needs the edit). The ref is now
+defaults through compose, so only mise.toml needs the edit), plus
+`render.py`'s `_FALLBACK_CONFIG_VERSION` (only affects local preview
+renders — the build-time stamp is derived from the base image). The ref is now
 the FROM tag of the official base image — the official image publishes
 per-release, so a ref bump both upgrades the agent code and refreshes the
 supervision tree. Then RunBuild → DeployStack, and always verify
@@ -244,6 +246,24 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   stage2 chown only runs after our wrapper would already have died on
   its git/gh config step (the 2026-09-07 restart loop). Don't remove
   that chown.
+- **render.py stamps `_config_version`** into every rendered config.yaml,
+  derived at build time from the base image's `DEFAULT_CONFIG` (render
+  runs under the image's own venv `python3`, so `hermes_cli` imports
+  there; local preview falls back to the pinned constant — keep it in
+  sync at ref bumps). Without the stamp the schema reads as 1 and the
+  Docker boot-time migration (`scripts/docker_config_migrate.py`, whose
+  check lacks the CLI's fresh-minimal-config carve-out) warns the config
+  "predates version 12" on every boot. The resolver still reads the
+  legacy `custom_providers` list form at read time, so stamping never
+  changes resolution.
+- **Multiplexing boot noise is benign**: with `GATEWAY_MULTIPLEX_PROFILES`
+  on, the tool registry's availability check_fns probe at gateway boot
+  before any profile secret scope exists and fail closed with
+  `UnscopedSecretError` — three WARNING tracebacks (discord tool /
+  homeassistant / web_api) per start, purely log noise. Real turns run
+  scoped and re-probe (tools are not lost); upstream PR #100709
+  reclassifies these to debug. Only worry if the warning appears on a
+  turn AFTER startup — that would be a genuine lost-scope case.
 - **Discord gateway** (`platforms = ["discord"]` in the main profile):
   enabled by the mere presence of `DISCORD_BOT_TOKEN` in the env
   (gateway/config.py `_apply_env_overrides` — config.yaml carries no

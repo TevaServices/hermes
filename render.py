@@ -63,6 +63,41 @@ class ConfigError(Exception):
     pass
 
 
+# Config schema version used when the base image's own value can't be read
+# (local preview runs, where hermes_cli isn't installed). Keep in sync with
+# the HERMES_REF pin — the authoritative stamp is derived at build time.
+_FALLBACK_CONFIG_VERSION = 39
+
+
+def latest_config_version() -> int:
+    """The base image's current config schema version (DEFAULT_CONFIG's
+    ``_config_version``).
+
+    Stamped into every rendered config.yaml so Hermes' version checks see
+    current == latest: without it the schema version reads as 1 and the
+    Docker boot-time migration (`scripts/docker_config_migrate.py`) warns
+    the config "predates version 12" on every boot — its simple check lacks
+    the fresh-minimal-config carve-out the CLI wrapper has. render.py runs
+    inside the Docker build with the image's own venv python3 (plain
+    `python3` IS /opt/hermes/.venv/bin/python3), so hermes_cli imports
+    there; local preview runs take the fallback.
+
+    Deriving instead of hardcoding means a HERMES_REF bump automatically
+    re-stamps (explicit older stamps would floor-refuse future ladders —
+    worse than absent). The stamped value is the base image's own view of
+    "latest", and the resolver still reads the legacy `custom_providers`
+    list form at read time, so stamping never changes resolution behavior.
+    """
+    try:
+        from hermes_cli.config import DEFAULT_CONFIG
+        version = int(DEFAULT_CONFIG.get("_config_version", 0))
+        if version:
+            return version
+    except Exception:
+        pass
+    return _FALLBACK_CONFIG_VERSION
+
+
 # ---------------------------------------------------------------- YAML emit
 
 def _scalar(value, flow: bool = False) -> str:
@@ -282,6 +317,10 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
+    # Authoritative schema stamp, set after config_extra so a profile
+    # cannot (accidentally) claim a version the rendered shape doesn't
+    # have — see latest_config_version() for why this exists at all.
+    config["_config_version"] = latest_config_version()
 
     out_dir = BUILD / name
     out_dir.mkdir(parents=True, exist_ok=True)
