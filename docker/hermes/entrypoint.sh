@@ -11,8 +11,7 @@
 # upstream doesn't know about:
 #   1. hermes-bootstrap-profiles.sh — apply baked overlays into profile
 #      dirs, provision missing profiles (first boot).
-#   1b. Claim the data volume for the runtime user (root-run legacy
-#      volumes can't be traversed by the unprivileged hermes user).
+#   1b. Claim the data volume for the runtime user.
 #   2. Sync the mounted GitHub App PEM (read-only host mount, unreadable
 #      by the unprivileged runtime user) into the persistent tool-home
 #      ($HERMES_HOME/home), owned by the runtime user, and point
@@ -20,9 +19,7 @@
 #   3. Configure git identity + gh auth (as the runtime user, via
 #      s6-setuidgid) in every profile's tool-home, plus a background
 #      token refresher (installation tokens expire after 1h).
-#   4. Rewrite a stale GITHUB_APP_PRIVATE_KEY_PATH left in an inherited
-#      $HERMES_HOME/.env (old images resolved it to the host mount).
-#   5. Exec the upstream dispatcher — s6 takes over from there.
+#   4. Exec the upstream dispatcher — s6 takes over from there.
 set -euo pipefail
 
 export HERMES_HOME="${HERMES_HOME:-/opt/data}"
@@ -42,17 +39,15 @@ fi
 # --- 1b. Data volume ownership: claim it for the runtime user -------------
 # The volume root must be writable by the runtime UID before anything
 # drops to `hermes` below (git/gh config) and before the s6 services run
-# as it. Legacy volumes were populated by root-run images (v2026.3.x era)
-# and are root-owned 0700 at the top level — the unprivileged runtime
-# user can't even traverse them, and upstream's stage2 chown only runs
-# after our `exec /init`, i.e. after this script has already died. Do the
-# chown HERE instead. A full recursive chown is safe because this is a
-# named Docker volume holding agent state only (compose binds no host
-# paths inside it) — upstream stays targeted for host-bind volumes, and
-# its targeted chown would also leave root-owned top-level state files
-# (config.yaml, kanban.db, auth.json) unusable for the runtime user.
-# Unconditional: it self-heals root-owned strays that
-# `docker exec` writes, and costs ~1s against a 17k-file volume.
+# as it — upstream's stage2 chown only runs after our `exec /init`, i.e.
+# after this script would already have died on an unwritable volume. A
+# full recursive chown is safe because this is a named Docker volume
+# holding agent state only (compose binds no host paths inside it) —
+# upstream stays targeted for host-bind volumes, and its targeted chown
+# would also leave root-owned top-level state files (config.yaml,
+# kanban.db, auth.json) unusable for the runtime user. Unconditional: it
+# self-heals root-owned strays that `docker exec` writes, and costs ~1s
+# against a 17k-file volume.
 chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME" 2>/dev/null || \
   echo "hermes-stack: warning: chown of $HERMES_HOME failed" >&2
 
@@ -152,18 +147,9 @@ if [ -d "$HERMES_HOME/profiles" ]; then
   done
 fi
 
-# --- 5. One-time .env migration --------------------------------------------
-# Old images (root-run) wrote the resolved env back into $HERMES_HOME/.env;
-# load_hermes_dotenv loads it with override=True, which would shadow the
-# corrected GITHUB_APP_PRIVATE_KEY_PATH above. Rewrite the stale line.
-if [ -f "$HERMES_HOME/.env" ] && [ -f "$PEM_MOUNT" ]; then
-  sed -i "s|^GITHUB_APP_PRIVATE_KEY_PATH=.*|GITHUB_APP_PRIVATE_KEY_PATH=$PEM_DEST|" \
-    "$HERMES_HOME/.env" || true
-fi
-
-# --- 6. Hand off to the upstream entrypoint ---------------------------------
+# --- 5. Hand off to the upstream entrypoint ---------------------------------
 # entrypoint-dispatch.sh: PID 1 -> /init (s6 supervision tree) -> CMD
-# (gateway run -> migrated into the gateway-default s6 slot on first
+# (gateway run -> registered into the gateway-default s6 slot on first
 # boot by the boot reconciler, then kept alive as a sleep-infinity
 # heartbeat by the redirect logic in hermes_cli/gateway.py).
 exec /opt/hermes/docker/entrypoint-dispatch.sh "$@"

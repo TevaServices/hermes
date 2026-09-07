@@ -226,26 +226,16 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   `POST ollama.com/api/show` → `model_info.*.context_length`. Never set a
   window below the provider's: v2026.8.31 hard-rejects anything under 64K
   (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`).
-- **hermes-agent image**: install layout depends on the ref. From
-  v2026.8.31 the installer does an FHS install — code+venv at
-  `/usr/local/lib/hermes-agent`, its OWN working launcher at
-  `/usr/local/bin/hermes`, and the managed Node runtime at
-  `$HERMES_HOME/node` (the `/usr/local/bin/{node,npm,npx}` symlinks
-  point into `/data/node`). Do NOT add a launcher symlink in the
-  Dockerfile — the old v2026.3.x-era fixup clobbers the installer's
-  launcher with a dangling path and restart-loops the container. The
-  `/data/node` content lives in the image layer but named volumes
-  created by older images DON'T get it re-copied — after a ref bump,
-  `docker cp` the image's `/data/node` into the volume if `npx`-based
-  MCP servers fail with "Connection closed". The venv is uv-managed
-  (no pip; use `/root/.local/bin/uv pip install --python <venv>/bin/python`).
+- **hermes-agent image**: a thin build FROM the official
+  `nousresearch/hermes-agent:<ref>` image — code, venv, launcher, Node
+  runtime, and the s6 supervision tree are all upstream's problem now;
+  don't re-implement or patch around them here. The venv is uv-managed
+  (no pip; use `uv pip install --python <venv>/bin/python`).
   Volume ownership is self-healed by the entrypoint (`chown -R` to the
-  runtime UID before its first privilege drop) — volumes populated by
-  root-run v2026.3.x-era images are root-owned 0700 at the top level,
-  which the unprivileged `hermes` user can't traverse, and upstream's
-  stage2 chown only runs after our wrapper would already have died on
-  its git/gh config step (the 2026-09-07 restart loop). Don't remove
-  that chown.
+  runtime UID before its first privilege drop) — upstream's stage2 chown
+  only runs after our wrapper's exec, so an unwritable volume would kill
+  the wrapper first (the 2026-09-07 restart loop). Don't remove that
+  chown.
 - **render.py stamps `_config_version`** into every rendered config.yaml,
   derived at build time from the base image's `DEFAULT_CONFIG` (render
   runs under the image's own venv `python3`, so `hermes_cli` imports
@@ -274,11 +264,13 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   them. `DISCORD_ALLOWED_USERS` (comma-separated user IDs; usernames
   also work, resolved via the Members intent) gates who the bot
   answers; empty = anyone who mentions it. `DISCORD_REQUIRE_MENTION`
-  defaults true (responds to @mentions and DMs only). Runtime writes
-  resolved env (token + resolved allowlist) back into
-  `$HERMES_HOME/.env`, and `load_hermes_dotenv` loads it with
-  `override=True` — that file SHADOWS the compose-injected env for any
-  key it holds. Two gotchas when scripting the Discord REST API from
+  defaults true (responds to @mentions and DMs only). The entrypoint
+  syncs the mounted env file into `$HERMES_HOME/.env` on every boot (the
+  runtime user can't read the root-owned host mount), and
+  `load_hermes_dotenv` loads that volume copy with `override=True` — the
+  mounted file is the source of truth, and runtime writes to
+  `$HERMES_HOME/.env` last only until the next container restart.
+  Two gotchas when scripting the Discord REST API from
   the container: bare `urllib` User-Agents get Cloudflare-blocked with
   `error 1010` (set a real UA string), and bot DMs fail with
   403/code 50278 "no mutual guilds" when the recipient's server-DM
@@ -288,21 +280,18 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   `github-*` skills drive `gh` CLI + git, and the image installs gh
   (pinned arm64 tarball — rebuild required to bump). Auth mode in use:
   **GitHub App** (app 4860240, installed as `hermes-main[bot]`,
-  all repos). Two modes, both env-driven from hermes-main.env (entrypoint.sh
-  re-runs the config on every start since /root is ephemeral, and sets a
-  default commit identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`):
-  both env-driven from hermes-main.env (entrypoint.sh re-runs the
-  config on every start since /root is ephemeral, and sets a default
-  commit identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`):
-  - **GitHub App (preferred)**: `GITHUB_APP_ID` + `GITHUB_APP_INSTALLATION_ID`
-    + `GITHUB_APP_PRIVATE_KEY_PATH` (PEM at
-    `/etc/hermes/github-app-<profile>.pem` — the default profile uses
-    `github-app-main.pem`; root:ubuntu 640, bind-mounted read-only at
-    `/run/hermes-pem/`, the file must exist before deploy — one app per
-    profile is the plan). The entrypoint copies the PEM into the
-    runtime-owned tool-home (`$HERMES_HOME/home/`) because s6 services run
-    as the unprivileged `hermes` user, and repoints
-    `GITHUB_APP_PRIVATE_KEY_PATH` at the copy.
+  all repos). Both modes are env-driven from hermes-main.env; the
+  entrypoint re-runs the config on every start and sets a default commit
+  identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`:
+  - **GitHub App (preferred)**: `GITHUB_APP_ID` +
+    `GITHUB_APP_INSTALLATION_ID` are the only GitHub vars in the env file
+    (PEM at `/etc/hermes/github-app-<profile>.pem` — the default profile
+    uses `github-app-main.pem`; root:ubuntu 640, bind-mounted read-only
+    at `/run/hermes-pem/`, the file must exist before deploy — one app
+    per profile is the plan). The entrypoint copies the PEM into the
+    runtime-owned tool-home (`$HERMES_HOME/home/`) and exports
+    `GITHUB_APP_PRIVATE_KEY_PATH` itself — the env file never names the
+    path, because s6 services couldn't read the host mount anyway.
     Installation tokens last 1h, so git's credential helper calls
     `github-app-token.sh` (openssl JWT → installation token) fresh per
     operation, and a background refresher re-runs `gh auth login
@@ -315,8 +304,8 @@ right-sizing). Do not "fix" the small numbers in the compose files:
 ## Agent self-management (skills + control-plane access)
 
 The agent manages its own infrastructure. Two skills ship in the default
-profile overlay (`config/profiles/default/skills/` → `/data/skills/`, merged
-by the entrypoint — agent-authored skills there are preserved):
+profile overlay (`config/profiles/default/skills/` → `/opt/data/skills/`,
+merged by the entrypoint — agent-authored skills there are preserved):
 
 - **komodo-ops** — drives the Komodo API from inside the container at
   `http://komodo-core-1:9120` (komodo-core joins the external `hermes-net`
@@ -327,7 +316,7 @@ by the entrypoint — agent-authored skills there are preserved):
   builds, and re-apply the resource sync — but NOT change control-plane
   resources (that's the komodo repo, human-reviewed via push).
 - **hermes-stack-ops** — this stack's operating manual: config is
-  GitOps-rendered (never hand-edit `/data/config.yaml`), LiteLLM is the
+  GitOps-rendered (never hand-edit `/opt/data/config.yaml`), LiteLLM is the
   only LLM path, GitHub App usage, Discord gotchas, 1-CPU constraints,
   cron/kanban availability.
 

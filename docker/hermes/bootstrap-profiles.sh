@@ -15,9 +15,8 @@
 # state (.env, memories/, sessions/, gateway_state.json after first
 # provisioning) is never touched here.
 #
-# This script is built INTO the image (the bind-mount variant from the
-# old per-container design is gone); the same file lives in the repo at
-# docker/hermes/bootstrap-profiles.sh.
+# This script is built INTO the image; the same file lives in the repo
+# at docker/hermes/bootstrap-profiles.sh.
 set -eu
 
 HERMES_HOME="${HERMES_HOME:-/opt/data}"

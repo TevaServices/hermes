@@ -5,10 +5,9 @@
 # per-profile gateways register as s6 services (gateway-<name> slots),
 # crash-restart under s6-supervise, and reconcile across container
 # restarts. That supervision is what makes the docs' "one container
-# hosting all profiles" deployment model work — a custom installer build
-# (the old image here) had no /run/service tree at all, so every profile
-# needed its own container. Build on upstream instead of re-implementing
-# it; upstream bump = change HERMES_REF (build arg / compose / mise env).
+# hosting all profiles" deployment model work. Build on upstream instead
+# of re-implementing it; upstream bump = change HERMES_REF (build arg /
+# compose / mise env).
 #
 # What we add on top (kept minimal — each COPY/RUN is a separate final
 # layer so config-only pushes invalidate only the last one):
