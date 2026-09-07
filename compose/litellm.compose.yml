@@ -10,25 +10,31 @@
 # OPENROUTER_API_KEY. NEVER commit real secret files.
 #
 # Joins the shared external `hermes-net` network so the apps reach it by
-# service name. The image is pulled by Komodo (auto_pull=false) — pull
-# it on the host before the first deploy.
+# service name.
 #
-# Tag: the versioned tags (main-v1.x.y) are amd64-only; the host is
-# aarch64, so this uses the multi-arch `main-latest`. auto_pull=false
-# pins the local image — it only changes when someone re-pulls on the
-# host (docker pull ghcr.io/berriai/litellm:main-latest) and redeploys.
+# Image: built by the Komodo Build `litellm` (docker/litellm/Dockerfile —
+# upstream multi-arch main-latest + config/litellm.yaml baked in as the
+# final layer; the versioned upstream tags main-v1.x.y are amd64-only and
+# the host is aarch64). auto_pull=false pins the local image. Config
+# changes ride the image-ID path: a push to this repo invalidates the
+# config COPY layer, the rebuild-hermes-agent procedure rebuilds
+# litellm:main, and the deploy recreates the service — no bind mount, no
+# manual restarts. Upstream upgrades: re-pull the base image on the host,
+# then push (or RunBuild) to bake a fresh litellm:main.
 
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    build:
+      # Repo-root context (the Dockerfile COPYs config/litellm.yaml from
+      # it) — matches the Komodo Build's build_path ".".
+      context: ..
+      dockerfile: docker/litellm/Dockerfile
+    image: litellm:main
     container_name: litellm
     restart: unless-stopped
     command: ["--config", "/app/config.yaml"]
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/litellm.env
-    volumes:
-      # Config from this repo (config/litellm.yaml — see mise.toml).
-      - ../config/litellm.yaml:/app/config.yaml:ro
     networks:
       hermes-net:
         aliases: [litellm]

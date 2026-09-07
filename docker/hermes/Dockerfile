@@ -1,7 +1,9 @@
 # Hermes agent image.
 #
-# Built from compose/hermes.compose.yml:
+# Built from repo-root context (the komodo repo's hermes-agent Build uses
+# build_path "." + dockerfile_path docker/hermes/Dockerfile; local:
 #   docker compose -f compose/hermes.compose.yml build
+# which passes the same context via `build:` in the service).
 #
 # The image runs the official Nous Research installer at a pinned ref
 # (versions.env -> HERMES_REF), which sets up:
@@ -12,8 +14,12 @@
 #
 # Agent state (config.yaml, .env, memories, sessions, skills) lives in a
 # volume mounted at /data, set via HERMES_HOME. The rendered profile
-# overlay is mounted read-only at /overlay and applied by entrypoint.sh
-# on every start — the git repo is the source of truth for config.
+# overlay (build/main/ — committed to git) is BAKED into the image at
+# /overlay by the final COPY layer: a config-only push invalidates just
+# that layer, the rebuild emits a new image ID, and the deploy recreates
+# hermes-main — the config restart path. entrypoint.sh re-applies /overlay
+# on every start. A bind mount at /overlay (other profiles, local dev)
+# shadows the baked copy, so per-profile overlays still work.
 #
 # Rebuilding the image after bumping HERMES_REF IS the update path:
 # the code lives in the image, state lives in the volume.
@@ -63,10 +69,17 @@ RUN curl -fsSL \
 # Dockerfile used to add — do not re-add it: it would clobber the
 # installer's working launcher with a dangling path.)
 
-COPY entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
-COPY github-app-token.sh /usr/local/bin/github-app-token.sh
+# Final layers — keep last so config-only pushes (build/ changes) don't
+# invalidate the installer layers above. Context is the repo root, hence
+# the docker/hermes/ prefixes.
+COPY docker/hermes/entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
+COPY docker/hermes/github-app-token.sh /usr/local/bin/github-app-token.sh
 RUN chmod +x /usr/local/bin/hermes-entrypoint.sh /usr/local/bin/github-app-token.sh \
  && mkdir -p /data
+# The rendered main-profile overlay (build/main/, committed by render.py):
+# baked in so config changes ride the image-ID recreation path. A bind
+# mount at /overlay (researcher profile, local overrides) shadows it.
+COPY build/main /overlay
 
 VOLUME ["/data"]
 

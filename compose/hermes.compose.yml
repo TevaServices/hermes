@@ -15,7 +15,11 @@
 services:
   hermes-main:
     build:
-      context: ../docker/hermes
+      # Repo-root context — the Dockerfile COPYs docker/hermes/*.sh and
+      # the rendered overlay build/main/ from it (matches the Komodo
+      # Build's build_path ".").
+      context: ..
+      dockerfile: docker/hermes/Dockerfile
       args:
         HERMES_REF: ${HERMES_REF:-v2026.8.31}
     image: hermes-agent:${HERMES_REF:-v2026.8.31}
@@ -34,8 +38,11 @@ services:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/hermes-main.env
     volumes:
       - hermes-main-data:/data
-      # Rendered overlay from this repo (build/main/ — see mise.toml).
-      - ../build/main:/overlay:ro
+      # The rendered overlay (build/main/) is baked into the image at
+      # /overlay by the Dockerfile's final COPY layer — a config-only push
+      # changes the image ID and the deploy recreates this service (the
+      # config restart path). A bind mount at /overlay would shadow the
+      # baked copy; only add one for non-main profiles.
       # Hermes reads keys from $HERMES_HOME/.env
       - ${HERMES_ENV_DIR:?}/hermes-main.env:/data/.env
       # GitHub App private key (root-owned on host, created during setup —
@@ -80,6 +87,7 @@ services:
   #     - ${HERMES_ENV_DIR:?}/hermes-researcher.env
   #   volumes:
   #     - hermes-researcher-data:/data
+  #     # Binds over the image's baked (main) overlay with this profile's.
   #     - ../build/researcher:/overlay:ro
   #     - ${HERMES_ENV_DIR:?}/hermes-researcher.env:/data/.env
   #   networks:

@@ -42,8 +42,8 @@ curl -s -X POST http://komodo-core-1:9120/<read|write|execute>/<Variant> \
 - `execute/DeployStack {"stack":"<name>"}` — deploy (returns update oid)
 - `execute/RunBuild {"build":"<name>"}` — build an image
 - `execute/RunProcedure {"procedure":"<name>"}` — run a procedure
-  (e.g. `rebuild-hermes-agent` = build hermes-agent then deploy the stack;
-  `rebuild-honcho` = build honcho, honcho-mcp, then deploy)
+  (e.g. `rebuild-hermes-agent` = build hermes-agent + litellm, then deploy
+  the stack; `rebuild-honcho` = build honcho, honcho-mcp, then deploy)
 - `execute/RunSync {"sync":"komodo"}` — re-apply <owner>/komodo resources.toml
 - `read/ExportAllResourcesToToml {}` — resources.toml as Komodo sees it
 
@@ -54,9 +54,10 @@ Get ids via List calls; GetStack also accepts a name.
 1. **Image changes are build-then-deploy** (`run_build = false`): a stack
    deploy never rebuilds. Normal flow needs no manual steps — the <owner>/
    hermes push webhook fires the `rebuild-hermes-agent` procedure
-   (sequential stages: RunBuild → DeployStack). Only fall back to manual
-   `RunBuild` → `DeployStack` when a webhook was missed (stack busy, core
-   down) or for the honcho images (`rebuild-honcho` procedure, manual).
+   (sequential stages: RunBuild hermes-agent → RunBuild litellm →
+   DeployStack). Only fall back to manual `RunBuild` → `DeployStack` when
+   a webhook was missed (stack busy, core down) or for the honcho images
+   (`rebuild-honcho` procedure, manual).
 2. **Verify what actually deployed**: `GetStack` → `info.deployed_hash`
    must equal the pushed commit. Deploys can be silent no-ops (compose
    config unchanged) and webhook deliveries can 200-but-skip (Komodo busy
@@ -75,11 +76,14 @@ Get ids via List calls; GetStack also accepts a name.
 
 ## Pitfalls
 
-- `DeployStack` is a no-op for services whose compose config didn't change
-  — a bind-mounted file's content updating live does NOT restart the
-  container (entrypoints re-read at container start only). If the deploy
-  recreated nothing but behavior needed a restart, restart via a compose-
-  changing push or note it for the human.
+- `DeployStack` is a no-op for services whose compose config didn't change.
+  Container config files (gateway litellm.yaml, agent overlay build/main/)
+  are baked into images (final COPY layers), so a config-only push
+  invalidates the image's config layer → new image ID → the deploy
+  recreates that service. The env files (/etc/hermes/*.env) ride compose's
+  env_file hashing the same way. If a deploy recreated nothing but behavior
+  needed a restart, something upstream (dockerfile paths, mount points)
+  regressed — investigate, don't paper over it with manual restarts.
 - `read/GetStack` returns `environment` as a raw string, not a list.
 - Webhook deploys can race each other — check `GetStackActionState` before
   firing a manual `DeployStack`.

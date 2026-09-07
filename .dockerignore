@@ -1,0 +1,15 @@
+# The hermes-agent and litellm Dockerfiles build from the repo root —
+# keep the context to what they COPY (docker/hermes/, build/, config/).
+# Note: Komodo Builds clone the repo fresh, so gitignored files never
+# reach the host-side context anyway; this guards the local `mise run up`
+# build path.
+.git
+mise.local.toml
+secrets/*.env
+admin-api-key.txt
+__pycache__/
+**/__pycache__/
+.DS_Store
+.idea
+.vscode
+.claude

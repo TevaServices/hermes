@@ -21,32 +21,44 @@ project merging all four files, cloned from this repo at deploy time.
   db/redis/rabbitmq). Do not rename the stack; the volumes hold live data.
 - **Push to `main` = build + deploy** (GitHub webhook → the Komodo
   **`rebuild-hermes-agent` procedure**: stage 1 `RunBuild` on the
-  `hermes-agent` Build, stage 2 `DeployStack` on this stack — defined in the
-  komodo repo's `resources.toml`). Stages run sequentially, so image changes
-  are picked up on the same push instead of needing a separate build + deploy.
+  `hermes-agent` Build, stage 2 `RunBuild` on the `litellm` Build, stage 3
+  `DeployStack` on this stack — defined in the komodo repo's
+  `resources.toml`). Stages run sequentially, so image changes are picked
+  up on the same push instead of needing a separate build + deploy.
   Config/compose-only pushes cost a Dockerfile cache-hit build (~1 min).
-  A deploy is still a no-op for services whose compose config didn't change —
-  check `docker inspect <container> --format '{{.State.StartedAt}}` to
-  confirm a recreation actually happened.
-- The rendered overlay (`build/main/`) is **committed** and bind-mounted into
-  the agent container at `/overlay:ro`. Because it's a bind mount, its file
-  contents update live on deploy even when the container isn't recreated —
-  but the entrypoint only re-applies the overlay on container start.
+- **Container config files are baked into images — deploys restart them
+  intelligently.** `config/litellm.yaml` is COPYed into the `litellm:main`
+  image and the rendered `build/main/` overlay is COPYed into the
+  `hermes-agent` image at `/overlay` (both as the Dockerfile's final
+  layers, from a repo-root build context). A config-only push therefore
+  invalidates just that COPY layer → new image ID → the deploy's
+  `compose up` recreates the affected service. This is the auto-restart
+  path: no bind-mounted config files (whose content changes compose can't
+  see), no reloader sidecar, no manual restarts. A deploy is still a no-op
+  for services whose image and compose config didn't change — check
+  `docker inspect <container> --format '{{.State.StartedAt}}'` to confirm
+  a recreation actually happened.
 - Changes to `/etc/hermes/*.env` on the host DO trigger recreation on the next
   deploy (compose hashes env_file contents).
 
 ## Images are built by Komodo Builds — never compose build
 
 The stack runs with `run_build = false` and `auto_pull = false`; the images
-`hermes-agent:v2026.8.31`, `honcho:main`, and `honcho-mcp:main` are produced
-by three **Build** resources defined in the komodo control plane repo
-(`builder = "homelab"`). Therefore:
+`hermes-agent:v2026.8.31`, `litellm:main`, `honcho:main`, and
+`honcho-mcp:main` are produced by four **Build** resources defined in the
+komodo control plane repo (`builder = "homelab"`). The `hermes-agent` and
+`litellm` Builds use a **repo-root build context** (`build_path = "."`) —
+the Dockerfiles COPY `docker/hermes/*`, `build/main`, and
+`config/litellm.yaml` from it (see `.dockerignore` for what's excluded).
+Therefore:
 
-- **Dockerfile or installer changes are picked up automatically**: the push
-  webhook runs the `rebuild-hermes-agent` procedure (build → deploy, in
-  order). Manual equivalent when needed:
+- **Dockerfile, installer, or baked-config changes are picked up
+  automatically**: the push webhook runs the `rebuild-hermes-agent`
+  procedure (build hermes-agent → build litellm → deploy, in order).
+  Manual equivalent when needed:
   1. push the change to this repo
-  2. `execute/RunBuild {"build":"hermes-agent"}` (or `honcho` / `honcho-mcp`)
+  2. `execute/RunBuild {"build":"hermes-agent"}` (or `litellm` / `honcho` /
+     `honcho-mcp`)
   3. `execute/DeployStack {"stack":"hermes"}`
   Use the manual path if the webhook was missed (stack busy / core down) —
   check `GetStack` → `info.deployed_hash` after any push; a webhook delivery
@@ -151,13 +163,13 @@ right-sizing). Do not "fix" the small numbers in the compose files:
 
 - **litellm**: the proxy runs DB-less (no `DATABASE_URL`) — fine for pure
   routing; key management/budgeting features need a DB and are unused here.
-  The image is pulled by Komodo (`auto_pull=false`) — `docker pull
-  ghcr.io/berriai/litellm:main-latest` on the host before the first deploy.
-  **The versioned tags (`main-v1.x.y`) are amd64-only; the host is aarch64,
-  so this uses the multi-arch `main-latest`.** auto_pull=false pins the
-  local image — it only changes when someone re-pulls on the host and
-  redeploys (that IS the update path; no Build resource, the image is
-  public). `routing_strategy: latency-based-routing` picks the
+  The image is a thin build over upstream: `docker/litellm/Dockerfile`
+  FROMs the multi-arch `ghcr.io/berriai/litellm:main-latest` (the
+  versioned `main-v1.x.y` tags are amd64-only; the host is aarch64) and
+  COPYs `config/litellm.yaml` — pre-pull the base on the host before the
+  first build (`docker pull ghcr.io/berriai/litellm:main-latest`); gateway
+  upgrades re-pull the base, then rebuild via the procedure.
+  `routing_strategy: latency-based-routing` picks the
   lowest-latency member of a group; Ollama Cloud is typically fastest, so
   it wins the mixed groups and OpenRouter free is the resilience fallback.
   The `firecrawl` group is OpenRouter-only by design (json_schema).

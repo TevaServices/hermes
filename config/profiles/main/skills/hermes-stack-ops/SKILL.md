@@ -25,23 +25,27 @@ volume at `/data`.
 
 **Configuration is GitOps — the repo is the source of truth, not you.**
 `/data/config.yaml` is a rendered copy of the git repo `<owner>/hermes`
-(`config/` → `render.py` → `build/main/`), re-applied from the read-only
-`/overlay` mount at every container start. NEVER hand-edit `/data/config.yaml`
-or write auth into `/data/.env` — both are overwritten or shadowed.
+(`config/` → `render.py` → `build/main/`), applied from `/overlay` at every
+container start (the overlay is baked into the image's final COPY layer).
+NEVER hand-edit `/data/config.yaml` or write auth into `/data/.env` — both
+are overwritten or shadowed.
 Config/model/tool changes: edit `config/` in the repo → `mise run render` →
-push → deploy (the `komodo-ops` skill covers deploy mechanics). The overlay
-only re-applies on container start, so a deploy that doesn't recreate the
-container needs a restart to pick it up.
+push → deploy (the `komodo-ops` skill covers deploy mechanics). A config
+change ships end-to-end on its own: the push invalidates the image's
+overlay COPY layer, the rebuild emits a new image ID, and the deploy
+recreates this container on the image change — no manual restart needed.
 
 **Every LLM call goes through LiteLLM** (`http://litellm:4000`) — never
-call provider APIs directly; you don't have their keys. Model aliases live
-in the repo's `config/models.toml`: `baseline` (glm-5.3-flash, 1M window —
-primary/simple work), `elevated` (glm-5.3, hard tasks + failure fallback),
-`nano` (nemotron-3-nano:30b, cheap-turn router + light side tasks),
-`ultra` (nemotron-3-ultra, Honcho's consumers). Ollama Cloud models are
-addressed as `ollama/<id>` — the gateway's `ollama/*` wildcard route. New
-Ollama Cloud models need no gateway config; add an alias (with the TRUE
-context window) to models.toml to use one. Verify windows with
+call provider APIs directly; you don't have their keys. The gateway's
+config (`config/litellm.yaml`) is baked into the `litellm:main` image;
+config changes recreate the litellm container on deploy. Model aliases
+live in the repo's `config/models.toml`: `baseline` (glm-5.3-flash, 1M
+window — primary/simple work), `elevated` (glm-5.3, hard tasks + failure
+fallback), `nano` (nemotron-3-nano:30b, cheap-turn router + light side
+tasks), `ultra` (nemotron-3-ultra, Honcho's consumers). Ollama Cloud
+models are addressed as `ollama/<id>` — the gateway's `ollama/*` wildcard
+route. New Ollama Cloud models need no gateway config; add an alias (with
+the TRUE context window) to models.toml to use one. Verify windows with
 `POST https://ollama.com/api/show` (`model_info.*.context_length`); Hermes
 hard-rejects windows below 64k, and a stated window larger than reality
 breaks compaction.
