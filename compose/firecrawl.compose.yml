@@ -30,7 +30,7 @@ x-firecrawl-common: &firecrawl-common
     # binds IPv6 loopback only — the in-container harness check and the
     # published port both fail with ECONNREFUSED. Keep all-interfaces.
     HOST: 0.0.0.0
-    # Right-sized for a 1-CPU / 6GB host. The upstream defaults
+    # Right-sized small. The upstream defaults
     # (NUM_WORKERS_PER_QUEUE=8, NUQ_WORKER_COUNT=5, 10 concurrent
     # requests, 5 browsers) spawn a dozen node processes that starve the
     # box — the API then misses its hardcoded 60s "port must be up"
@@ -81,7 +81,7 @@ services:
     deploy:
       resources:
         limits:
-          # Host is a 1-CPU / 6GB box — a cpus limit above 1.0 is
+          # Small host — a cpus limit above the host's core count is
           # unschedulable, so cap memory only.
           memory: 1g
     networks:

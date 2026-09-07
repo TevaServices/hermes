@@ -10,11 +10,12 @@
 # That IS the config restart path — no bind mount to stale-out, no manual
 # restart. Compose-side: compose/litellm.compose.yml (image: litellm:main).
 #
-# Base: the multi-arch main-latest tag (the versioned main-v1.x.y tags are
-# amd64-only; the host is aarch64). Pre-pull it on the host before the
-# first build: docker pull ghcr.io/berriai/litellm:main-latest — gateway
-# upgrades re-pull, then push (the COPY layer cache-hits on top of the
-# new base, producing a fresh litellm:main).
+# Base: the multi-arch main-latest tag (the versioned main-v1.x.y tags
+# are amd64-only — check the host's architecture). Pre-pull it on the
+# host before the first build: docker pull
+# ghcr.io/berriai/litellm:main-latest — gateway upgrades re-pull, then
+# push (the COPY layer cache-hits on top of the new base, producing a
+# fresh litellm:main).
 FROM ghcr.io/berriai/litellm:main-latest
 
 COPY config/litellm.yaml /app/config.yaml

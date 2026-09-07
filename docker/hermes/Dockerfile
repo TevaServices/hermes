@@ -11,7 +11,7 @@
 #
 # What we add on top (kept minimal — each COPY/RUN is a separate final
 # layer so config-only pushes invalidate only the last one):
-#   1. gh CLI (arm64 tarball) + the GitHub App token helper + git
+#   1. gh CLI (pinned tarball) + the GitHub App token helper + git
 #      credential helper — the agent manages its own infra over git/gh.
 #   2. The declarative config sources (config/, render.py) rendered at
 #      BUILD time into /overlay — profiles ship as image layers, replacing
@@ -29,8 +29,9 @@
 ARG HERMES_REF=v2026.8.31
 FROM nousresearch/hermes-agent:${HERMES_REF}
 
-# gh CLI (pinned arm64 tarball — this image is only ever built on the
-# aarch64 homelab host): the agent's github-* skills (github-issues,
+# gh CLI (pinned tarball for the build host's architecture — this image
+# is only ever built on the homelab host): the agent's github-* skills
+# (github-issues,
 # github-pr-workflow, github-repo-management, github-code-review) work
 # through gh when present. Auth is the GitHub App (entrypoint) — gh
 # never needs `auth login` state persisted; a fresh installation token

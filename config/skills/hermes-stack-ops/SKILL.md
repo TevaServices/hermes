@@ -87,9 +87,10 @@ baked helper — do NOT `git clone` into your own space:
 
 ## Pitfalls
 
-- Host is 1 CPU / 6 GB. Bulk crawling, parallel builds, or many concurrent
-  background tasks starve every sibling container. Keep background work
-  serialized.
+- Host resources are limited. Bulk crawling, parallel builds, or many
+  concurrent background tasks starve sibling containers. Keep background
+  work serialized; check the host's actual CPU/memory before raising
+  any right-sized limit.
 - Discord REST scripting needs a real browser-like `User-Agent` header —
   bare urllib gets Cloudflare `error 1010`. Bot DMs fail (403 code 50278)
   when the recipient blocks server-member DMs — @mention in a server

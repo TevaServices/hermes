@@ -73,7 +73,7 @@ Therefore:
   **`rebuild-honcho`** procedure (run it manually via
   `execute/RunProcedure {"procedure":"rebuild-honcho"}` — no webhook) builds
   honcho, then honcho-mcp, then deploys this stack; sequential stages keep
-  the builds off the 1-CPU host concurrently.
+  the builds off the host concurrently.
 
 ### Bumping HERMES_REF (the update checklist)
 
@@ -157,7 +157,7 @@ Key wiring to keep consistent:
 - `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (LiteLLM;
   bare `OPENAI_API_KEY` is NOT read — Honcho uses `LLM_`-prefixed settings,
   and every default model config reuses the client built from these two),
-  per-section `*_MODEL_CONFIG__MODEL=gpt-oss:20b` overrides (deriver,
+  per-section `*_MODEL_CONFIG__MODEL` overrides (deriver,
   summaries, dream, dialectic levels — defaults point at OpenAI models
   Ollama Cloud doesn't serve), and the embedding block:
   `EMBEDDING_MODEL_CONFIG__*` → LiteLLM's `nomic-embed-text` entry, which
@@ -167,18 +167,20 @@ Key wiring to keep consistent:
 
 ## Stack particulars (hard-won)
 
-The host is **1 CPU / 6 GB** — upstream defaults for these stacks assume a
-real server and will starve it into crash-loops (load was ~15 before
-right-sizing). Do not "fix" the small numbers in the compose files:
+The stack is deliberately right-sized **small** — upstream defaults for
+these stacks assume a real server and will starve a small host into
+crash-loops. Do not "fix" the small numbers in the compose files without
+checking the host's actual resources:
 
 - **litellm**: the proxy runs DB-less (no `DATABASE_URL`) — fine for pure
   routing; key management/budgeting features need a DB and are unused here.
   The image is a thin build over upstream: `docker/litellm/Dockerfile`
   FROMs the multi-arch `ghcr.io/berriai/litellm:main-latest` (the
-  versioned `main-v1.x.y` tags are amd64-only; the host is aarch64) and
-  COPYs `config/litellm.yaml` — pre-pull the base on the host before the
-  first build (`docker pull ghcr.io/berriai/litellm:main-latest`); gateway
-  upgrades re-pull the base, then rebuild via the procedure.
+  versioned `main-v1.x.y` tags are amd64-only — check the host's
+  architecture) and COPYs `config/litellm.yaml` — pre-pull the base on
+  the host before the first build
+  (`docker pull ghcr.io/berriai/litellm:main-latest`); gateway upgrades
+  re-pull the base, then rebuild via the procedure.
   `routing_strategy: latency-based-routing` picks the
   lowest-latency member of a group; Ollama Cloud is typically fastest, so
   it wins the mixed groups and OpenRouter free is the resilience fallback.
@@ -186,7 +188,8 @@ right-sizing). Do not "fix" the small numbers in the compose files:
 - **firecrawl**: `NUQ_WORKER_COUNT=1` (the real knob — `NUM_WORKERS_PER_QUEUE`
   only affects the legacy worker), `MAX_CONCURRENT_JOBS=2`,
   `CRAWL_CONCURRENT_REQUESTS=2`, `BROWSER_POOL_SIZE=1`; playwright has a
-  memory-only limit (a `cpus: 2` limit is unschedulable on a 1-CPU host).
+  memory-only limit (a `cpus` limit above the host's core count is
+  unschedulable).
 - **firecrawl env var names churn between releases.** When bumping
   `FIRECRAWL_VERSION`, diff `compose/firecrawl.compose.yml` against upstream's
   `docker-compose.yaml` for the new tag. Known traps: `RABBITMQ_URL` was
@@ -214,15 +217,14 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   `mcp_honcho_*` in the hermes-* umbrella toolsets regardless.
 - **Tool search must stay on** (`[config_extra.tools.tool_search]`
   `enabled = "on"` in profile.toml): honcho+firecrawl MCP ship 66 tool
-  schemas ≈ 18k tokens, which pinned every turn past the 50% compaction
-  threshold on the 32k window — the gateway warned about imminent
-  compaction on every Discord turn and compacted constantly.
+  schemas ≈ 18k tokens — on a small context window that pins every turn
+  past the 50% compaction threshold before any history exists.
   tool_search (progressive disclosure, shipped v2026.8.31) defers MCP
   schemas behind `tool_search`/`tool_describe`/`tool_call` bridges.
   Core built-in tools never defer. `config/models.toml` states each
   model's TRUE provider window explicitly (Hermes' catalogue probe can't
   resolve IDs through the litellm base_url — it falls back to 256k for
-  everything, which is wrong for gpt-oss:20b's 128k). Verify via
+  everything — verify the actual model). Verify via
   `POST ollama.com/api/show` → `model_info.*.context_length`. Never set a
   window below the provider's: v2026.8.31 hard-rejects anything under 64K
   (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`).
@@ -278,7 +280,7 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   pings them instead.
 - **GitHub access** is skills-based, not an integration: the agent's
   `github-*` skills drive `gh` CLI + git, and the image installs gh
-  (pinned arm64 tarball — rebuild required to bump). Auth mode in use:
+  (pinned tarball — rebuild required to bump). Auth mode in use:
   **GitHub App** (app 4860240, installed as `hermes-main[bot]`,
   all repos). Both modes are env-driven from hermes-main.env; the
   entrypoint re-runs the config on every start and sets a default commit
@@ -310,7 +312,7 @@ Skills ship in two tiers:
   manual (config is GitOps-rendered, never hand-edit
   `/opt/data/config.yaml`; LiteLLM is the only LLM path; GitHub App
   usage; central git repos + per-session worktrees; Discord gotchas;
-  1-CPU constraints; cron/kanban availability).
+  small-host constraints; cron/kanban availability).
 - **Per-profile** (`config/profiles/<name>/skills/`) — same-named skills
   win over the stack-wide ones. Currently: `komodo-ops` ships only in
   the default profile — it drives the Komodo API from inside the

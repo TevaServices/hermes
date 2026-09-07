@@ -14,8 +14,9 @@
 #
 # Image: built by the Komodo Build `litellm` (docker/litellm/Dockerfile —
 # upstream multi-arch main-latest + config/litellm.yaml baked in as the
-# final layer; the versioned upstream tags main-v1.x.y are amd64-only and
-# the host is aarch64). auto_pull=false pins the local image. Config
+# final layer; the versioned upstream tags main-v1.x.y are amd64-only —
+# match the tag to the host arch). auto_pull=false pins the local image.
+# Config
 # changes ride the image-ID path: a push to this repo invalidates the
 # config COPY layer, the rebuild-hermes-agent procedure rebuilds
 # litellm:main, and the deploy recreates the service — no bind mount, no

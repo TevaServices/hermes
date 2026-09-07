@@ -37,10 +37,10 @@ platforms = ["discord"]
 # configuration reference for valid keys).
 #
 # Tool search (progressive disclosure): 66 MCP schemas (honcho+firecrawl)
-# ≈ 18k tokens were pinned into every turn against the 32k window — past
-# the 50% compaction threshold before any history existed, so the gateway
-# warned about compaction on every Discord turn. tool_search replaces the
-# deferred MCP schemas with three bridge tools + a listing manifest.
+# ≈ 18k tokens would pin every turn against a small context window — past
+# the 50% compaction threshold before any history existed. tool_search
+# replaces the deferred MCP schemas with three bridge tools + a listing
+# manifest.
 # (Requires HERMES_REF >= the release that ships tools/tool_search.py.)
 [config_extra.tools.tool_search]
 enabled = "on"

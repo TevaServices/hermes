@@ -68,8 +68,8 @@ Get ids via List calls; GetStack also accepts a name.
 4. **Exited(0) containers mark a stack unhealthy** — Komodo ignores exit
    codes. One-shot jobs must be listed in the stack config's
    `ignore_services` (the `hermes` stack does this for `ollama-init`).
-5. **The host is 1 CPU / 6 GB.** Never run more than one build at a time,
-   and prefer no parallel bulk work while builds run.
+- **The host's resources are limited** — never run more than one build
+  at a time, and prefer no parallel bulk work while builds run.
 6. Control-plane config changes go through the **<owner>/komodo repo**
    (resources.toml + deploy/komodo.compose.yaml), not the UI, and sync on
    push. Stack repos deploy themselves on push (GitHub webhook → DeployStack).

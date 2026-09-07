@@ -153,9 +153,11 @@ mise run check-updates   # pins vs upstream (hermes/honcho/firecrawl/litellm)
 - **Hermes / Honcho / Firecrawl**: bump the pin in `mise.toml` `[env]` (and the
   matching `environment` value in `komodo/resources.toml`), commit, push. The
   webhook triggers rebuild/redeploy with all state preserved.
-- **LiteLLM**: public image, no Build resource — pull `ghcr.io/berriai/litellm:main-latest`
-  on the host (the multi-arch tag; versioned tags are amd64-only and the host is
-  aarch64) and redeploy. `auto_pull=false` pins the local image until re-pulled.
+- **LiteLLM**: public image, no Build resource — pull
+  `ghcr.io/berriai/litellm:main-latest` on the host (the multi-arch tag;
+  versioned tags are amd64-only — match the tag to the host's
+  architecture) and redeploy. `auto_pull=false` pins the local image
+  until re-pulled.
 - **Firecrawl caveat**: its self-host stack's env var names change between
   releases — when bumping, diff `compose/firecrawl.compose.yml` against
   upstream's `docker-compose.yaml` for the new tag.
