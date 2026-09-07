@@ -19,10 +19,15 @@ project merging all four files, cloned from this repo at deploy time.
 - **The compose project name is `hermes`** — all named volumes are prefixed
   `hermes_*` (agent state, honcho Postgres/Redis, firecrawl
   db/redis/rabbitmq). Do not rename the stack; the volumes hold live data.
-- **Push to `main` = deploy** (GitHub webhook → DeployStack). A deploy is a
-  no-op for services whose compose config didn't change — check
-  `docker inspect <container> --format '{{.State.StartedAt}}` to confirm a
-  recreation actually happened.
+- **Push to `main` = build + deploy** (GitHub webhook → the Komodo
+  **`rebuild-hermes-agent` procedure**: stage 1 `RunBuild` on the
+  `hermes-agent` Build, stage 2 `DeployStack` on this stack — defined in the
+  komodo repo's `resources.toml`). Stages run sequentially, so image changes
+  are picked up on the same push instead of needing a separate build + deploy.
+  Config/compose-only pushes cost a Dockerfile cache-hit build (~1 min).
+  A deploy is still a no-op for services whose compose config didn't change —
+  check `docker inspect <container> --format '{{.State.StartedAt}}` to
+  confirm a recreation actually happened.
 - The rendered overlay (`build/main/`) is **committed** and bind-mounted into
   the agent container at `/overlay:ro`. Because it's a bind mount, its file
   contents update live on deploy even when the container isn't recreated —
@@ -37,14 +42,21 @@ The stack runs with `run_build = false` and `auto_pull = false`; the images
 by three **Build** resources defined in the komodo control plane repo
 (`builder = "homelab"`). Therefore:
 
-- **Dockerfile or installer changes are NOT picked up by a stack deploy.**
-  Run the build, then redeploy:
+- **Dockerfile or installer changes are picked up automatically**: the push
+  webhook runs the `rebuild-hermes-agent` procedure (build → deploy, in
+  order). Manual equivalent when needed:
   1. push the change to this repo
   2. `execute/RunBuild {"build":"hermes-agent"}` (or `honcho` / `honcho-mcp`)
   3. `execute/DeployStack {"stack":"hermes"}`
+  Use the manual path if the webhook was missed (stack busy / core down) —
+  check `GetStack` → `info.deployed_hash` after any push; a webhook delivery
+  can 200 but skip if Komodo is mid-operation or restarting.
 - Honcho builds pull from the **public upstream repo** (plastic-labs/honcho,
-  branch `main`) — `honcho:main` is rebuilt upstream-first; re-run its Build
-  to pick up Honcho changes, then DeployStack.
+  branch `main`) — `honcho:main` is rebuilt upstream-first. The
+  **`rebuild-honcho`** procedure (run it manually via
+  `execute/RunProcedure {"procedure":"rebuild-honcho"}` — no webhook) builds
+  honcho, then honcho-mcp, then deploys this stack; sequential stages keep
+  the builds off the 1-CPU host concurrently.
 
 ### Bumping HERMES_REF (the update checklist)
 
