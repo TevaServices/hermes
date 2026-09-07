@@ -303,22 +303,42 @@ right-sizing). Do not "fix" the small numbers in the compose files:
 
 ## Agent self-management (skills + control-plane access)
 
-The agent manages its own infrastructure. Two skills ship in the default
-profile overlay (`config/profiles/default/skills/` → `/opt/data/skills/`,
-merged by the entrypoint — agent-authored skills there are preserved):
+Skills ship in two tiers:
 
-- **komodo-ops** — drives the Komodo API from inside the container at
-  `http://komodo-core-1:9120` (komodo-core joins the external `hermes-net`
-  network, per the komodo repo's compose) with the auth header mounted
-  read-only at `/etc/komodo-auth-header` (host path
+- **Stack-wide** (`config/skills/`) — merged into EVERY rendered profile
+  by render.py. Currently: `hermes-stack-ops`, this stack's operating
+  manual (config is GitOps-rendered, never hand-edit
+  `/opt/data/config.yaml`; LiteLLM is the only LLM path; GitHub App
+  usage; central git repos + per-session worktrees; Discord gotchas;
+  1-CPU constraints; cron/kanban availability).
+- **Per-profile** (`config/profiles/<name>/skills/`) — same-named skills
+  win over the stack-wide ones. Currently: `komodo-ops` ships only in
+  the default profile — it drives the Komodo API from inside the
+  container at `http://komodo-core-1:9120` (komodo-core joins the
+  external `hermes-net` network, per the komodo repo's compose) with the
+  auth header mounted read-only at `/etc/komodo-auth-header` (host path
   `/home/ubuntu/.komodo-auth-header`, overridable via the stack
   `environment` var `KOMODO_AUTH_HEADER`). It can deploy stacks, run
   builds, and re-apply the resource sync — but NOT change control-plane
   resources (that's the komodo repo, human-reviewed via push).
-- **hermes-stack-ops** — this stack's operating manual: config is
-  GitOps-rendered (never hand-edit `/opt/data/config.yaml`), LiteLLM is the
-  only LLM path, GitHub App usage, Discord gotchas, 1-CPU constraints,
-  cron/kanban availability.
+
+### Central git repos + per-session worktrees
+
+All git repos live in ONE central store on the shared volume — a bare
+clone per repo at `/opt/data/repos/<host>/<owner>/<repo>.git`. Nobody
+works in the bare repos and no profile/session clones privately; work
+happens in per-SESSION worktrees under `/opt/data/worktrees/<session-slug>/`
+(the slug comes from `HERMES_SESSION_KEY`, bridged into every tool
+subprocess — one messaging session = one slug, stable across its turns).
+The `git-repo.sh` helper (baked at `/usr/local/bin/git-repo.sh`) manages
+both: `ensure` (idempotent bare clone), `worktree <url> [branch] [dest]`
+(session checkout; auto-creates a session branch `s/<slug>` when the
+requested branch is checked out elsewhere), `list`, and `prune --days N`
+(drop session dirs idle > N days, then `git worktree prune` — run
+weekly via `scripts/prune-repos.sh`, scheduled as a no-agent cron job).
+Overrides: `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`. Everything is
+runtime-uid-owned, so every profile reaches the same store; git's
+worktree model provides the isolation (one branch, one checkout).
 
 Consequence of the network attachment: the hermes stack must be deployed
 before komodo-core can start with it (`hermes_net` is declared external in

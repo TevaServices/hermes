@@ -67,6 +67,23 @@ credentials through gh (`gh auth git-credential`) — just use `gh` and
 `git` normally. The entrypoint's background refresher keeps gh's stored
 installation token fresh (boot + every 30 min; tokens last 1h).
 
+**Git repos live centrally — worktree per session, never clone.**
+One bare clone per repo sits in `/opt/data/repos/<host>/<owner>/<repo>.git`
+(shared object store, no working tree — never commit there). Work happens
+in per-SESSION worktrees under `/opt/data/worktrees/<session-slug>/<repo>/`
+(the slug derives from `HERMES_SESSION_KEY`, which the gateway bridges into
+every tool subprocess, so two sessions never share a checkout). Use the
+baked helper — do NOT `git clone` into your own space:
+- `git-repo.sh worktree <git-url> [branch] [dest]` → prints your session's
+  checkout path (idempotent central clone + worktree add).
+- If the branch is already checked out in another session's worktree, the
+  helper creates a session branch `s/<slug>` instead — push it with
+  `git push origin HEAD:<branch>`.
+- `git-repo.sh list` shows all repos + worktrees; `git-repo.sh prune
+  --days 7` (weekly) removes session dirs idle > N days and prunes the
+  bare repos' worktree admin. `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`
+  override the locations.
+
 ## Pitfalls
 
 - Host is 1 CPU / 6 GB. Bulk crawling, parallel builds, or many concurrent

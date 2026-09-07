@@ -349,6 +349,13 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if soul.is_file():
         shutil.copy2(soul, out_dir / "SOUL.md")
 
+    # Stack-wide skills (config/skills/) merge into EVERY rendered profile
+    # — operating-manual skills every agent in this stack should carry.
+    # Profile-specific skills are copied after, so same-named ones win.
+    shared_skills = CONFIG / "skills"
+    if shared_skills.is_dir():
+        (out_dir / "skills").mkdir(parents=True, exist_ok=True)
+        shutil.copytree(shared_skills, out_dir / "skills", dirs_exist_ok=True)
     skills = profile_dir / "skills"
     if skills.is_dir():
         shutil.copytree(skills, out_dir / "skills", dirs_exist_ok=True)

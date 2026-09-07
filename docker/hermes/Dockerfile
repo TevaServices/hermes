@@ -46,8 +46,10 @@ RUN curl -fsSL --retry 3 \
 # Stack helpers (each a separate layer so script-only pushes stay cheap).
 COPY docker/hermes/github-app-token.sh /usr/local/bin/github-app-token.sh
 COPY docker/hermes/bootstrap-profiles.sh /usr/local/bin/hermes-bootstrap-profiles.sh
+COPY docker/hermes/git-repo.sh /usr/local/bin/git-repo.sh
 RUN chmod 0755 /usr/local/bin/github-app-token.sh \
-               /usr/local/bin/hermes-bootstrap-profiles.sh
+               /usr/local/bin/hermes-bootstrap-profiles.sh \
+               /usr/local/bin/git-repo.sh
 
 # Declarative config: sources + renderer, compiled at BUILD time (no
 # committed build/ artifacts in git — the renderer IS the verification).
