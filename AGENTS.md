@@ -224,9 +224,11 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   config on every start since /root is ephemeral, and sets a default
   commit identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`):
   - **GitHub App (preferred)**: `GITHUB_APP_ID` + `GITHUB_APP_INSTALLATION_ID`
-    + `GITHUB_APP_PRIVATE_KEY_PATH` (PEM at `/etc/hermes/github-app.pem`,
-    root:ubuntu 640, bind-mounted read-only — the file must exist before
-    deploy). Installation tokens last 1h, so git's credential helper calls
+    + `GITHUB_APP_PRIVATE_KEY_PATH` (PEM at
+    `/etc/hermes/github-app-<profile>.pem` — the main profile uses
+    `github-app-main.pem`; root:ubuntu 640, bind-mounted read-only, the
+    file must exist before deploy — one app per profile is the plan).
+    Installation tokens last 1h, so git's credential helper calls
     `github-app-token.sh` (openssl JWT → installation token) fresh per
     operation, and a background refresher re-runs `gh auth login
     --with-token` every 30 min. Hermes' skills hub has native app support

@@ -40,7 +40,10 @@ services:
       - ${HERMES_ENV_DIR:?}/hermes-main.env:/data/.env
       # GitHub App private key (root-owned on host, created during setup —
       # see secrets/hermes-main.env.example). Must exist before deploy.
-      - ${HERMES_ENV_DIR:?}/github-app.pem:/etc/hermes/github-app.pem:ro
+      # Named per profile (github-app-<profile>.pem) so each profile can
+      # carry its own GitHub App later; GITHUB_APP_PRIVATE_KEY_PATH in the
+      # profile's env file points at the mounted path.
+      - ${HERMES_ENV_DIR:?}/github-app-main.pem:/etc/hermes/github-app-main.pem:ro
       # Uncomment to enable Hermes' "docker" terminal backend, letting
       # the agent run sibling containers on the host docker daemon.
       # This is a wide grant of host privilege — only do it for
