@@ -237,6 +237,13 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   `docker cp` the image's `/data/node` into the volume if `npx`-based
   MCP servers fail with "Connection closed". The venv is uv-managed
   (no pip; use `/root/.local/bin/uv pip install --python <venv>/bin/python`).
+  Volume ownership is self-healed by the entrypoint (`chown -R` to the
+  runtime UID before its first privilege drop) — volumes populated by
+  root-run v2026.3.x-era images are root-owned 0700 at the top level,
+  which the unprivileged `hermes` user can't traverse, and upstream's
+  stage2 chown only runs after our wrapper would already have died on
+  its git/gh config step (the 2026-09-07 restart loop). Don't remove
+  that chown.
 - **Discord gateway** (`platforms = ["discord"]` in the main profile):
   enabled by the mere presence of `DISCORD_BOT_TOKEN` in the env
   (gateway/config.py `_apply_env_overrides` — config.yaml carries no
