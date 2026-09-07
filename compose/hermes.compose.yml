@@ -1,56 +1,83 @@
-# Hermes agent containers — one service per profile.
+# Hermes agent container — ONE container, all profiles (official-image
+# deployment model, docs/user-guide/docker#multi-profile-support).
 #
-# Local:  mise run up   (renders + creates the network first, via task deps)
+# The image FROMs nousresearch/hermes-agent:v<HERMES_REF> (see
+# docker/hermes/Dockerfile): the official image's s6-overlay supervision
+# tree registers a gateway-<profile> s6 service per profile, auto-restarts
+# crashed gateways, and re-creates the slots on every container restart
+# from the profiles' persisted state. The default profile is always
+# registered; extra profiles are declarative adds via the rendered
+# overlays (config/ -> render.py at build time -> /overlay/<profile>),
+# provisioned on first boot by the baked bootstrap-profiles.sh.
+#
+# Local:  mise run up   (creates the network first, via task deps)
 # Komodo: part of the "hermes" Stack (<owner>/komodo -> resources.toml),
 # which merges this file with honcho.compose.yml + firecrawl.compose.yml.
 #
-# Secrets: each service reads /etc/hermes/hermes-<profile>.env on the
-# host (set HERMES_ENV_DIR to override for local dev, e.g. ./secrets).
-# The same file is mounted to /data/.env because Hermes reads keys from
-# its .env file. NEVER commit real secret files.
+# Secrets: read from /etc/hermes/hermes-main.env on the host (set
+# HERMES_ENV_DIR to override for local dev, e.g. ./secrets). The file is
+# bind-mounted read-only AND injected as container env (env_file); the
+# entrypoint syncs it to $HERMES_HOME/.env because Hermes reads keys from
+# its .env file (load_hermes_dotenv, override=True) and the s6 services
+# run as an unprivileged user who can't read the root-owned mount.
+# NEVER commit real secret files.
 #
-# All services join the shared external `hermes-net` network so the
-# agents can reach honcho-mcp / firecrawl-api by service name.
-
+# Profiles share this container's env; every profile's config is its own
+# (rendered from config/profiles/<name>/). The default profile = the repo's
+# primary agent (config/profiles/default/, rendered as /overlay/default).
 services:
   hermes-main:
     build:
-      # Repo-root context — the Dockerfile COPYs docker/hermes/*.sh and
-      # the rendered overlay build/main/ from it (matches the Komodo
-      # Build's build_path ".").
+      # Repo-root context — the Dockerfile COPYs docker/hermes/*.sh,
+      # render.py, and config/ from it (matches the Komodo Build's
+      # build_path ".").
       context: ..
       dockerfile: docker/hermes/Dockerfile
       args:
+        # The FROM pin of the thin image (official base tag). Locally mise
+        # exports it from mise.toml [env]; Komodo repeats it in the stack
+        # environment (resources.toml).
         HERMES_REF: ${HERMES_REF:-v2026.8.31}
+    # Image name matches the Komodo Build resource's output tag (defined
+    # in the <owner>/komodo control-plane repo) — do not rename here.
     image: hermes-agent:${HERMES_REF:-v2026.8.31}
     container_name: hermes-main
     restart: unless-stopped
     environment:
-      HERMES_HOME: /data
-      HERMES_MODE: gateway
+      HERMES_HOME: /opt/data
       TZ: ${TZ:-UTC}
-      # In-place updates (alternative to the git-pinned rebuild flow):
-      # uncomment both this and the hermes-main-code volume below. The
-      # code volume must stay mounted or updates are lost on recreate,
-      # and image rebuilds will NOT update running code while mounted.
-      # HERMES_UPDATE_ON_START: "true"
+      # One shared gateway for all profiles: the default profile's
+      # gateway multiplexes inbound platform connections and relays
+      # per-profile routing (named gateway slots stay registered for
+      # explicit lifecycle management but don't auto-start). Operator
+      # env override — beats gateway.multiplex_profiles in config.yaml.
+      GATEWAY_MULTIPLEX_PROFILES: "true"
+      # The GitHub App PEM reaches the container at this fixed mount;
+      # the entrypoint copies it into the runtime-owned tool-home (see
+      # docker/hermes/entrypoint.sh) because s6 services run as the
+      # unprivileged `hermes` user.
+      GITHUB_APP_PEM_MOUNT: /run/hermes-pem/github-app-main.pem
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/hermes-main.env
     volumes:
-      - hermes-main-data:/data
-      # The rendered overlay (build/main/) is baked into the image at
-      # /overlay by the Dockerfile's final COPY layer — a config-only push
-      # changes the image ID and the deploy recreates this service (the
-      # config restart path). A bind mount at /overlay would shadow the
-      # baked copy; only add one for non-main profiles.
-      # Hermes reads keys from $HERMES_HOME/.env
-      - ${HERMES_ENV_DIR:?}/hermes-main.env:/data/.env
+      - hermes-main-data:/opt/data
+      # The env file is bind-mounted read-only and synced to
+      # $HERMES_HOME/.env by the entrypoint (s6 services run as the
+      # unprivileged `hermes` user, so the root-owned host mount is
+      # unreadable in place; the runtime-owned copy in the volume is what
+      # load_hermes_dotenv loads with override=True).
+      - ${HERMES_ENV_DIR:?}/hermes-main.env:/run/hermes-env/hermes-main.env:ro
+      # The rendered overlays (baked in the image at /overlay by the
+      # build-time render.py run) ride the image-ID recreation path: a
+      # config-only push changes the image, the deploy recreates this
+      # service, and the entrypoint re-applies the overlay. (Do NOT bind
+      # -mount /overlay: on a fresh clone there is no local build/ dir,
+      # and a stale local copy would shadow the freshly baked one.)
       # GitHub App private key (root-owned on host, created during setup —
       # see secrets/hermes-main.env.example). Must exist before deploy.
-      # Named per profile (github-app-<profile>.pem) so each profile can
-      # carry its own GitHub App later; GITHUB_APP_PRIVATE_KEY_PATH in the
-      # profile's env file points at the mounted path.
-      - ${HERMES_ENV_DIR:?}/github-app-main.pem:/etc/hermes/github-app-main.pem:ro
+      # The entrypoint copies it into $HERMES_HOME/home/ (runtime-owned)
+      # and repoints GITHUB_APP_PRIVATE_KEY_PATH there.
+      - ${HERMES_ENV_DIR:?}/github-app-main.pem:/run/hermes-pem/github-app-main.pem:ro
       # Komodo control-plane API auth header (X-API-KEY). komodo-core joins
       # hermes-net, so the agent manages the control plane itself at
       # http://komodo-core-1:9120 — see config/profiles/main/skills/komodo-ops.
@@ -62,37 +89,9 @@ services:
       # This is a wide grant of host privilege — only do it for
       # profiles you fully trust.
       # - /var/run/docker.sock:/var/run/docker.sock
-      # In-place update mode (see HERMES_UPDATE_ON_START above):
-      # - hermes-main-code:/usr/local/lib/hermes-agent
     networks:
       hermes-net:
         aliases: [hermes-main]
-
-  # Second profile example. Rendered from config/profiles/researcher/.
-  # Uncomment to run; profiles are independent agents with separate
-  # memory, sessions, and gateway config.
-  # hermes-researcher:
-  #   build:
-  #     context: ../docker/hermes
-  #     args:
-  #       HERMES_REF: ${HERMES_REF:-v2026.8.31}
-  #   image: hermes-agent:${HERMES_REF:-v2026.8.31}
-  #   container_name: hermes-researcher
-  #   restart: unless-stopped
-  #   environment:
-  #     HERMES_HOME: /data
-  #     HERMES_MODE: gateway
-  #     TZ: ${TZ:-UTC}
-  #   env_file:
-  #     - ${HERMES_ENV_DIR:?}/hermes-researcher.env
-  #   volumes:
-  #     - hermes-researcher-data:/data
-  #     # Binds over the image's baked (main) overlay with this profile's.
-  #     - ../build/researcher:/overlay:ro
-  #     - ${HERMES_ENV_DIR:?}/hermes-researcher.env:/data/.env
-  #   networks:
-  #     hermes-net:
-  #       aliases: [hermes-researcher]
 
 networks:
   hermes-net:
@@ -100,5 +99,3 @@ networks:
 
 volumes:
   hermes-main-data:
-  # hermes-researcher-data:
-  # hermes-main-code:

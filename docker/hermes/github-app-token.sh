@@ -26,7 +26,7 @@ sig=$(printf '%s.%s' "$header" "$payload" \
   | openssl dgst -sha256 -sign "$GITHUB_APP_PRIVATE_KEY_PATH" | b64url)
 jwt="$header.$payload.$sig"
 
-curl -fsS -X POST \
+curl -fsS --max-time 20 --retry 2 -X POST \
   -H "Authorization: Bearer $jwt" \
   -H "Accept: application/vnd.github.v3+json" \
   "https://api.github.com/app/installations/$GITHUB_APP_INSTALLATION_ID/access_tokens" \

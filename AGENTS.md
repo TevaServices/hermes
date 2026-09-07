@@ -1,8 +1,10 @@
 # AGENTS.md — hermes (agent stack, deployed by Komodo)
 
 A GitOps-managed [Hermes agent](https://github.com/NousResearch/hermes-agent)
-stack: the agent in Docker, its configuration rendered from small declarative
-files (`config/` → `render.py` → `build/<profile>/`), plus
+stack: the agent in Docker (a thin build over the official
+`nousresearch/hermes-agent` image — one container hosting ALL profiles under
+its s6 supervision), its configuration rendered at image-build time from
+small declarative files (`config/` → `render.py` → `/overlay/<profile>`), plus
 [Honcho](https://github.com/plastic-labs/honcho) (memory),
 [Firecrawl](https://docs.firecrawl.dev/contributing/self-host) (web), and a
 [LiteLLM](https://docs.litellm.ai/) proxy (the stack's single LLM gateway) as
@@ -28,16 +30,18 @@ project merging all four files, cloned from this repo at deploy time.
   Config/compose-only pushes cost a Dockerfile cache-hit build (~1 min).
 - **Container config files are baked into images — deploys restart them
   intelligently.** `config/litellm.yaml` is COPYed into the `litellm:main`
-  image and the rendered `build/main/` overlay is COPYed into the
-  `hermes-agent` image at `/overlay` (both as the Dockerfile's final
-  layers, from a repo-root build context). A config-only push therefore
-  invalidates just that COPY layer → new image ID → the deploy's
-  `compose up` recreates the affected service. This is the auto-restart
-  path: no bind-mounted config files (whose content changes compose can't
-  see), no reloader sidecar, no manual restarts. A deploy is still a no-op
-  for services whose image and compose config didn't change — check
-  `docker inspect <container> --format '{{.State.StartedAt}}'` to confirm
-  a recreation actually happened.
+  image, and the agent image is a thin build over the OFFICIAL
+  `nousresearch/hermes-agent:<ref>` image whose build renders `config/` →
+  `/overlay/<profile>` (the render.py run happens inside `docker build`,
+  so there is no committed `build/` output; both are the Dockerfile's
+  final layers, from a repo-root build context). A config-only push
+  therefore invalidates just that final COPY layer → new image ID → the
+  deploy's `compose up` recreates the affected service. This is the
+  auto-restart path: no bind-mounted config files (whose content changes
+  compose can't see), no reloader sidecar, no manual restarts. A deploy
+  is still a no-op for services whose image and compose config didn't
+  change — check `docker inspect <container> --format
+  '{{.State.StartedAt}}'` to confirm a recreation actually happened.
 - Changes to `/etc/hermes/*.env` on the host DO trigger recreation on the next
   deploy (compose hashes env_file contents).
 
@@ -48,8 +52,9 @@ The stack runs with `run_build = false` and `auto_pull = false`; the images
 `honcho-mcp:main` are produced by four **Build** resources defined in the
 komodo control plane repo (`builder = "homelab"`). The `hermes-agent` and
 `litellm` Builds use a **repo-root build context** (`build_path = "."`) —
-the Dockerfiles COPY `docker/hermes/*`, `build/main`, and
-`config/litellm.yaml` from it (see `.dockerignore` for what's excluded).
+the Dockerfiles COPY `docker/hermes/*`, `config/` + `render.py` (rendered
+inside the build), and `config/litellm.yaml` from it (see `.dockerignore`
+for what's excluded).
 Therefore:
 
 - **Dockerfile, installer, or baked-config changes are picked up
@@ -74,8 +79,11 @@ Therefore:
 
 Update the pinned ref in **all** of: the `hermes-agent` Build's `image_tag` AND
 `build_args`, the stack `environment` in the komodo repo's resources.toml,
-and the compose/mise defaults here (`mise.toml [env]`, `docker/hermes/Dockerfile`
-`ARG`). Then RunBuild → DeployStack, and always verify
+and the compose/mise defaults here (`mise.toml [env]`; the Dockerfile ARG
+defaults through compose, so only mise.toml needs the edit). The ref is now
+the FROM tag of the official base image — the official image publishes
+per-release, so a ref bump both upgrades the agent code and refreshes the
+supervision tree. Then RunBuild → DeployStack, and always verify
 `hermes mcp test honcho` + `hermes mcp test firecrawl` against the new
 image — Hermes' MCP SDK pin is where HTTP-transport breakage has landed
 before (mcp 2.x renamed `streamablehttp_client`; refs from v2026.8.31
@@ -261,9 +269,13 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   commit identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`):
   - **GitHub App (preferred)**: `GITHUB_APP_ID` + `GITHUB_APP_INSTALLATION_ID`
     + `GITHUB_APP_PRIVATE_KEY_PATH` (PEM at
-    `/etc/hermes/github-app-<profile>.pem` — the main profile uses
-    `github-app-main.pem`; root:ubuntu 640, bind-mounted read-only, the
-    file must exist before deploy — one app per profile is the plan).
+    `/etc/hermes/github-app-<profile>.pem` — the default profile uses
+    `github-app-main.pem`; root:ubuntu 640, bind-mounted read-only at
+    `/run/hermes-pem/`, the file must exist before deploy — one app per
+    profile is the plan). The entrypoint copies the PEM into the
+    runtime-owned tool-home (`$HERMES_HOME/home/`) because s6 services run
+    as the unprivileged `hermes` user, and repoints
+    `GITHUB_APP_PRIVATE_KEY_PATH` at the copy.
     Installation tokens last 1h, so git's credential helper calls
     `github-app-token.sh` (openssl JWT → installation token) fresh per
     operation, and a background refresher re-runs `gh auth login
@@ -275,9 +287,9 @@ right-sizing). Do not "fix" the small numbers in the compose files:
 
 ## Agent self-management (skills + control-plane access)
 
-The agent manages its own infrastructure. Two skills ship in the main
-profile overlay (`config/profiles/main/skills/` → `/data/skills/`, merged
-by entrypoint.sh — agent-authored skills there are preserved):
+The agent manages its own infrastructure. Two skills ship in the default
+profile overlay (`config/profiles/default/skills/` → `/data/skills/`, merged
+by the entrypoint — agent-authored skills there are preserved):
 
 - **komodo-ops** — drives the Komodo API from inside the container at
   `http://komodo-core-1:9120` (komodo-core joins the external `hermes-net`
@@ -298,14 +310,17 @@ komodo's compose).
 
 ## Local development (this repo)
 
-Local runs use **mise** (not Makefile): `mise run render`, `mise run up`,
-`mise run logs`, `mise run chat`, `mise run down`, `mise run validate`,
-`mise run check-updates`. `mise.toml [env]` holds the version pins and
-`HERMES_ENV_DIR`; per-machine overrides go in gitignored `mise.local.toml`.
-After editing anything in `config/`, run `mise run render` and **commit the
-`build/` output** — Komodo deploys from git, so an unrendered edit never
-ships. Note: local compose runs get a project named after the parent dir, not
-`hermes` — the Komodo deployment on the host is the real one.
+Local runs use **mise** (not Makefile): `mise run up`, `mise run logs`,
+`mise run chat`, `mise run down`, `mise run validate`, `mise run check-updates`.
+`mise.toml [env]` holds the version pins and `HERMES_ENV_DIR`; per-machine
+overrides go in gitignored `mise.local.toml`.
+
+After editing anything in `config/`, just `git commit && git push` — the
+Docker build runs render.py itself, so there is NO committed `build/` output
+to keep in sync (the old "commit the build/ output" step is gone). To preview
+a render without building: `mise run render` (writes ./build/, gitignored,
+never committed). Note: local compose runs get a project named after the
+parent dir, not `hermes` — the Komodo deployment on the host is the real one.
 
 ## Verification checklist (after any deploy)
 

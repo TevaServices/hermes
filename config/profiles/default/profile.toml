@@ -1,8 +1,11 @@
-# "main" agent profile — one Hermes agent = one container (compose/hermes.compose.yml).
+# The default profile ("default" — the ROOT Hermes profile, $HERMES_HOME
+# itself) — one Hermes agent = one container (compose/hermes.compose.yml
+# hosts ALL profiles under the official image's s6 supervision).
 #
-# Everything here compiles into build/main/ via `mise run render`, which is
-# mounted into the container as its config overlay. Instead of editing a
-# long Hermes config.yaml, change a line here and re-render.
+# Everything here is rendered by render.py INTO the image at build time
+# (overlay baked at /overlay/default, applied by the entrypoint on every
+# container start). Instead of editing a long Hermes config.yaml, change
+# a line here and push — the image rebuild carries the config.
 
 # Model aliases from config/models.toml. Everyday chat and agent turns
 # run on "baseline" (glm-5.3-flash — 1M window); a failing baseline falls

@@ -1,87 +1,150 @@
 #!/bin/bash
-# Hermes agent container entrypoint.
+# <owner>/hermes stack entrypoint — declarative bootstrap, then upstream s6.
 #
-# Responsibilities:
-#   1. Apply the rendered config overlay (/overlay, read-only) onto the
-#      persistent state dir ($HERMES_HOME). The overlay covers
-#      config.yaml, honcho.json, SOUL.md and skills/ — everything
-#      git-managed. It deliberately does NOT touch .env, memories/,
-#      sessions/, or auth state — those are runtime-owned secrets and data.
-#   2. Optionally run `hermes update` in place (HERMES_UPDATE_ON_START)
-#      — see the "in-place updates" notes in compose/hermes.compose.yml.
-#   3. Exec the requested mode: gateway (headless, messaging platforms),
-#      chat (interactive CLI; needs a TTY), or a custom command.
+# The image FROMs the official nousresearch/hermes-agent image, whose
+# entrypoint (docker/entrypoint-dispatch.sh) owns PID 1: it execs
+# s6-overlay's /init, which runs the stage2 bootstrap (UID remap, volume
+# chown, config seeding) and supervises the gateway services (the
+# default profile at gateway-default, named profiles at gateway-<name>).
+#
+# This wrapper runs FIRST (as root, before /init) and only does the work
+# upstream doesn't know about:
+#   1. hermes-bootstrap-profiles.sh — apply baked overlays into profile
+#      dirs, provision missing profiles (first boot).
+#   2. Sync the mounted GitHub App PEM (read-only host mount, unreadable
+#      by the unprivileged runtime user) into the persistent tool-home
+#      ($HERMES_HOME/home), owned by the runtime user, and point
+#      GITHUB_APP_PRIVATE_KEY_PATH at the copy for all child processes.
+#   3. Configure git identity + gh auth (as the runtime user, via
+#      s6-setuidgid) in every profile's tool-home, plus a background
+#      token refresher (installation tokens expire after 1h).
+#   4. Rewrite a stale GITHUB_APP_PRIVATE_KEY_PATH left in an inherited
+#      $HERMES_HOME/.env (old images resolved it to the host mount).
+#   5. Exec the upstream dispatcher — s6 takes over from there.
 set -euo pipefail
 
-HERMES_HOME="${HERMES_HOME:-/data}"
-MODE="${1:-gateway}"
-shift || true
+export HERMES_HOME="${HERMES_HOME:-/opt/data}"
+RUNTIME_UID="$(id -u hermes 2>/dev/null || echo 10000)"
+# /command/s6-setuidgid ships with the s6-overlay symlinks tarball and is
+# on PATH even before /init runs.
+S6_SETUIDGID="$(command -v s6-setuidgid || echo /command/s6-setuidgid)"
 
-mkdir -p "$HERMES_HOME"
+# --- 1. Overlay apply + profile provisioning ------------------------------
+# Baked /overlay (render.py output at build time): default profile ->
+# $HERMES_HOME root, named profiles -> $HERMES_HOME/profiles/<name>/.
+# Merge semantics: git-managed files overwrite, runtime state untouched.
+if [ -x /usr/local/bin/hermes-bootstrap-profiles.sh ]; then
+  /usr/local/bin/hermes-bootstrap-profiles.sh true
+fi
 
-apply_overlay() {
-  [ -d /overlay ] || return 0
-  [ -f /overlay/config.yaml ] && cp -f /overlay/config.yaml "$HERMES_HOME/config.yaml"
-  # honcho.json disables the agent's built-in Honcho integration (see
-  # render.py); Honcho reaches the agent via the honcho-mcp server only.
-  [ -f /overlay/honcho.json ] && cp -f /overlay/honcho.json "$HERMES_HOME/honcho.json"
-  [ -f /overlay/SOUL.md ] && cp -f /overlay/SOUL.md "$HERMES_HOME/SOUL.md"
-  if [ -d /overlay/skills ]; then
-    # Merge: overlay skills overwrite same-named ones; existing others
-    # (including skills the agent created itself) are kept.
-    mkdir -p "$HERMES_HOME/skills"
-    cp -a /overlay/skills/. "$HERMES_HOME/skills/"
+# --- 2. Runtime .env: host env file -> persistent volume ------------------
+# s6 services run as the unprivileged `hermes` user; the env file is
+# bind-mounted read-only from /etc/hermes (root:ubuntu 640) and could
+# never be read in place. Sync it into $HERMES_HOME/.env (which the
+# runtime owns) on every boot — the mounted file stays the source of
+# truth. Compose still injects the same file as container env so this
+# entrypoint sees GITHUB_APP_ID etc.
+ENV_MOUNT="${HERMES_ENV_FILE_MOUNT:-/run/hermes-env/hermes-main.env}"
+if [ -f "$ENV_MOUNT" ]; then
+  cp -f "$ENV_MOUNT" "$HERMES_HOME/.env"
+  chown "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME/.env"
+  chmod 600 "$HERMES_HOME/.env"
+fi
+
+# --- 3. GitHub App PEM: host mount -> persistent tool-home ----------------
+# The PEM is bind-mounted read-only from /etc/hermes (root:ubuntu 640 on
+# the host); the s6 services run as UID 10000 and could never read it
+# there. Copy it onto the data volume (which the runtime owns) and aim
+# the env var at the copy. The mounted file stays the source of truth —
+# refreshed from it on every boot.
+PEM_MOUNT="${GITHUB_APP_PEM_MOUNT:-/run/hermes-pem/github-app-main.pem}"
+if [ -f "$PEM_MOUNT" ]; then
+  PEM_DEST="$HERMES_HOME/home/github-app-main.pem"
+  mkdir -p "$HERMES_HOME/home"
+  cp -f "$PEM_MOUNT" "$PEM_DEST"
+  chown "$RUNTIME_UID:$RUNTIME_UID" "$PEM_DEST" "$HERMES_HOME/home"
+  chmod 600 "$PEM_DEST"
+  export GITHUB_APP_PRIVATE_KEY_PATH="$PEM_DEST"
+fi
+
+# --- 4. git + gh for the runtime user, per tool-home -----------------------
+# Tool subprocesses (git, gh, ...) run with HOME=$HERMES_HOME/home for
+# the default profile (hermes_constants.get_subprocess_home, container
+# mode); named profiles get $HERMES_HOME/profiles/<name>/home. Configure
+# each home that exists, AS the runtime user, so credential state is
+# owned by it. App mode is preferred; PAT (GH_TOKEN) is the fallback.
+# The gh token refresher runs in the background, orphaned to PID 1
+# (s6 reaps orphans), so it survives the exec below.
+configure_github_for_home() {
+  tool_home="$1"
+  mkdir -p "$tool_home"
+  chown "$RUNTIME_UID:$RUNTIME_UID" "$tool_home" 2>/dev/null || true
+  if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_INSTALLATION_ID:-}" ] \
+     && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
+    # git identity + credential helper pointing at the shared gh app
+    # helper. GITHUB_APP_PRIVATE_KEY_PATH was exported by the PEM sync
+    # step above and is inherited through s6-setuidgid.
+    "$S6_SETUIDGID" hermes /bin/sh -c '
+      export HOME="$1"
+      git config --global user.name  "${GH_GIT_NAME:-hermes-agent}"
+      git config --global user.email "${GH_GIT_EMAIL:-hermes-agent@localhost}"
+      git config --global credential.https://github.com.helper \
+        "/usr/local/bin/gh-credential-helper.sh"
+    ' sh "$tool_home"
+    if "$S6_SETUIDGID" hermes /bin/sh -c '
+      export HOME="$1" </dev/null
+      t="$(/usr/local/bin/github-app-token.sh)" || exit 1
+      [ -n "$t" ] || { echo "empty installation token" >&2; exit 1; }
+      printf %s "$t" | gh auth login --with-token
+    ' sh "$tool_home"; then
+      echo "hermes-stack: gh authed via GitHub App (home=$tool_home)"
+    else
+      echo "hermes-stack: initial gh auth failed (refresher will retry)" >&2
+    fi
+    # Installation tokens expire after 1h — refresh gh every 30 min.
+    # Guarded the same way: a failed/empty token never reaches gh, so the
+    # loop can never fall into gh's interactive device-flow prompt.
+    "$S6_SETUIDGID" hermes /bin/sh -c '
+      export HOME="$1" </dev/null
+      while true; do
+        sleep 1800
+        t="$(/usr/local/bin/github-app-token.sh)" || continue
+        [ -n "$t" ] || continue
+        printf %s "$t" | gh auth login --with-token || true
+      done
+    ' sh "$tool_home" &
+  elif [ -n "${GH_TOKEN:-}" ]; then
+    "$S6_SETUIDGID" hermes /bin/sh -c '
+      export HOME="$1"
+      git config --global user.name  "${GH_GIT_NAME:-hermes-agent}"
+      git config --global user.email "${GH_GIT_EMAIL:-hermes-agent@localhost}"
+      git config --global credential.https://github.com.helper "!gh auth git-credential"
+    ' sh "$tool_home"
   fi
 }
 
-apply_overlay
-
-# GitHub access. Two mutually exclusive modes, both driven by env vars
-# from $HERMES_ENV_DIR/hermes-main.env (never committed):
-#   - GitHub App (preferred): GITHUB_APP_ID + GITHUB_APP_INSTALLATION_ID
-#     + GITHUB_APP_PRIVATE_KEY_PATH (PEM mounted read-only). Installation
-#     tokens last 1h, so git gets a fresh token per operation via the
-#     github-app-token.sh credential helper, and gh is re-authed by a
-#     background refresher every 30 min. Hermes' skills hub also has
-#     native app support (tools/skills_hub.py GitHubAuth) as a fallback.
-#   - PAT: GH_TOKEN authenticates gh natively; git routes through
-#     `gh auth git-credential`.
-# /root is ephemeral, so this runs on every start, before exec'ing the
-# gateway. Commit identity is a default the agent can override per-repo;
-# without it any commit it makes fails with "Please tell me who you are".
-git config --global user.name "${GH_GIT_NAME:-hermes-agent}"
-git config --global user.email "${GH_GIT_EMAIL:-hermes-agent@localhost}"
-if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_INSTALLATION_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
-  git config --global credential."https://github.com".helper \
-    '!f() { echo username=x-access-token; echo password=$(/usr/local/bin/github-app-token.sh); }; f'
-  github_app_token() { /usr/local/bin/github-app-token.sh; }
-  github_app_token | gh auth login --with-token \
-    || echo "hermes: initial gh auth failed (refresher will retry)" >&2
-  # Installation tokens expire after 1h — re-auth gh every 30 min. The
-  # subshell survives the exec below (orphaned to init).
-  ( while true; do sleep 1800; github_app_token | gh auth login --with-token || true; done ) &
-elif [ -n "${GH_TOKEN:-}" ]; then
-  git config --global credential."https://github.com".helper '!gh auth git-credential'
+configure_github_for_home "$HERMES_HOME/home"
+# Tool-homes of provisioned named profiles (bootstrap-profiles.sh above
+# created any missing ones just before this).
+if [ -d "$HERMES_HOME/profiles" ]; then
+  for profile_dir in "$HERMES_HOME/profiles"/*/; do
+    [ -d "$profile_dir" ] || continue
+    configure_github_for_home "${profile_dir%/}/home"
+  done
 fi
 
-if [ "${HERMES_UPDATE_ON_START:-false}" = "true" ]; then
-  # In-place update of the agent code. Requires the code directory to be
-  # a mounted volume (see compose/hermes.compose.yml), otherwise the
-  # update is discarded when the container is recreated. May be
-  # interactive on some versions; watch the logs on first use.
-  echo "hermes: running in-place update (HERMES_UPDATE_ON_START=true)" >&2
-  hermes update || echo "hermes: update failed; continuing with current code" >&2
+# --- 5. One-time .env migration --------------------------------------------
+# Old images (root-run) wrote the resolved env back into $HERMES_HOME/.env;
+# load_hermes_dotenv loads it with override=True, which would shadow the
+# corrected GITHUB_APP_PRIVATE_KEY_PATH above. Rewrite the stale line.
+if [ -f "$HERMES_HOME/.env" ] && [ -f "$PEM_MOUNT" ]; then
+  sed -i "s|^GITHUB_APP_PRIVATE_KEY_PATH=.*|GITHUB_APP_PRIVATE_KEY_PATH=$PEM_DEST|" \
+    "$HERMES_HOME/.env" || true
 fi
 
-case "$MODE" in
-  gateway)
-    exec hermes gateway "$@"
-    ;;
-  chat)
-    # Interactive CLI; run with: docker compose ... run --rm hermes-main chat
-    exec hermes "$@"
-    ;;
-  *)
-    exec "$MODE" "$@"
-    ;;
-esac
+# --- 6. Hand off to the upstream entrypoint ---------------------------------
+# entrypoint-dispatch.sh: PID 1 -> /init (s6 supervision tree) -> CMD
+# (gateway run -> migrated into the gateway-default s6 slot on first
+# boot by the boot reconciler, then kept alive as a sleep-infinity
+# heartbeat by the redirect logic in hermes_cli/gateway.py).
+exec /opt/hermes/docker/entrypoint-dispatch.sh "$@"

@@ -33,6 +33,18 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config"
 BUILD = ROOT / "build"
 
+
+def set_build_root(path: str | None) -> None:
+    """Override the output root (default <repo>/build).
+
+    The Dockerfile renders into /overlay at image build time with
+    --build-root /overlay, so rendered profiles ship as image layers
+    instead of committed files. Local runs keep the default.
+    """
+    global BUILD
+    if path:
+        BUILD = Path(path).resolve()
+
 # Env vars per gateway platform (required + the optional ones worth
 # surfacing). Verified against gateway/config.py: a platform is enabled
 # by the mere presence of its *_BOT_TOKEN var. Hermes reads these from
@@ -326,7 +338,12 @@ def main() -> int:
     parser.add_argument("--profile", help="render only this profile")
     parser.add_argument("--check", action="store_true",
                         help="validate only; do not write build output")
+    parser.add_argument("--build-root", metavar="DIR",
+                        help="output root for rendered profiles "
+                             "(default: <repo>/build; the Docker build "
+                             "renders into /overlay)")
     args = parser.parse_args()
+    set_build_root(args.build_root)
 
     try:
         providers = load_toml(CONFIG / "providers.toml")["providers"]

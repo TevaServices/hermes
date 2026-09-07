@@ -12,28 +12,33 @@ metadata:
 
 You run as the `hermes-main` container of the Komodo Stack `hermes`:
 Hermes agent + Honcho (memory) + Firecrawl (web) + LiteLLM (LLM gateway)
-+ a stack-local ollama (embeddings). State persists in the `hermes-main-data`
-volume at `/data`.
++ a stack-local ollama (embeddings). State persists in the
+`hermes-main-data` volume at `/opt/data`. The image is a thin build over
+the OFFICIAL `nousresearch/hermes-agent` image: one container hosts ALL
+Hermes profiles under its s6 supervision (the default profile's gateway
+multiplexes for the container; named profiles register their own slots).
 
 ## When to Use
 
 - Anything about your own configuration, model routing, tools, or memory
 - Diagnosing why a tool, model, or platform (Discord) misbehaves
 - Deciding what changes need a deploy vs what you can change live
+- Adding or changing a Hermes profile (they are declarative in the repo)
 
 ## Procedure
 
 **Configuration is GitOps — the repo is the source of truth, not you.**
-`/data/config.yaml` is a rendered copy of the git repo `<owner>/hermes`
-(`config/` → `render.py` → `build/main/`), applied from `/overlay` at every
-container start (the overlay is baked into the image's final COPY layer).
-NEVER hand-edit `/data/config.yaml` or write auth into `/data/.env` — both
-are overwritten or shadowed.
-Config/model/tool changes: edit `config/` in the repo → `mise run render` →
-push → deploy (the `komodo-ops` skill covers deploy mechanics). A config
-change ships end-to-end on its own: the push invalidates the image's
-overlay COPY layer, the rebuild emits a new image ID, and the deploy
-recreates this container on the image change — no manual restart needed.
+`/opt/data/config.yaml` is a rendered copy of the git repo `<owner>/hermes`
+(`config/` → `render.py` run INSIDE the image build → baked `/overlay`),
+applied to the profile dir at every container start by the entrypoint.
+NEVER hand-edit `/opt/data/config.yaml` or write auth into
+`/opt/data/.env` — both are overwritten or shadowed.
+Config/model/tool changes: edit `config/` in the repo → push (no render
+step — the Docker build renders) → deploy (the `komodo-ops` skill covers
+deploy mechanics). A config change ships end-to-end on its own: the push
+invalidates the image's overlay COPY layer, the rebuild emits a new image
+ID, and the deploy recreates this container on the image change — no
+manual restart needed.
 
 **Every LLM call goes through LiteLLM** (`http://litellm:4000`) — never
 call provider APIs directly; you don't have their keys. The gateway's
@@ -84,7 +89,9 @@ installation token (1h TTL) is minted per git op by
 
 After any config deploy: `hermes mcp test honcho` and
 `hermes mcp test firecrawl` must both report Connected; check
-`/data/logs/gateway.log` tail for `✓ discord connected` and no repeated
-warnings; the Komodo stack `hermes` should be `running` (see `komodo-ops`).
+`/opt/data/logs/gateways/default/current` (per-profile s6 gateway log)
+and `docker logs hermes-main` for `✓ discord connected` and no repeated
+warnings; the Komodo stack `hermes` should be `running` (see
+`komodo-ops`).
 `hermes doctor` warnings about the *built-in* honcho/vision integrations
 are expected and benign for this stack.

@@ -1,7 +1,19 @@
 # "researcher" agent profile — a second, web-heavy agent demonstrating
-# multi-profile deployment. Rendered to build/researcher/ and run as a
-# separate container (see the commented hermes-researcher service in
-# compose/hermes.compose.yml).
+# multi-profile deployment. Rendered into the image at /overlay/profiles/
+# researcher/ and run INSIDE the same container as the default profile
+# (official image's s6 supervision: one gateway-<profile> slot per
+# profile).
+#
+# With GATEWAY_MULTIPLEX_PROFILES=true (compose environment), named
+# profile gateways are registered but NOT auto-started — the default
+# profile's multiplexed gateway owns the shared Discord connection and
+# relays per-profile routing. Do NOT `hermes -p researcher gateway
+# start` while multiplexing: the container-wide env (DISCORD_BOT_TOKEN
+# is shared by all profiles here) would make it open a second Discord
+# connection with the same bot token. To run researcher as a truly
+# independent gateway instead, give the container a profile-scoped env
+# (its own hermes-researcher.env without the Discord token) and turn
+# multiplexing off.
 
 # Research is multi-step tool-heavy work — run it on the "baseline" tier
 # (glm-5.3-flash, 1M window) with "elevated" (glm-5.3) as failure fallback.

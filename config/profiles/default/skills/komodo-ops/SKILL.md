@@ -77,10 +77,11 @@ Get ids via List calls; GetStack also accepts a name.
 ## Pitfalls
 
 - `DeployStack` is a no-op for services whose compose config didn't change.
-  Container config files (gateway litellm.yaml, agent overlay build/main/)
-  are baked into images (final COPY layers), so a config-only push
-  invalidates the image's config layer → new image ID → the deploy
-  recreates that service. The env files (/etc/hermes/*.env) ride compose's
+  Container config files (gateway litellm.yaml, agent overlay rendered at
+  build time into /overlay) are baked into images (final COPY layers), so
+  a config-only push invalidates the image's config layer → new image ID
+  → the deploy recreates that service. The env files (/etc/hermes/*.env)
+  ride compose's
   env_file hashing the same way. If a deploy recreated nothing but behavior
   needed a restart, something upstream (dockerfile paths, mount points)
   regressed — investigate, don't paper over it with manual restarts.

@@ -54,7 +54,9 @@ cat <<EOF
 
 Next steps:
   1. Fill in the secrets:  vim ${HERMES_ENV_DIR}/*.env
-     (key names per profile: check build/<profile>/.env.example after \`mise run render\`)
+     (key names per profile: check the rendered .env.example inside the
+     agent image — docker run --rm hermes-agent:v<ref> cat
+     /overlay/default/.env.example — or run \`mise run render\` locally)
   2. Point komodo/resources.toml at this repo and your Komodo server name,
      then follow komodo/README.md to wire the Resource Sync + webhook.
 EOF

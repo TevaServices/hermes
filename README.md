@@ -33,9 +33,10 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
 
 | Requirement | How it's met |
 |---|---|
-| Install Hermes agent via Docker | `docker/hermes/Dockerfile` runs the official installer at a pinned ref; agent state persists in a volume |
-| Overlay config / profiles | `config/` + `render.py` → per-profile overlays in `build/<profile>/`, applied on every container start |
-| Keep install + config up to date | version pins in `mise.toml` `[env]` (+ Komodo stack env); push → webhook → rebuild/redeploy. `scripts/check-updates.sh` reports drift |
+| Install Hermes agent via Docker | `docker/hermes/Dockerfile` is a thin build over the official `nousresearch/hermes-agent:<ref>` image (pinned ref; s6 supervision included); agent state persists in a volume |
+| One container, all profiles | the official image's s6 supervision hosts every profile as a supervised gateway service — the docs' recommended deployment model |
+| Overlay config / profiles | `config/` + `render.py` are compiled INTO the image at build time (`/overlay/<profile>`), applied to profile dirs on every container start |
+| Keep install + config up to date | the pin in `mise.toml` `[env]` is both the FROM tag and the config baseline; push → webhook → rebuild/redeploy. `scripts/check-updates.sh` reports drift |
 | GitOps on the Linux host | Komodo Resource Sync applies `komodo/resources.toml`; Stacks deploy the compose files from this repo ([komodo/README.md](komodo/README.md)) |
 | Easy model/provider config | providers and models are two small TOML files; profiles pick models by alias — no hand-editing Hermes' config.yaml |
 | Honcho + Firecrawl in containers | `compose/honcho.compose.yml`, `compose/firecrawl.compose.yml`, wired into each agent as MCP servers via `config/integrations.toml` |
@@ -49,11 +50,12 @@ config/
   providers.toml        LLM endpoints + API-key env names (no keys here)
   models.toml           short aliases -> provider/model IDs
   integrations.toml     Honcho / Firecrawl (and any other MCP) wiring
-  profiles/<name>/      per-agent model choice, platforms, SOUL.md, skills/
-render.py               compiles config/ -> build/<profile>/ (config.yaml, .env.example)
-build/<profile>/        rendered overlay (COMMITTED — periphery deploys from
-                        git and mounts it into the agent container)
-docker/hermes/          agent image (official installer at pinned ref) + entrypoint
+  profiles/default/     the ROOT profile (one agent): model choice, platforms,
+                        SOUL.md, skills/
+  profiles/researcher/  a second agent profile, hosted in the same container
+render.py               compiles config/ -> /overlay/<profile> at image build
+                        time (no committed build output)
+docker/hermes/          thin image over the official agent image + entrypoint
 compose/                four stacks: hermes, honcho, firecrawl, litellm (shared hermes-net)
 secrets/                *.env.example templates (real files never committed)
 komodo/                 Resource Sync definitions + setup guide
@@ -63,7 +65,7 @@ scripts/                bootstrap-host.sh, check-updates.sh
 ## How configuration works (the abstraction)
 
 You never touch a Hermes config file. Three small files describe everything,
-and `mise run render` compiles them into what the agent reads:
+and render.py compiles them into what the agent reads — at IMAGE BUILD time:
 
 - **`config/providers.toml`** — every endpoint Hermes can reach: base URL
   (empty = provider default), API mode, and *which env var name* holds its key.
@@ -75,9 +77,9 @@ and `mise run render` compiles them into what the agent reads:
   beside it.
 
 Switching an agent from Claude on OpenRouter to a local Ollama model is a
-one-line diff in one TOML file, then `mise run render && git commit && git push` —
-the running agent picks it up on next deploy (the entrypoint re-applies the
-overlay on every start).
+one-line diff in one TOML file, then `git commit && git push` — the image
+rebuild renders the new overlay, the deploy recreates the container, and the
+entrypoint applies the overlay to the profile dir on start.
 
 ## Quickstart (local)
 
@@ -90,7 +92,7 @@ cp secrets/hermes-main.env.example secrets/hermes-main.env   # fill in real keys
 cp secrets/honcho.env.example secrets/honcho.env
 cp secrets/firecrawl.env.example secrets/firecrawl.env
 cp secrets/litellm.env.example secrets/litellm.env
-mise run up                       # render -> network -> build & start all four stacks
+mise run up                       # build (renders config into the image) -> network -> start all four stacks
 mise run logs                    # watch it come up
 ```
 
