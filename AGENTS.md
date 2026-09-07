@@ -77,7 +77,8 @@ Key wiring to keep consistent:
   file as `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` / `OPENAI_API_KEY` —
   same value everywhere. Model selection follows
   least-costly-while-effective: agents run `mistral-large-3:675b` (`smart`
-  alias, 32k context cap) as primary — Ollama Cloud's 675B Mistral flagship,
+  alias, full provider-reported context window) as primary — Ollama Cloud's
+  675B Mistral flagship,
   a real step up from gpt-oss:120b for general work, with an OpenRouter free
   550B as the group's fallback member — with `smart_model_routing` sending
   short/simple turns to `gpt-oss:20b` (`fast` alias); Honcho's LLM consumers
@@ -176,9 +177,10 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   compaction on every Discord turn and compacted constantly.
   tool_search (progressive disclosure, shipped v2026.8.31) defers MCP
   schemas behind `tool_search`/`tool_describe`/`tool_call` bridges.
-  Core built-in tools never defer. If MCP tool count grows again and
-  pressure returns, the next lever is the `context_length` cap in
-  `config/models.toml`.
+  Core built-in tools never defer. Models deliberately carry NO
+  `context_length` cap (`config/models.toml`): Hermes probes the provider's
+  true window, and v2026.8.31 hard-rejects any configured window below 64K
+  (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`).
 - **hermes-agent image**: install layout depends on the ref. From
   v2026.8.31 the installer does an FHS install — code+venv at
   `/usr/local/lib/hermes-agent`, its OWN working launcher at

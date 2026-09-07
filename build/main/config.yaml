@@ -4,7 +4,6 @@ model:
   provider: litellm
   default: mistral-large-3:675b
   base_url: http://litellm:4000
-  context_length: 32768
   api_mode: chat_completions
 custom_providers:
   - name: litellm

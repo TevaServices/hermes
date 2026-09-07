@@ -8,21 +8,21 @@
 #   model          — the provider's model ID exactly as the provider
 #                    expects it (check `hermes model` picker or your
 #                    provider dashboard for available IDs)
-#   context_length — optional; emitted to Hermes `model.context_length`
+#   context_length — optional; emitted to Hermes `model.context_length`.
+#                    Leave unset deliberately: Hermes probes the live
+#                    provider catalogue for the model's true window, and
+#                    v2026.8.31 rejects any configured window below 64K
+#                    (MINIMUM_CONTEXT_LENGTH). Do not re-add a cap.
 #   description    — free-form note shown by `mise run render`
 
 [models.fast]
 provider = "litellm"
 model = "gpt-oss:20b"
-# Capping the window below gpt-oss' 128k native context keeps per-call
-# history lean — the biggest token-usage lever there is.
-context_length = 32768
 description = "Smallest model in the gpt-oss:20b group; lowest token usage — simple-turn router + side tasks"
 
 [models.smart]
 provider = "litellm"
 model = "mistral-large-3:675b"
-context_length = 32768
 description = "Ollama Cloud's 675B Mistral flagship (via LiteLLM); agent primary — much more capable than gpt-oss:120b for general work, no reasoning-field token burn"
 
 [models.frontier]
