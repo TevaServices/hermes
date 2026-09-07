@@ -95,15 +95,19 @@ configure_github_for_home() {
   chown "$RUNTIME_UID:$RUNTIME_UID" "$tool_home" 2>/dev/null || true
   if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_INSTALLATION_ID:-}" ] \
      && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
-    # git identity + credential helper pointing at the shared gh app
-    # helper. GITHUB_APP_PRIVATE_KEY_PATH was exported by the PEM sync
-    # step above and is inherited through s6-setuidgid.
+    # git identity + credential helper. Git routes through gh's OWN
+    # credential store (`gh auth git-credential`): the entrypoint's
+    # background refresher keeps gh logged in with a fresh installation
+    # token (minted at boot + every 30 min, so the stored token is always
+    # < 1h old). This needs NO env inheritance — Hermes strips credential
+    # vars from tool subprocesses by design (GHSA-rhgp-j443-p4rf), and
+    # gh reads its token from the tool-home's ~/.config/gh/hosts.yml.
     "$S6_SETUIDGID" hermes /bin/sh -c '
       export HOME="$1"
       git config --global user.name  "${GH_GIT_NAME:-hermes-agent}"
       git config --global user.email "${GH_GIT_EMAIL:-hermes-agent@localhost}"
       git config --global credential.https://github.com.helper \
-        "/usr/local/bin/gh-credential-helper.sh"
+        "!gh auth git-credential"
     ' sh "$tool_home"
     if "$S6_SETUIDGID" hermes /bin/sh -c '
       export HOME="$1" </dev/null
@@ -115,9 +119,10 @@ configure_github_for_home() {
     else
       echo "hermes-stack: initial gh auth failed (refresher will retry)" >&2
     fi
-    # Installation tokens expire after 1h — refresh gh every 30 min.
-    # Guarded the same way: a failed/empty token never reaches gh, so the
-    # loop can never fall into gh's interactive device-flow prompt.
+    # Installation tokens expire after 1h — refresh gh every 30 min so
+    # the stored token (`gh auth status` in the tool-home) is always
+    # fresh. Guarded: a failed/empty token never reaches gh, so the loop
+    # can never fall into gh's interactive device-flow prompt.
     "$S6_SETUIDGID" hermes /bin/sh -c '
       export HOME="$1" </dev/null
       while true; do

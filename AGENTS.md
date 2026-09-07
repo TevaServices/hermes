@@ -292,9 +292,9 @@ right-sizing). Do not "fix" the small numbers in the compose files:
     runtime-owned tool-home (`$HERMES_HOME/home/`) and exports
     `GITHUB_APP_PRIVATE_KEY_PATH` itself — the env file never names the
     path, because s6 services couldn't read the host mount anyway.
-    Installation tokens last 1h, so git's credential helper calls
-    `github-app-token.sh` (openssl JWT → installation token) fresh per
-    operation, and a background refresher re-runs `gh auth login
+    Installation tokens last 1h, so git's credential helper routes
+    through gh's own stored token (`gh auth git-credential`), and a
+    background refresher re-runs `gh auth login
     --with-token` every 30 min. Hermes' skills hub has native app support
     too (tools/skills_hub.py `GitHubAuth`, priority PAT → gh → app).
   - **PAT fallback**: `GH_TOKEN` authenticates gh natively; git routes

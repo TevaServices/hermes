@@ -62,10 +62,10 @@ deferred behind the `tool_search`/`tool_describe`/`tool_call` bridges — use
 them rather than expecting every tool visible up front.
 
 **GitHub is a GitHub App** (app 4860240, installed as
-`hermes-main[bot]`): `gh` is already authed and git already carries
-a credential helper — just use `gh` and `git` normally. A fresh
-installation token (1h TTL) is minted per git op by
-`/usr/local/bin/github-app-token.sh`; never store tokens.
+`hermes-main[bot]`): `gh` is already authed and git already routes
+credentials through gh (`gh auth git-credential`) — just use `gh` and
+`git` normally. The entrypoint's background refresher keeps gh's stored
+installation token fresh (boot + every 30 min; tokens last 1h).
 
 ## Pitfalls
 
