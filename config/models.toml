@@ -8,29 +8,38 @@
 #   model          — the provider's model ID exactly as the provider
 #                    expects it (check `hermes model` picker or your
 #                    provider dashboard for available IDs)
-#   context_length — optional; emitted to Hermes `model.context_length`.
-#                    Leave unset deliberately: Hermes probes the live
-#                    provider catalogue for the model's true window, and
-#                    v2026.8.31 rejects any configured window below 64K
-#                    (MINIMUM_CONTEXT_LENGTH). Do not re-add a cap.
+#   context_length — the model's TRUE window, stated explicitly. Hermes'
+#                    catalogue probe can't resolve model IDs through the
+#                    litellm base_url and falls back to 256k regardless of
+#                    the model (that guess is wrong for gpt-oss:20b — 128k
+#                    native), so each alias carries the value Ollama Cloud
+#                    reports (verified via POST ollama.com/api/show,
+#                    model_info.*.context_length). NEVER set this below
+#                    the provider's window: v2026.8.31 hard-rejects any
+#                    configured window under 64K (MINIMUM_CONTEXT_LENGTH),
+#                    and compaction math derives from the stated window.
 #   description    — free-form note shown by `mise run render`
 
 [models.fast]
 provider = "litellm"
 model = "gpt-oss:20b"
+context_length = 131072
 description = "Smallest model in the gpt-oss:20b group; lowest token usage — simple-turn router + side tasks"
 
 [models.smart]
 provider = "litellm"
 model = "mistral-large-3:675b"
+context_length = 262144
 description = "Ollama Cloud's 675B Mistral flagship (via LiteLLM); agent primary — much more capable than gpt-oss:120b for general work, no reasoning-field token burn"
 
 [models.frontier]
 provider = "litellm"
 model = "glm-5.3"
+context_length = 1048576
 description = "Frontier reasoning (Ollama Cloud via LiteLLM); burns heavy thinking tokens — opt in per-profile only"
 
 [models.coder]
 provider = "litellm"
 model = "kimi-k2.7-code"
+context_length = 262144
 description = "Code-focused model (Ollama Cloud via LiteLLM)"

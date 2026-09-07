@@ -177,9 +177,12 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   compaction on every Discord turn and compacted constantly.
   tool_search (progressive disclosure, shipped v2026.8.31) defers MCP
   schemas behind `tool_search`/`tool_describe`/`tool_call` bridges.
-  Core built-in tools never defer. Models deliberately carry NO
-  `context_length` cap (`config/models.toml`): Hermes probes the provider's
-  true window, and v2026.8.31 hard-rejects any configured window below 64K
+  Core built-in tools never defer. `config/models.toml` states each
+  model's TRUE provider window explicitly (Hermes' catalogue probe can't
+  resolve IDs through the litellm base_url — it falls back to 256k for
+  everything, which is wrong for gpt-oss:20b's 128k). Verify via
+  `POST ollama.com/api/show` → `model_info.*.context_length`. Never set a
+  window below the provider's: v2026.8.31 hard-rejects anything under 64K
   (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`).
 - **hermes-agent image**: install layout depends on the ref. From
   v2026.8.31 the installer does an FHS install — code+venv at
