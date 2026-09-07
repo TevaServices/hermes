@@ -179,9 +179,18 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   Core built-in tools never defer. If MCP tool count grows again and
   pressure returns, the next lever is the `context_length` cap in
   `config/models.toml`.
-- **hermes-agent image**: the v2026.3.x installer with `--skip-setup` lands
-  the code+venv under `/root/.hermes/hermes-agent` with NO launcher — the
-  Dockerfile symlinks the venv `hermes` onto PATH, and the venv is uv-managed
+- **hermes-agent image**: install layout depends on the ref. From
+  v2026.8.31 the installer does an FHS install — code+venv at
+  `/usr/local/lib/hermes-agent`, its OWN working launcher at
+  `/usr/local/bin/hermes`, and the managed Node runtime at
+  `$HERMES_HOME/node` (the `/usr/local/bin/{node,npm,npx}` symlinks
+  point into `/data/node`). Do NOT add a launcher symlink in the
+  Dockerfile — the old v2026.3.x-era fixup clobbers the installer's
+  launcher with a dangling path and restart-loops the container. The
+  `/data/node` content lives in the image layer but named volumes
+  created by older images DON'T get it re-copied — after a ref bump,
+  `docker cp` the image's `/data/node` into the volume if `npx`-based
+  MCP servers fail with "Connection closed". The venv is uv-managed
   (no pip; use `/root/.local/bin/uv pip install --python <venv>/bin/python`).
 - **Discord gateway** (`platforms = ["discord"]` in the main profile):
   enabled by the mere presence of `DISCORD_BOT_TOKEN` in the env

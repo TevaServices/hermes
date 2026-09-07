@@ -55,11 +55,13 @@ RUN curl -fsSL \
       https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_REF}/scripts/install.sh \
       -o /tmp/hermes-install.sh \
  && bash /tmp/hermes-install.sh --branch ${HERMES_REF} --skip-setup \
- && rm -f /tmp/hermes-install.sh \
-# The v2026.3.x installer --skip-setup lands the code + venv in
-# $HOME/.hermes (no /usr/local/bin launcher). Expose the venv entry
-# point at the conventional location the entrypoint execs.
- && ln -sf /root/.hermes/hermes-agent/venv/bin/hermes /usr/local/bin/hermes
+ && rm -f /tmp/hermes-install.sh
+# The installer lays out an FHS install (code+venv at
+# /usr/local/lib/hermes-agent, launcher at /usr/local/bin/hermes) and
+# needs NO launcher fixups. (The v2026.3.x installer landed in
+# $HOME/.hermes with no launcher, which needed the symlink this
+# Dockerfile used to add — do not re-add it: it would clobber the
+# installer's working launcher with a dangling path.)
 
 COPY entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
 COPY github-app-token.sh /usr/local/bin/github-app-token.sh
