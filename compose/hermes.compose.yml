@@ -51,6 +51,9 @@ services:
       # per-profile routing (named gateway slots stay registered for
       # explicit lifecycle management but don't auto-start). Operator
       # env override — beats gateway.multiplex_profiles in config.yaml.
+      # Single-profile deployment: multiplexing is a no-op with no named
+      # profiles (the default gateway is the only one). Kept set so adding
+      # a profile later never forks a second Discord connection.
       GATEWAY_MULTIPLEX_PROFILES: "true"
       # The GitHub App PEM reaches the container at this fixed mount;
       # the entrypoint copies it into the runtime-owned tool-home (see

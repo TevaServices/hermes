@@ -18,7 +18,7 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
    │  docker network: hermes-net                             │
    │                                                        │
    │  hermes-main ──── MCP ────► honcho-mcp ──► honcho-api    │
-   │  (hermes-researcher …)          honcho-deriver          │
+   │                                 honcho-deriver          │
    │      │  MCP                    honcho-db, honcho-redis  │
    │      ▼                                                 │
    │  firecrawl-mcp (in-agent, stdio) ──► firecrawl-api       │
@@ -52,7 +52,6 @@ config/
   integrations.toml     Honcho / Firecrawl (and any other MCP) wiring
   profiles/default/     the ROOT profile (one agent): model choice, platforms,
                         SOUL.md, skills/
-  profiles/researcher/  a second agent profile, hosted in the same container
 render.py               compiles config/ -> /overlay/<profile> at image build
                         time (no committed build output)
 docker/hermes/          thin image over the official agent image + entrypoint
