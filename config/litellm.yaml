@@ -16,25 +16,13 @@
 #
 # Model names are what the apps send. Groups (multiple entries sharing a
 # model_name) are routed among by the router_settings strategy.
+#
+# The "ollama/*" wildcard serves every OTHER Ollama Cloud model with no
+# config change: LiteLLM replaces the "*" with the requested model ID and
+# passes it through to ollama.com verbatim. Explicit entries always win
+# over the wildcard (exact match before pattern).
 
 model_list:
-  # ── mistral-large-3:675b — Hermes primary (smart). Ollama Cloud's
-  #    biggest general model (675B, Mistral flagship — much more capable
-  #    than gpt-oss:120b, no reasoning-field output noise). OpenRouter
-  #    free 550B as the latency/availability fallback.
-  - model_name: mistral-large-3:675b
-    litellm_params:
-      model: openai/mistral-large-3:675b
-      api_base: https://ollama.com/v1
-      api_key: os.environ/OLLAMA_API_KEY
-
-  # ── gpt-oss:20b — Hermes fast routing + Honcho's LLM consumers.
-  - model_name: gpt-oss:20b
-    litellm_params:
-      model: openai/gpt-oss:20b
-      api_base: https://ollama.com/v1
-      api_key: os.environ/OLLAMA_API_KEY
-
   # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). OpenRouter
   #    ONLY: schema-bound extraction needs response_format json_schema,
   #    which Ollama Cloud strips. Both members are json_schema-capable.
@@ -54,24 +42,23 @@ model_list:
       model: ollama/nomic-embed-text
       api_base: http://ollama:11434
 
-  # ── Opt-in profile models (frontier/coder) — direct Ollama Cloud.
-  - model_name: glm-5.3
+  # ── Ollama Cloud wildcard — any Ollama Cloud model not listed above,
+  #    callable as "ollama/<model-id>" with no config change (new Ollama
+  #    Cloud releases need only a redeploy-free name). The apps see the
+  #    full catalogue via /v1/models, which LiteLLM expands from the
+  #    provider's own model list (check_provider_endpoint below); the
+  #    "ollama/" prefix keeps those listed names callable as-shown.
+  #    No load balancing or fallbacks on this route — it is one
+  #    passthrough deployment, like every other Ollama Cloud entry.
+  - model_name: "ollama/*"
     litellm_params:
-      model: openai/glm-5.3
-      api_base: https://ollama.com/v1
-      api_key: os.environ/OLLAMA_API_KEY
-  - model_name: kimi-k2.7-code
-    litellm_params:
-      model: openai/kimi-k2.7-code
+      model: openai/*
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
 
-router_settings:
-  # Pick the lowest-latency member of a group; on failure fall back to
-  # the next member. Ollama Cloud is typically fastest, so it wins the
-  # mixed groups; OpenRouter free is the resilience fallback.
-  routing_strategy: "latency-based-routing"
-  fallbacks:
-    - { "mistral-large-3:675b": ["gpt-oss:20b"] }
-    - { "gpt-oss:20b": ["firecrawl"] }
-    - { "firecrawl": ["gpt-oss:20b"] }
+litellm_settings:
+  # Expand the "ollama/*" wildcard in /v1/models by querying the
+  # provider's own model list (per-deployment api_base — Ollama Cloud for
+  # the wildcard) instead of falling back to LiteLLM's static OpenAI
+  # catalogue.
+  check_provider_endpoint: true

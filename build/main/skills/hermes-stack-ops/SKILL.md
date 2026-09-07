@@ -35,12 +35,16 @@ container needs a restart to pick it up.
 
 **Every LLM call goes through LiteLLM** (`http://litellm:4000`) — never
 call provider APIs directly; you don't have their keys. Model aliases live
-in the repo's `config/models.toml`: `smart` (mistral-large-3:675b, primary),
-`fast` (gpt-oss:20b, simple-turn router), `frontier` (glm-5.3, opt-in),
-`coder` (kimi-k2.7-code). `context_length` there states each model's TRUE
-provider window — verify with `POST https://ollama.com/api/show`
-(`model_info.*.context_length`); Hermes hard-rejects windows below 64k, and
-a stated window larger than reality breaks compaction.
+in the repo's `config/models.toml`: `baseline` (glm-5.3-flash, 1M window —
+primary/simple work), `elevated` (glm-5.3, hard tasks + failure fallback),
+`nano` (nemotron-3-nano:30b, cheap-turn router + light side tasks),
+`ultra` (nemotron-3-ultra, Honcho's consumers). Ollama Cloud models are
+addressed as `ollama/<id>` — the gateway's `ollama/*` wildcard route. New
+Ollama Cloud models need no gateway config; add an alias (with the TRUE
+context window) to models.toml to use one. Verify windows with
+`POST https://ollama.com/api/show` (`model_info.*.context_length`); Hermes
+hard-rejects windows below 64k, and a stated window larger than reality
+breaks compaction.
 
 **Memory is Honcho via MCP** (`mcp_honcho_*` tools) — the built-in Honcho
 integration is deliberately disabled (overlay `honcho.json`). Web work goes

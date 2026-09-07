@@ -2,9 +2,9 @@
 # Edit config/ sources and run `mise run render` instead.
 model:
   provider: litellm
-  default: mistral-large-3:675b
+  default: ollama/glm-5.3-flash
   base_url: http://litellm:4000
-  context_length: 262144
+  context_length: 1048576
   api_mode: chat_completions
 custom_providers:
   - name: litellm

@@ -84,29 +84,37 @@ Key wiring to keep consistent:
   `OLLAMA_API_KEY` (Ollama Cloud, the key Open WebUI uses) and
   `OPENROUTER_API_KEY` (OpenRouter free models) — in `litellm.env`, and
   routes each model name among its group members (latency-based, with
-  fallbacks). The apps authenticate with the proxy's master key
+  fallbacks). An `ollama/*` wildcard entry serves every other Ollama
+  Cloud model unprefixed-of-config (callable as `ollama/<model-id>`,
+  expanded in `/v1/models` from the provider's own list via
+  `litellm_settings.check_provider_endpoint`), so new Ollama Cloud
+  releases need no config change. The apps authenticate with the proxy's
+  master key
   (`LITELLM_MASTER_KEY` in `litellm.env`), mirrored into each app's env
   file as `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` / `OPENAI_API_KEY` —
-  same value everywhere. Model selection follows
-  least-costly-while-effective: agents run `mistral-large-3:675b` (`smart`
-  alias, full provider-reported context window) as primary — Ollama Cloud's
-  675B Mistral flagship,
-  a real step up from gpt-oss:120b for general work, with an OpenRouter free
-  550B as the group's fallback member — with `smart_model_routing` sending
-  short/simple turns to `gpt-oss:20b` (`fast` alias); Honcho's LLM consumers
-  (deriver, summaries, dialectic,
-  dream — `*_MODEL_CONFIG__MODEL` envs) all run on `gpt-oss:20b` —
-  background/structured work where the smallest model is fully effective.
-  Firecrawl's LLM features (`MODEL_NAME`) run on the `firecrawl` group,
+  same value everywhere. Model selection follows a four-tier policy,
+  defined as aliases in `config/models.toml` (windows are the values
+  Ollama Cloud reports, verified via `POST ollama.com/api/show`):
+  **baseline** = `glm-5.3-flash` (1M window) — agent primary/hermes chat,
+  and also the tier for targeted tasks needing intelligence AND a big
+  window (aux compression); **elevated** = `glm-5.3` (1M) — hard
+  reasoning/multi-step work, opt in via `/model elevated` or a profile's
+  model, and the baseline's failure fallback; **nano** =
+  `nemotron-3-nano:30b` (256k) — low-intelligence tier with a large
+  window, wired as `smart_model_routing`'s cheap lane (short/simple
+  turns) and the light aux side tasks (session search, web extract,
+  skills hub); **ultra** = `nemotron-3-ultra` (256k) — some-intelligence
+  tier for small-context targeted work; Honcho's LLM consumers (deriver,
+  summaries, dialectic, dream — `*_MODEL_CONFIG__MODEL` envs) run here.
+  All Ollama Cloud IDs are addressed as `ollama/<id>` (the wildcard
+  route). Firecrawl's LLM features (`MODEL_NAME`) run on the `firecrawl`
+  group,
   which is **OpenRouter free models ONLY** (`google/gemma-4-31b-it:free`,
   `nvidia/nemotron-3-super-120b-a12b:free`) — this FIXES the old
   schema-bound extraction gap: Ollama Cloud strips
   `response_format: json_schema`, so /v1/extract and v2 json-format
   scrapes returned `json: null`; OpenRouter passes json_schema through,
-  so SmartScrape extraction works. Hermes' auxiliary side tasks
-  (via `AUXILIARY_*_{BASE_URL,API_KEY,MODEL}` env overrides) run
-  `gpt-oss:20b`. `glm-5.3` remains available as the `frontier` alias — opt
-  in per-profile; it burns heavy thinking tokens.
+  so SmartScrape extraction works.
 - `litellm.env`: `LITELLM_MASTER_KEY` (generate: `openssl rand -hex 32`),
   `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` (free tier — create at
   https://openrouter.ai/keys).
@@ -290,10 +298,16 @@ ships. Note: local compose runs get a project named after the parent dir, not
 ## Verification checklist (after any deploy)
 
 ```bash
-docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hermes|honcho|firecrawl'
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hermes|honcho|firecrawl|ollama'
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3002/v0/health/readiness   # 200
 docker exec hermes-main hermes mcp test honcho      # Connected, ~31 tools
 docker exec hermes-main hermes mcp test firecrawl   # tools discovered
+# Gateway: /v1/models should list the explicit entries PLUS the live
+# Ollama Cloud catalogue (as ollama/<id>) — if it instead returns a
+# swarm of openai/… names, check_provider_endpoint isn't taking effect.
+curl -s http://127.0.0.1:4000/v1/models \
+  -H "Authorization: Bearer $(sudo cat /etc/hermes/litellm.env | grep ^LITELLM_MASTER_KEY= | cut -d= -f2)" \
+  | python3 -c 'import json,sys; print(*(m["id"] for m in json.load(sys.stdin)["data"]), sep="\n")'
 ```
 
 `hermes doctor` inside the container reports warnings for Hermes' *built-in*

@@ -4,14 +4,17 @@
 # mounted into the container as its config overlay. Instead of editing a
 # long Hermes config.yaml, change a line here and re-render.
 
-# Model aliases from config/models.toml. Primary work (tool calling,
-# multi-step tasks) runs on "smart" (mistral-large-3:675b — Ollama Cloud's
-# 675B Mistral flagship, a real step up from gpt-oss:120b); smart_model_routing
-# below sends short/simple turns to the cheap "fast" model (gpt-oss:20b), so
-# everyday chit-chat costs the minimum. "frontier" (glm-5.3) remains one
-# line away if this agent ever needs heavy reasoning.
-model = "smart"
-fallback_model = "fast"
+# Model aliases from config/models.toml. Everyday chat and agent turns
+# run on "baseline" (glm-5.3-flash — 1M window); a failing baseline falls
+# back UP to "elevated" (glm-5.3), which is also the opt-in tier for hard
+# reasoning (/model elevated mid-session). smart_model_routing below sends
+# short/simple turns to the "nano" model (nemotron-3-nano:30b), so
+# chit-chat costs the minimum. Targeted side tasks route per task:
+# compression (needs intelligence + big window) rides the aux env pin on
+# glm-5.3-flash = baseline; light side tasks (web extract, skills hub) are
+# pinned to nano. Honcho's consumers run on "ultra" (see honcho.env).
+model = "baseline"
+fallback_model = "elevated"
 
 # Enabled integrations from config/integrations.toml
 integrations = ["honcho", "firecrawl"]
@@ -40,15 +43,16 @@ platforms = ["discord"]
 enabled = "on"
 [config_extra]
 # Least-costly-while-effective routing: short, single-line messages with
-# no code/tools/URLs go to the cheap model; everything else uses the
-# primary. `provider` is the named custom provider from providers.toml
-# (rendered into config.yaml `custom_providers:`), so it shares the same
-# LITELLM_API_KEY.
+# no code/tools/URLs go to the cheap model (the low-intelligence tier —
+# "nano"); everything else uses the primary. `provider` is the named
+# custom provider from providers.toml (rendered into config.yaml
+# `custom_providers:`), so it shares the same LITELLM_API_KEY. The
+# "ollama/" prefix matches the gateway's ollama/* wildcard route.
 [config_extra.smart_model_routing]
 enabled = true
 [config_extra.smart_model_routing.cheap_model]
 provider = "litellm"
-model = "gpt-oss:20b"
+model = "ollama/nemotron-3-nano:30b"
 
 # Extra env var placeholders render.py should list in .env.example.
 # [env]

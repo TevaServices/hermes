@@ -3,43 +3,61 @@
 # Profiles reference models BY ALIAS (see profiles/<name>/profile.toml),
 # so switching an agent from one model to another is a one-line change.
 #
+# All of these ride the "ollama/*" wildcard route at the LiteLLM gateway
+# (config/litellm.yaml has no explicit per-model entries), so each model
+# ID carries the "ollama/" prefix the wildcard matches on — LiteLLM
+# strips it and sends the bare ID to Ollama Cloud.
+#
 # Keys:
 #   provider       — must match a key in providers.toml
 #   model          — the provider's model ID exactly as the provider
-#                    expects it (check `hermes model` picker or your
-#                    provider dashboard for available IDs)
+#                    expects it (LiteLLM gateway, so "ollama/<id>")
 #   context_length — the model's TRUE window, stated explicitly. Hermes'
 #                    catalogue probe can't resolve model IDs through the
 #                    litellm base_url and falls back to 256k regardless of
-#                    the model (that guess is wrong for gpt-oss:20b — 128k
-#                    native), so each alias carries the value Ollama Cloud
-#                    reports (verified via POST ollama.com/api/show,
-#                    model_info.*.context_length). NEVER set this below
-#                    the provider's window: v2026.8.31 hard-rejects any
-#                    configured window under 64K (MINIMUM_CONTEXT_LENGTH),
-#                    and compaction math derives from the stated window.
+#                    the model (wrong for the 1M GLMs), so each alias
+#                    carries the value Ollama Cloud reports (verified via
+#                    POST ollama.com/api/show, model_info.*.context_length).
+#                    NEVER set this below the provider's window:
+#                    v2026.8.31 hard-rejects any configured window under
+#                    64K (MINIMUM_CONTEXT_LENGTH), and compaction math
+#                    derives from the stated window.
 #   description    — free-form note shown by `mise run render`
+#
+# Routing policy (who runs what):
+#   baseline  — hermes chat / main agent turns. ALSO the tier for
+#               targeted tasks that need intelligence AND a big window
+#               (e.g. aux compression over a ~1M context) — same model.
+#   elevated  — elevated tasks (hard reasoning/multi-step work). No
+#               automatic lane; switch via `/model elevated` or use as a
+#               profile's model. Wired as the failure fallback so a dead
+#               baseline degrades up, not down.
+#   nano      — targeted tasks that need little intelligence but a large
+#               context window. Wired as smart_model_routing's cheap lane
+#               (short/simple turns) and the light aux side tasks.
+#   ultra     — targeted tasks that need some intelligence with no big
+#               context window. Honcho's LLM consumers run here.
 
-[models.fast]
+[models.nano]
 provider = "litellm"
-model = "gpt-oss:20b"
-context_length = 131072
-description = "Smallest model in the gpt-oss:20b group; lowest token usage — simple-turn router + side tasks"
-
-[models.smart]
-provider = "litellm"
-model = "mistral-large-3:675b"
+model = "ollama/nemotron-3-nano:30b"
 context_length = 262144
-description = "Ollama Cloud's 675B Mistral flagship (via LiteLLM); agent primary — much more capable than gpt-oss:120b for general work, no reasoning-field token burn"
+description = "Nemotron 30B nano (via LiteLLM wildcard) — low-intelligence tier with a large window; cheap-turn router + light aux side tasks"
 
-[models.frontier]
+[models.baseline]
 provider = "litellm"
-model = "glm-5.3"
+model = "ollama/glm-5.3-flash"
 context_length = 1048576
-description = "Frontier reasoning (Ollama Cloud via LiteLLM); burns heavy thinking tokens — opt in per-profile only"
+description = "1M-window GLM flash (via LiteLLM wildcard) — agent primary/hermes chat baseline; also the targeted tier needing both intelligence and context (aux compression)"
 
-[models.coder]
+[models.elevated]
 provider = "litellm"
-model = "kimi-k2.7-code"
+model = "ollama/glm-5.3"
+context_length = 1048576
+description = "Full GLM 5.3 (via LiteLLM wildcard) — elevated tasks: hard reasoning/multi-step work; opt in via /model or a profile's model; failure fallback for baseline"
+
+[models.ultra]
+provider = "litellm"
+model = "ollama/nemotron-3-ultra"
 context_length = 262144
-description = "Code-focused model (Ollama Cloud via LiteLLM)"
+description = "Nemotron 3 ultra (via LiteLLM wildcard) — some-intelligence tier for small-context targeted work; Honcho's LLM consumers run here"

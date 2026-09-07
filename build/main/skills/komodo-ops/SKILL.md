@@ -41,6 +41,9 @@ curl -s -X POST http://komodo-core-1:9120/<read|write|execute>/<Variant> \
 - `read/GetUpdate {"id":"<oid>"}` — result of an execute op (logs + status)
 - `execute/DeployStack {"stack":"<name>"}` — deploy (returns update oid)
 - `execute/RunBuild {"build":"<name>"}` — build an image
+- `execute/RunProcedure {"procedure":"<name>"}` — run a procedure
+  (e.g. `rebuild-hermes-agent` = build hermes-agent then deploy the stack;
+  `rebuild-honcho` = build honcho, honcho-mcp, then deploy)
 - `execute/RunSync {"sync":"komodo"}` — re-apply <owner>/komodo resources.toml
 - `read/ExportAllResourcesToToml {}` — resources.toml as Komodo sees it
 
@@ -49,12 +52,16 @@ Get ids via List calls; GetStack also accepts a name.
 ## Rules
 
 1. **Image changes are build-then-deploy** (`run_build = false`): a stack
-   deploy never rebuilds. If the change touches a Dockerfile/installer:
-   push → `RunBuild` → wait for the update to reach `Complete` → `DeployStack`.
+   deploy never rebuilds. Normal flow needs no manual steps — the <owner>/
+   hermes push webhook fires the `rebuild-hermes-agent` procedure
+   (sequential stages: RunBuild → DeployStack). Only fall back to manual
+   `RunBuild` → `DeployStack` when a webhook was missed (stack busy, core
+   down) or for the honcho images (`rebuild-honcho` procedure, manual).
 2. **Verify what actually deployed**: `GetStack` → `info.deployed_hash`
    must equal the pushed commit. Deploys can be silent no-ops (compose
-   config unchanged) and builds can race a push (builds git-pull at
-   start — a push landing mid-build builds the OLD commit).
+   config unchanged) and webhook deliveries can 200-but-skip (Komodo busy
+   or restarting); builds can race a push (builds git-pull at start — a
+   push landing mid-build builds the OLD commit).
 3. **"Resource is busy"** = a concurrent op holds the stack. Wait ~60–90s,
    retry. Never force.
 4. **Exited(0) containers mark a stack unhealthy** — Komodo ignores exit

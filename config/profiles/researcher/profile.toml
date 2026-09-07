@@ -3,10 +3,10 @@
 # separate container (see the commented hermes-researcher service in
 # compose/hermes.compose.yml).
 
-# Research is multi-step tool-heavy work — run it on the capable tier
-# ("smart" = mistral-large-3:675b) with the cheap model as failure fallback.
-model = "smart"
-fallback_model = "fast"
+# Research is multi-step tool-heavy work — run it on the "baseline" tier
+# (glm-5.3-flash, 1M window) with "elevated" (glm-5.3) as failure fallback.
+model = "baseline"
+fallback_model = "elevated"
 integrations = ["honcho", "firecrawl"]
 platforms = []
 
