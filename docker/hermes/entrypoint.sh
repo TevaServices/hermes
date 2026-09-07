@@ -91,9 +91,13 @@ if [ -f "$ENV_MOUNT" ]; then
       # profile as DISCORD_BOT_TOKEN.
       grep -vE '^PROFILE_[A-Z0-9]+_[A-Z0-9_]+=' "$ENV_MOUNT" > "$profile_env" || true
       prefix="PROFILE_${profile_name^^}_"
-      env | grep -E "^${prefix}[A-Z0-9_]+=" | while IFS='=' read -r key value; do
-        printf '%s=%s\n' "${key#"$prefix"}" "$value" >> "$profile_env"
-      done
+      # `|| true` inside the brace group: with no PROFILE_<NAME>_* vars in
+      # the container env (team not onboarded yet), grep exits 1 and
+      # pipefail would otherwise kill the entrypoint silently (set -e).
+      { env | grep -E "^${prefix}[A-Z0-9_]+=" || true; } | \
+        while IFS='=' read -r key value; do
+          printf '%s=%s\n' "${key#"$prefix"}" "$value" >> "$profile_env"
+        done
       chown "$RUNTIME_UID:$RUNTIME_UID" "$profile_env"
       chmod 600 "$profile_env"
     done
