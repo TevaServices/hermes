@@ -122,17 +122,45 @@ case "$cmd" in
     done
     ;;
   prune)
-    days=7
+    # Safety rule: drop a worktree only if it is CLEAN (no uncommitted or
+    # untracked changes — commits are never at risk, they live in the
+    # shared bare repo), or if it is DIRTY but idle longer than --days
+    # (default 30). Dirty-but-recent worktrees are kept, never touched.
+    days=30
     if [ "${1:-}" = "--days" ] && [ -n "${2:-}" ]; then days=$2; fi
-    find "$WORKTREES" -mindepth 1 -maxdepth 1 -type d -mtime "+$days" 2>/dev/null | while read -r sess; do
-      echo "pruning session dir: $sess"
-      rm -rf "$sess"
+    now=$(date +%s)
+    pruned=0; kept=0
+    for sess in "$WORKTREES"/*/; do
+      [ -d "$sess" ] || continue
+      for wt in "$sess"*/; do
+        [ -f "$wt/.git" ] || continue
+        if [ -z "$(git -C "$wt" status --porcelain 2>/dev/null | head -1)" ]; then
+          rm -rf "$wt"
+          pruned=$((pruned + 1))
+          echo "pruned clean worktree: $wt"
+          continue
+        fi
+        # Newest file mtime = last real activity in this worktree.
+        newest=$(find "$wt" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+        newest="${newest%%.*}"
+        [ -n "$newest" ] || newest=$now
+        if [ $(( (now - newest) / 86400 )) -gt "$days" ]; then
+          rm -rf "$wt"
+          pruned=$((pruned + 1))
+          echo "pruned stale dirty worktree (> ${days}d idle): $wt"
+        else
+          kept=$((kept + 1))
+        fi
+      done
+      rmdir "$sess" 2>/dev/null || true
     done
-    # Re-register: prune drops worktree admin entries whose dirs vanished.
+    # Drop worktree admin entries whose dirs vanished above.
     find "$REPOS" -mindepth 1 -maxdepth 3 -type d -name '*.git' 2>/dev/null | while read -r bare; do
       git -C "$bare" worktree prune 2>/dev/null || true
     done
-    echo "prune done (sessions idle > ${days}d removed)"
+    if [ "$pruned" -gt 0 ]; then
+      echo "prune: ${pruned} worktree(s) removed, ${kept} kept (dirty and <= ${days}d idle)"
+    fi
     ;;
   *)
     echo "usage: git-repo.sh ensure|worktree|list|prune ..." >&2
