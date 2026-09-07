@@ -219,7 +219,11 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   pings them instead.
 - **GitHub access** is skills-based, not an integration: the agent's
   `github-*` skills drive `gh` CLI + git, and the image installs gh
-  (pinned arm64 tarball — rebuild required to bump). Two auth modes,
+  (pinned arm64 tarball — rebuild required to bump). Auth mode in use:
+  **GitHub App** (app 4860240, installed as `hermes-main[bot]`,
+  all repos). Two modes, both env-driven from hermes-main.env (entrypoint.sh
+  re-runs the config on every start since /root is ephemeral, and sets a
+  default commit identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`):
   both env-driven from hermes-main.env (entrypoint.sh re-runs the
   config on every start since /root is ephemeral, and sets a default
   commit identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`):
@@ -236,6 +240,29 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   - **PAT fallback**: `GH_TOKEN` authenticates gh natively; git routes
     through `gh auth git-credential`. Prefer a fine-grained PAT scoped
     to the specific repos (Contents/Issues/Pull requests read+write).
+
+## Agent self-management (skills + control-plane access)
+
+The agent manages its own infrastructure. Two skills ship in the main
+profile overlay (`config/profiles/main/skills/` → `/data/skills/`, merged
+by entrypoint.sh — agent-authored skills there are preserved):
+
+- **komodo-ops** — drives the Komodo API from inside the container at
+  `http://komodo-core-1:9120` (komodo-core joins the external `hermes-net`
+  network, per the komodo repo's compose) with the auth header mounted
+  read-only at `/etc/komodo-auth-header` (host path
+  `/home/ubuntu/.komodo-auth-header`, overridable via the stack
+  `environment` var `KOMODO_AUTH_HEADER`). It can deploy stacks, run
+  builds, and re-apply the resource sync — but NOT change control-plane
+  resources (that's the komodo repo, human-reviewed via push).
+- **hermes-stack-ops** — this stack's operating manual: config is
+  GitOps-rendered (never hand-edit `/data/config.yaml`), LiteLLM is the
+  only LLM path, GitHub App usage, Discord gotchas, 1-CPU constraints,
+  cron/kanban availability.
+
+Consequence of the network attachment: the hermes stack must be deployed
+before komodo-core can start with it (`hermes_net` is declared external in
+komodo's compose).
 
 ## Local development (this repo)
 

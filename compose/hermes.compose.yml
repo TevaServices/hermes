@@ -44,6 +44,12 @@ services:
       # carry its own GitHub App later; GITHUB_APP_PRIVATE_KEY_PATH in the
       # profile's env file points at the mounted path.
       - ${HERMES_ENV_DIR:?}/github-app-main.pem:/etc/hermes/github-app-main.pem:ro
+      # Komodo control-plane API auth header (X-API-KEY). komodo-core joins
+      # hermes-net, so the agent manages the control plane itself at
+      # http://komodo-core-1:9120 — see config/profiles/main/skills/komodo-ops.
+      # Host path default kept in this file; overrides go in the stack
+      # environment (resources.toml) as KOMODO_AUTH_HEADER.
+      - ${KOMODO_AUTH_HEADER:-/home/ubuntu/.komodo-auth-header}:/etc/komodo-auth-header:ro
       # Uncomment to enable Hermes' "docker" terminal backend, letting
       # the agent run sibling containers on the host docker daemon.
       # This is a wide grant of host privilege — only do it for
