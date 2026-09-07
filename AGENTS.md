@@ -48,14 +48,15 @@ by three **Build** resources defined in the komodo control plane repo
 
 ### Bumping HERMES_REF (the update checklist)
 
-Update `v2026.3.23` in **all** of: the `hermes-agent` Build's `image_tag` AND
+Update the pinned ref in **all** of: the `hermes-agent` Build's `image_tag` AND
 `build_args`, the stack `environment` in the komodo repo's resources.toml,
 and the compose/mise defaults here (`mise.toml [env]`, `docker/hermes/Dockerfile`
-`ARG`). Then RunBuild → DeployStack. Also re-test the `mcp>=1.2.0,<2` pin in
-the Dockerfile: the installer has no upper bound on `mcp`, and 2.x renamed
-`streamablehttp_client`, which breaks Hermes' HTTP MCP transport. A newer
-Hermes ref may support mcp 2.x — drop the pin only after
-`hermes mcp test honcho` passes against the new image.
+`ARG`). Then RunBuild → DeployStack, and always verify
+`hermes mcp test honcho` + `hermes mcp test firecrawl` against the new
+image — Hermes' MCP SDK pin is where HTTP-transport breakage has landed
+before (mcp 2.x renamed `streamablehttp_client`; refs from v2026.8.31
+onward support 2.x natively, so the old `mcp<2` Dockerfile pin was
+dropped at that bump).
 
 ## Secrets
 
@@ -168,6 +169,16 @@ right-sizing). Do not "fix" the small numbers in the compose files:
   still prints "Skipping MCP toolset alias 'honcho'" — cosmetic: the
   built-in toolset owns the alias, but the MCP tools register as
   `mcp_honcho_*` in the hermes-* umbrella toolsets regardless.
+- **Tool search must stay on** (`[config_extra.tools.tool_search]`
+  `enabled = "on"` in profile.toml): honcho+firecrawl MCP ship 66 tool
+  schemas ≈ 18k tokens, which pinned every turn past the 50% compaction
+  threshold on the 32k window — the gateway warned about imminent
+  compaction on every Discord turn and compacted constantly.
+  tool_search (progressive disclosure, shipped v2026.8.31) defers MCP
+  schemas behind `tool_search`/`tool_describe`/`tool_call` bridges.
+  Core built-in tools never defer. If MCP tool count grows again and
+  pressure returns, the next lever is the `context_length` cap in
+  `config/models.toml`.
 - **hermes-agent image**: the v2026.3.x installer with `--skip-setup` lands
   the code+venv under `/root/.hermes/hermes-agent` with NO launcher — the
   Dockerfile symlinks the venv `hermes` onto PATH, and the venv is uv-managed

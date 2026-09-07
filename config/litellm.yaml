@@ -27,10 +27,6 @@ model_list:
       model: openai/mistral-large-3:675b
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
-  - model_name: mistral-large-3:675b
-    litellm_params:
-      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
-      api_key: os.environ/OPENROUTER_API_KEY
 
   # ── gpt-oss:20b — Hermes fast routing + Honcho's LLM consumers.
   - model_name: gpt-oss:20b
@@ -38,10 +34,6 @@ model_list:
       model: openai/gpt-oss:20b
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
-  - model_name: gpt-oss:20b
-    litellm_params:
-      model: openrouter/minimax/minimax-m3:free
-      api_key: os.environ/OPENROUTER_API_KEY
 
   # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). OpenRouter
   #    ONLY: schema-bound extraction needs response_format json_schema,

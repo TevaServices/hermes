@@ -32,7 +32,7 @@ HERMES_ENV_DIR = "{{config_root}}/secrets"
 # Upstream version pins — the single knob for "keep it up to date".
 # scripts/check-updates.sh reads these; bump, commit, push, and the
 # Komodo webhook-driven rebuild/deploy does the rest.
-HERMES_REF = "v2026.3.23"     # ref on github.com/NousResearch/hermes-agent
+HERMES_REF = "v2026.8.31"     # ref on github.com/NousResearch/hermes-agent
 HONCHO_VERSION = "main"       # ref on github.com/plastic-labs/honcho
 FIRECRAWL_VERSION = "latest"  # tag on the ghcr.io/firecrawl/* images
 

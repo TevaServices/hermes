@@ -27,6 +27,9 @@ mcp_servers:
     env:
       FIRECRAWL_API_URL: http://firecrawl-api:3002
       FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY}
+tools:
+  tool_search:
+    enabled: "on"
 smart_model_routing:
   enabled: true
   cheap_model:
