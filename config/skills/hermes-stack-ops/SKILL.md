@@ -61,6 +61,19 @@ through Firecrawl MCP (`mcp_firecrawl_*`). Most MCP tool schemas are
 deferred behind the `tool_search`/`tool_describe`/`tool_call` bridges — use
 them rather than expecting every tool visible up front.
 
+**Browser tools (`browser_exec`) run on a local headless Chromium
+sidecar**, not on a desktop Chrome (there is none in a container). The
+image supervises one via s6 (`chromium-cdp` service — the Playwright
+headless shell baked into the base image) serving CDP on
+`127.0.0.1:9333`, and the rendered config points `browser.cdp_url` at
+it, so the harness attaches through `BU_CDP_URL` automatically. If
+browser calls fail with "chrome-not-running" or a CDP connection error,
+check the sidecar: `s6-svstat /run/service/chromium-cdp` (or `curl -s
+127.0.0.1:9333/json/version`). The service is toggled by
+`HERMES_CHROMIUM_CDP` in compose; the data dir is
+`/opt/data/chromium-cdp` (safe to wipe while the service is down —
+it's just a profile cache).
+
 **GitHub is a GitHub App** (app 4860240, installed as
 `hermes-main[bot]`): `gh` is already authed and git already routes
 credentials through gh (`gh auth git-credential`) — just use `gh` and

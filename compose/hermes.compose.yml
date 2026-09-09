@@ -60,6 +60,10 @@ services:
       # docker/hermes/entrypoint.sh) because s6 services run as the
       # unprivileged `hermes` user.
       GITHUB_APP_PEM_MOUNT: /run/hermes-pem/github-app-main.pem
+      # Headless Chromium CDP sidecar for the browser tools — see
+      # docker/hermes/s6-rc.d/chromium-cdp/ (binds 127.0.0.1 only; the
+      # rendered browser.cdp_url points the agent at it).
+      HERMES_CHROMIUM_CDP: "1"
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/hermes-main.env
     volumes:

@@ -45,6 +45,17 @@ platforms = ["discord"]
 [config_extra.tools.tool_search]
 enabled = "on"
 [config_extra]
+# Headless Chromium CDP sidecar: the container has no desktop Chrome, so
+# browser-harness (browser_exec) has nothing to attach to — tool calls
+# died with "chrome-not-running". The image runs a supervised headless
+# Chromium (s6 service chromium-cdp, PLAYWRIGHT headless shell baked into
+# the base image) serving CDP on 127.0.0.1:9333; this points Hermes'
+# browser backend at it (BROWSER_CDP_URL/BU_CDP_URL resolution, same
+# precedence the built-in tools honor). Toggled with the service by
+# HERMES_CHROMIUM_CDP in the stack environment (compose/env).
+[config_extra.browser]
+cdp_url = "http://127.0.0.1:9333"
+
 # Least-costly-while-effective routing: short, single-line messages with
 # no code/tools/URLs go to the cheap model (the low-intelligence tier —
 # "nano"); everything else uses the primary. `provider` is the named

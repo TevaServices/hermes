@@ -1,0 +1,50 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Headless Chromium CDP sidecar. Serves the DevTools endpoint on
+# 127.0.0.1:9333 so the browser tools (browser-harness / browser_exec)
+# can attach inside the container — there is no user-facing Chrome on a
+# headless server. The binary is the Playwright Chromium headless shell
+# BAKED into the official hermes-agent image (PLAYWRIGHT_BROWSERS_PATH
+# — no extra download); the symlink below gives it a stable path.
+#
+# Profile-hermes renders browser.cdp_url = http://127.0.0.1:9333, so
+# Hermes' browser backend resolves BU_CDP_URL to this endpoint instead
+# of trying (and failing) to discover a desktop Chrome profile.
+#
+# Gated by HERMES_CHROMIUM_CDP like the dashboard service (./finish
+# handles the disabled case with s6's permanent-failure marker).
+
+case "${HERMES_CHROMIUM_CDP:-}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *)
+        exit 0
+        ;;
+esac
+
+SHELL_BIN="${HERMES_CHROMIUM_BIN:-/usr/local/bin/chromium-headless-shell}"
+CDP_PORT="${HERMES_CHROMIUM_CDP_PORT:-9333}"
+CDP_DATA=/opt/data/chromium-cdp
+
+if [ ! -x "$SHELL_BIN" ]; then
+    echo "[chromium-cdp] $SHELL_BIN missing — is this the hermes-agent image?" >&2
+    exit 0
+fi
+
+mkdir -p "$CDP_DATA"
+# The container runtime user (uid 10000) owns /opt/data; the profile dir
+# must be writable by whoever s6 drops privileges to. We are already that
+# user in practice (entrypoint drops before /init), so no chown needed.
+
+# --no-sandbox: Chrome's setuid sandbox cannot start in this container
+# (no user namespaces as non-root). The process already runs as an
+# unprivileged uid with no access to secrets, and this is a local-only
+# endpoint (binds 127.0.0.1).
+exec "$SHELL_BIN" \
+    --headless \
+    --remote-debugging-address=127.0.0.1 \
+    --remote-debugging-port="$CDP_PORT" \
+    --user-data-dir="$CDP_DATA" \
+    --no-sandbox \
+    --disable-gpu \
+    --disable-dev-shm-usage \
+    about:blank
