@@ -42,3 +42,9 @@ DISCORD_BOT_TOKEN = ""
 GITHUB_APP_ID = ""
 GITHUB_APP_INSTALLATION_ID = ""
 GITHUB_APP_PRIVATE_KEY_PATH = ""
+
+# Headless Chromium CDP sidecar — see config/profiles/default/profile.toml
+# (the s6 service chromium-cdp serves CDP on 127.0.0.1:9333; gated by
+# HERMES_CHROMIUM_CDP in compose).
+[config_extra.browser]
+cdp_url = "http://127.0.0.1:9333"
