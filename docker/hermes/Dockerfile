@@ -63,6 +63,24 @@ RUN SHELL_DIR="$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-
  && test -x "$SHELL_DIR/headless_shell" \
  && ln -sf "$SHELL_DIR/headless_shell" /usr/local/bin/chromium-headless-shell
 
+# Claude Code wrapper tooling (coding-agent delegation on the profile's
+# own model via the LiteLLM gateway). Staged under /opt/claude-hermes
+# (image layer, read-only at runtime) — /opt/data is volume-shadowed so
+# it CANNOT be pre-baked; the provisioner copies these onto the volume at
+# boot and installs the claude-real CLI there too (persistent, so the
+# CLI itself is NOT baked into the image). The claude-update cron keeps
+# it current. See the hermes-stack-ops skill for the full contract.
+COPY docker/hermes/claude /opt/claude-hermes/claude
+COPY docker/hermes/claude-model-resolve.py /opt/claude-hermes/claude-model-resolve.py
+COPY docker/hermes/claude-env.sh /opt/claude-hermes/claude-env.sh
+COPY docker/hermes/claude-shell-functions.sh /opt/claude-hermes/claude-shell-functions.sh
+COPY docker/hermes/claude-provision.sh /opt/claude-hermes/claude-provision.sh
+COPY docker/hermes/claude-update.sh /opt/claude-hermes/claude-update.sh
+RUN chmod 0755 /opt/claude-hermes/claude \
+               /opt/claude-hermes/claude-model-resolve.py \
+               /opt/claude-hermes/claude-provision.sh \
+               /opt/claude-hermes/claude-update.sh
+
 # Declarative config: sources + renderer, compiled at BUILD time (no
 # committed build/ artifacts in git — the renderer IS the verification).
 # python3 is the image's own interpreter; render.py is stdlib-only.

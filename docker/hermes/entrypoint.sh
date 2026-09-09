@@ -60,6 +60,19 @@ fi
 chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME" 2>/dev/null || \
   echo "hermes-stack: warning: chown of $HERMES_HOME failed" >&2
 
+# --- 1c. Claude Code provisioning (coding-agent delegation) ---------------
+# Installs/copies the wrapper tooling + claude-real CLI onto the persistent
+# volume (latest npm release, NOT pinned — claude-update.sh re-checks daily
+# via the gateway cron). Runs pre-drop, so the /usr/local/bin symlink lands
+# while still root. Non-fatal on failure; see hermes-stack-ops skill.
+if [ -x /opt/claude-hermes/claude-provision.sh ]; then
+  /opt/claude-hermes/claude-provision.sh || true
+  # The CLI must stay updatable by the runtime user (daily cron runs as
+  # `hermes`, and it atomically replaces claude-real).
+  [ ! -d "$HERMES_HOME/tools/claude-hermes" ] || \
+    chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME/tools/claude-hermes" 2>/dev/null || true
+fi
+
 # --- 2. Runtime .env: host env file -> persistent volume ------------------
 # s6 services run as the unprivileged `hermes` user; the env file is
 # bind-mounted read-only from /etc/hermes (root:ubuntu 640) and could

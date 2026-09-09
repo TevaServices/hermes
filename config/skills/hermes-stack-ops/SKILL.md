@@ -1,7 +1,7 @@
 ---
 name: hermes-stack-ops
 description: How this agent's own stack works — config source of truth, gateway, verification
-version: 1.0.0
+version: 1.1.0
 metadata:
   hermes:
     tags: [hermes, docker, litellm, self]
@@ -97,6 +97,34 @@ baked helper — do NOT `git clone` into your own space:
   or untracked changes) or DIRTY but idle > N days — dirty-but-recent
   worktrees are always kept. `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`
   override the locations.
+
+**Coding delegation = Claude Code, on THIS profile's model.** The `claude`
+command is a wrapper (baked in `docker/hermes/claude*`, copied to
+`/opt/data/tools/claude-hermes/` at boot) around a volume-installed
+`claude-real` CLI (the `@anthropic-ai/claude-code` bundle, symlinked into
+`/opt/data/bin` and `/usr/local/bin`). Every invocation re-reads the
+profile's rendered `config.yaml` and pins Claude Code to exactly the model
+Hermes is running (`model.default`, e.g. `ollama/glm-5.3-flash`), routed
+through the LiteLLM gateway via `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`
+(`$LITELLM_API_KEY`) — never Anthropic directly, and never a hardcoded
+model id. The cheap-model slot (`ANTHROPIC_SMALL_FAST_MODEL`) follows
+`smart_model_routing.cheap_model`. An explicit `--model` flag always wins;
+without gateway creds it degrades to stock claude.
+
+- **Usage**: prefer print mode for one-shots —
+  `claude -p 'task' --max-turns 10` in the project workdir; use tmux
+  (`tmux new-session -d -s cc …`) for multi-turn/interactive work.
+  In claude's shell, `claude_model` prints the active model.
+- **Updates are NOT pinned**: the entrypoint provisions the registry's
+  `latest` at boot (idempotent), and the no-agent cron job
+  `claude-code-update` (script `scripts/claude-update.sh` → runs
+  `/opt/data/tools/claude-hermes/claude-update.sh`, daily 4:37am) swaps
+  `claude-real` atomically when the registry moves. Silent when up to
+  date. Model/config changes reach the wrapper on the next container
+  start (config re-apply); until then pass `--model <id>` explicitly.
+- **Expected noise**: `unrecognized_model` from Claude Code on any
+  `ollama/*` model id — cosmetic; it is talking to the gateway, not
+  Anthropic. `--max-turns` is print-mode-only (prevents runaways).
 
 ## Pitfalls
 
