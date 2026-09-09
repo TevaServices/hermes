@@ -317,6 +317,22 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
+
+    # Memory: provider plugin + built-in store caps for EVERY profile.
+    # The memory-provider plugin (plugins/memory/honcho, agent_init.py
+    # MemoryManager) is activated by config `memory.provider`; the built-in
+    # markdown store caps are `memory.memory_char_limit` /
+    # `memory.user_char_limit` (memory_tool.py). Per-profile profile.toml
+    # [config_extra.memory] still wins — it merges AFTER this default.
+    mem_extra = profile.get("config_extra", {}).get("memory", {})
+    memory_cfg = {
+        "provider": "honcho",
+        "memory_char_limit": 8192,
+        "user_char_limit": 2048,
+    }
+    memory_cfg.update(mem_extra)
+    config["memory"] = memory_cfg
+
     # Authoritative schema stamp, set after config_extra so a profile
     # cannot (accidentally) claim a version the rendered shape doesn't
     # have — see latest_config_version() for why this exists at all.
@@ -331,18 +347,23 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     )
     (out_dir / "config.yaml").write_text(header + to_yaml(config) + "\n")
 
-    # $HERMES_HOME/honcho.json: the agent's BUILT-IN Honcho integration
-    # auto-enables whenever HONCHO_API_KEY is in the environment (it is,
-    # for the honcho-mcp Authorization header) and then fails against the
-    # hosted Honcho API with "Invalid API key" — its honcho_* tools also
-    # land on the tool surface in a dead state. An explicit enabled:false
-    # keeps the built-in off in every profile: this stack wires Honcho
-    # through MCP (config/integrations.toml) only. The startup banner
-    # still prints "Skipping MCP toolset alias 'honcho'" — cosmetic: the
-    # built-in honcho TOOLSET owns the alias, but the MCP server's tools
-    # (mcp_honcho_*) still register into the hermes-* umbrella toolsets.
+    # $HERMES_HOME/honcho.json — Honcho MEMORY PROVIDER connection config.
+    # The memory-provider plugin (plugins/memory/honcho) reads this file
+    # FIRST in its config chain, before env fallback. baseUrl points at
+    # the stack's self-hosted instance on the shared compose network;
+    # apiKey falls back to env HONCHO_API_KEY (present in every
+    # container's env; only honcho-mcp enforces it — honcho-api
+    # self-hosts unauthenticated). enabled:true is explicit; baseUrl
+    # alone would auto-enable. workspace/aiPeer are deliberately unset —
+    # the plugin defaults them per active profile at runtime.
+    # There is no separate built-in honcho integration in this agent
+    # version (the honcho toolset was removed — Honcho IS the memory
+    # provider plugin), so enabling this does not double-wire anything;
+    # the honcho MCP server (config/integrations.toml) remains the
+    # on-demand tool surface.
     (out_dir / "honcho.json").write_text(
-        json.dumps({"enabled": False}, indent=2) + "\n"
+        json.dumps({"enabled": True, "baseUrl": "http://honcho-api:8000"},
+                   indent=2) + "\n"
     )
 
     soul = profile_dir / "SOUL.md"
