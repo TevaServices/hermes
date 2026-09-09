@@ -52,6 +52,35 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/hermes-bootstrap-profiles.sh \
                /usr/local/bin/git-repo.sh
 
+# Headless Chromium for the browser tools (browser-harness / browser_exec).
+# The base image already bakes the Playwright Chromium headless shell
+# (PLAYWRIGHT_BROWSERS_PATH) but nothing runs it on a headless server, so
+# browser tool calls died with "chrome-not-running". Expose it at a stable
+# path; the supervised chromium-cdp service below serves CDP on
+# 127.0.0.1:9333 (enabled per-deploy via HERMES_CHROMIUM_CDP, like the
+# dashboard service).
+RUN SHELL_DIR="$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux 2>/dev/null | sort -V | tail -1)" \
+ && test -x "$SHELL_DIR/headless_shell" \
+ && ln -sf "$SHELL_DIR/headless_shell" /usr/local/bin/chromium-headless-shell
+
+# Claude Code wrapper tooling (coding-agent delegation on the profile's
+# own model via the LiteLLM gateway). Staged under /opt/claude-hermes
+# (image layer, read-only at runtime) — /opt/data is volume-shadowed so
+# it CANNOT be pre-baked; the provisioner copies these onto the volume at
+# boot and installs the claude-real CLI there too (persistent, so the
+# CLI itself is NOT baked into the image). The claude-update cron keeps
+# it current. See the hermes-stack-ops skill for the full contract.
+COPY docker/hermes/claude /opt/claude-hermes/claude
+COPY docker/hermes/claude-model-resolve.py /opt/claude-hermes/claude-model-resolve.py
+COPY docker/hermes/claude-env.sh /opt/claude-hermes/claude-env.sh
+COPY docker/hermes/claude-shell-functions.sh /opt/claude-hermes/claude-shell-functions.sh
+COPY docker/hermes/claude-provision.sh /opt/claude-hermes/claude-provision.sh
+COPY docker/hermes/claude-update.sh /opt/claude-hermes/claude-update.sh
+RUN chmod 0755 /opt/claude-hermes/claude \
+               /opt/claude-hermes/claude-model-resolve.py \
+               /opt/claude-hermes/claude-provision.sh \
+               /opt/claude-hermes/claude-update.sh
+
 # Declarative config: sources + renderer, compiled at BUILD time (no
 # committed build/ artifacts in git — the renderer IS the verification).
 # python3 is the image's own interpreter; render.py is stdlib-only.
@@ -76,6 +105,14 @@ RUN python3 /tmp/render.py --build-root /overlay \
 
 COPY docker/hermes/entrypoint.sh /usr/local/bin/hermes-stack-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/hermes-stack-entrypoint.sh
+
+# Supervised headless Chromium (CDP sidecar for the browser tools) —
+# mirrors the dashboard service: always declared, gated by
+# HERMES_CHROMIUM_CDP in run/finish so the slot reports down when off.
+COPY docker/hermes/s6-rc.d/chromium-cdp/ /etc/s6-overlay/s6-rc.d/chromium-cdp/
+RUN chmod 0755 /etc/s6-overlay/s6-rc.d/chromium-cdp/run \
+               /etc/s6-overlay/s6-rc.d/chromium-cdp/finish \
+ && touch /etc/s6-overlay/s6-rc.d/user/contents.d/chromium-cdp
 
 ENTRYPOINT ["/usr/local/bin/hermes-stack-entrypoint.sh"]
 # `gateway run` is the legacy-run argv the boot reconciler recognizes: on

@@ -1,0 +1,21 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Chromium CDP finish script. Companion to ./run.
+#
+# When HERMES_CHROMIUM_CDP is unset (or falsy), ./run exits 0
+# immediately. Without this finish script, s6-supervise would restart
+# the run script in a tight loop. By exiting 125 here, we tell
+# s6-supervise "this service has permanently failed; do not restart" —
+# equivalent to `s6-svc -O`, and the supervise slot reports as down.
+#
+# When the sidecar IS enabled and later exits or is killed, exit
+# non-125 so s6-supervise restarts it (the supervised lifecycle).
+
+case "${HERMES_CHROMIUM_CDP:-}" in
+    1|true|TRUE|True|yes|YES|Yes)
+        exit 0
+        ;;
+    *)
+        exit 125
+        ;;
+esac

@@ -1,0 +1,86 @@
+#!/bin/sh
+# claude — Claude Code on the SAME model as this Hermes profile, through
+# the stack's single LLM gateway (LiteLLM).
+#
+# Resolution order, every invocation:
+#   1. /opt/data/config.yaml (rendered, baked at image build — source of
+#      truth) via claude-model-resolve: provider must be the gateway;
+#      primary model id + cheap-model id from smart_model_routing.
+#   2. Any explicit --model the caller passes always wins.
+#   3. No config / missing LITELLM_API_KEY → fall back to stock claude
+#      (which errors on its own if it has no Anthropic auth).
+#
+# Every claude subprocess (agent Bash tool included) inherits
+# ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN, so direct API calls also go
+# through the gateway instead of Anthropic.
+#
+# Layout: /opt/data/tools/claude-hermes holds the real files; /opt/data/bin
+# and /usr/local/bin hold symlinks (PATH + claude's agent-shell lookup,
+# which uses a fixed /usr/local/bin/claude path).
+#
+# NOTE for agents (hermes-stack-ops skill): config/model changes reach this
+# wrapper on the NEXT container start (the wrapper reads the re-applied
+# config); a rebuild+deploy recreates the container anyway. Until then a
+# live session can run the same `claude -p` with --model <id> pinned.
+
+set -u
+
+CLAUDE_HERMES_DIR="/opt/data/tools/claude-hermes"
+CLAUDE_REAL="$CLAUDE_HERMES_DIR/claude-real"
+CONFIG="${CLAUDE_HERMES_CONFIG:-${HERMES_HOME:-/opt/data}/config.yaml}"
+
+# Never inherit stale model config from the surrounding environment.
+unset ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL
+
+err() { printf 'claude wrapper: %s\n' "$1" >&2; }
+
+# Shell source for claude's own Bash tool (via $CLAUDE_ENV_FILE): puts the
+# wrapper dir on PATH for any command claude runs.
+ENV_FILE="$CLAUDE_HERMES_DIR/claude-env.sh"
+[ -f "$ENV_FILE" ] || printf 'export PATH="%s:$PATH"\n' "$CLAUDE_HERMES_DIR" > "$ENV_FILE"
+export CLAUDE_ENV_FILE="$ENV_FILE"
+
+# Shell function for interactive PTY mode (SlashCommand tool).
+SNIPPET_FILE="$CLAUDE_HERMES_DIR/claude-shell-functions.sh"
+if [ -f "$SNIPPET_FILE" ]; then
+    . "$SNIPPET_FILE"
+    export CLAUDE_BASH_DYNAMIC_SHELL_FUNCTIONS="${HERMES_MODEL_SNIPPET:-}"
+fi
+
+if [ ! -x "$CLAUDE_REAL" ]; then
+    err "$CLAUDE_REAL missing — claude-real not installed?"
+    exit 127
+fi
+
+_model=$("$CLAUDE_HERMES_DIR/claude-model-resolve.py" "$CONFIG" 2>/dev/null) || {
+    err "could not resolve model from $CONFIG — falling back to stock claude"
+    exec "$CLAUDE_REAL" "$@"
+}
+provider=${_model%%	*}
+_rest=${_model#*	}
+primary=${_rest%%	*}
+cheap=${_rest##*	}
+
+# Provider must be our LiteLLM gateway to reuse its credentials.
+if [ "$provider" != "litellm" ]; then
+    err "config provider is '$provider' (not litellm) — falling back to stock claude"
+    exec "$CLAUDE_REAL" "$@"
+fi
+
+[ -n "${LITELLM_API_KEY:-}" ] || { err "LITELLM_API_KEY not set"; exit 1; }
+
+export ANTHROPIC_BASE_URL="http://litellm:4000"
+export ANTHROPIC_AUTH_TOKEN="$LITELLM_API_KEY"
+# The routed model's true window is 1M on the gateway; without this Claude
+# Code assumes Anthropic's defaults and compacts far too early.
+export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
+export MAX_MCP_OUTPUT_TOKENS=50000
+# Claude Code's small/background-model slot.
+export ANTHROPIC_SMALL_FAST_MODEL="$cheap"
+
+# Pin the model explicitly unless the caller already chose one.
+if [ "${1:-}" != "mcp" ] && ! printf '%s\n' "$@" | grep -q -- '--model'; then
+    set -- "$@" --model "$primary"
+fi
+
+exec "$CLAUDE_REAL" "$@"

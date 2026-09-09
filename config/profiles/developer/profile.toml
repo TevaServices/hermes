@@ -1,0 +1,52 @@
+# "developer" agent profile — implementation (draft PRs, never merges).
+
+# Renders into the image at /overlay/profiles/developer/ and runs INSIDE
+# the same container as the default profile (official image's s6
+# supervision; the default profile's multiplexed gateway routes Discord
+# per channel via gateway.profile_routes — named gateways are NOT
+# started: do NOT run `hermes -p developer gateway start` while
+# multiplexing).
+
+# Implementation work: large diffs, test runs — "baseline" tier
+# (glm-5.3-flash, 1M window) with "elevated" as failure fallback.
+model = "baseline"
+fallback_model = "elevated"
+integrations = ["honcho", "firecrawl"]
+platforms = ["discord"]
+
+[config_extra]
+# Team-role toolset fence: the DOCUMENTED global-disable key
+# (agent.disabled_toolsets — applies after per-platform tool config and
+# always removes the listed toolsets). The developer keeps the full
+# coding surface (file/terminal/search/web/memory/skills/discord) — its
+# only hard fences are identity + branch protection (no merges, no
+# direct main pushes) and the no-direct-contact rule. It does NOT get
+# browser, media generation, delegation, agent-side cronjob, or
+# computer_use/homeassistant.
+[config_extra.agent]
+disabled_toolsets = [
+    "browser",
+    "cronjob",
+    "delegation",
+    "computer_use",
+    "image_gen",
+    "tts",
+    "video_gen",
+    "video",
+    "homeassistant",
+    "x_search",
+]
+
+# Extra env placeholders rendered into .env.example (secrets arrive via
+# the host env file mapped by entrypoint.sh PROFILE_<NAME>_<VAR>).
+[env]
+DISCORD_BOT_TOKEN = ""
+GITHUB_APP_ID = ""
+GITHUB_APP_INSTALLATION_ID = ""
+GITHUB_APP_PRIVATE_KEY_PATH = ""
+
+# Headless Chromium CDP sidecar — see config/profiles/default/profile.toml
+# (the s6 service chromium-cdp serves CDP on 127.0.0.1:9333; gated by
+# HERMES_CHROMIUM_CDP in compose).
+[config_extra.browser]
+cdp_url = "http://127.0.0.1:9333"

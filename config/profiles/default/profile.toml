@@ -45,6 +45,17 @@ platforms = ["discord"]
 [config_extra.tools.tool_search]
 enabled = "on"
 [config_extra]
+# Headless Chromium CDP sidecar: the container has no desktop Chrome, so
+# browser-harness (browser_exec) has nothing to attach to — tool calls
+# died with "chrome-not-running". The image runs a supervised headless
+# Chromium (s6 service chromium-cdp, PLAYWRIGHT headless shell baked into
+# the base image) serving CDP on 127.0.0.1:9333; this points Hermes'
+# browser backend at it (BROWSER_CDP_URL/BU_CDP_URL resolution, same
+# precedence the built-in tools honor). Toggled with the service by
+# HERMES_CHROMIUM_CDP in the stack environment (compose/env).
+[config_extra.browser]
+cdp_url = "http://127.0.0.1:9333"
+
 # Least-costly-while-effective routing: short, single-line messages with
 # no code/tools/URLs go to the cheap model (the low-intelligence tier —
 # "nano"); everything else uses the primary. `provider` is the named
@@ -56,6 +67,31 @@ enabled = true
 [config_extra.smart_model_routing.cheap_model]
 provider = "litellm"
 model = "ollama/nemotron-3-nano:30b"
+
+# --- Agile SaaS team routing -----------------------------------------------
+# The team profiles (planner / developer / reviewer) live under
+# config/profiles/<name>/ and share this container + the multiplexed
+# Discord connection. Each team bot has its own Discord token (resolved
+# from its own .env via entrypoint.sh PROFILE_<NAME>_* mapping); the
+# routes below send each team channel's traffic to its profile. Channel
+# IDs are filled in after the bots join the server (routes keyed on
+# chat_id are most-specific; thread_id outranks chat_id).
+#
+# To discover IDs: Discord → Advanced settings → Developer Mode, then
+# right-click a channel → "Copy Channel ID". Unmatched traffic keeps
+# the historical default-profile behavior (this main agent).
+#
+# NOTE: a team profile with platforms=["discord"] but NO token of its
+# own (PROFILE_<NAME>_DISCORD_BOT_TOKEN empty) is skipped by the
+# multiplexer with a warning — the team stays dormant until its token
+# lands. That is the intended staged-rollout behavior.
+#
+# To enable routing, UNCOMMENT the block below and fill in the channel
+# IDs (Developer Mode → right-click channel → Copy Channel ID):
+# [config_extra.gateway.profile_routes]
+# planning_channel = { platform = "discord", chat_id = "<#planning id>", profile = "planner" }
+# dev_channel      = { platform = "discord", chat_id = "<#dev id>",      profile = "developer" }
+# reviews_channel  = { platform = "discord", chat_id = "<#reviews id>",  profile = "reviewer" }
 
 # Extra env var placeholders render.py should list in .env.example.
 # [env]

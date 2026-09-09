@@ -1,0 +1,51 @@
+# "planner" agent profile — PM + product design (one profile).
+
+# Renders into the image at /overlay/profiles/planner/ and runs INSIDE the
+# same container as the default profile (official image's s6 supervision;
+# the default profile's multiplexed gateway routes Discord per channel via
+# gateway.profile_routes — named gateways are NOT started: do NOT run
+# `hermes -p planner gateway start` while multiplexing).
+
+# PM/design work: issue writing, backlog grooming, design specs. Runs on
+# the "baseline" tier (glm-5.3-flash, 1M window) with "elevated" as
+# failure fallback.
+model = "baseline"
+fallback_model = "elevated"
+integrations = ["honcho", "firecrawl"]
+platforms = ["discord"]
+
+[config_extra]
+# Team-role toolset fence: the DOCUMENTED global-disable key
+# (agent.disabled_toolsets — applies after per-platform tool config and
+# always removes the listed toolsets). The team roles are deliberately
+# narrow: no browser (web reads ride the web toolset / Firecrawl MCP),
+# no media generation, no subagent delegation (teammates are dispatched
+# via GitHub self-pull queues), no agent-side cronjob (digests run as
+# scheduler jobs in the default profile), no computer_use/homeassistant.
+[config_extra.agent]
+disabled_toolsets = [
+    "browser",
+    "cronjob",
+    "delegation",
+    "computer_use",
+    "image_gen",
+    "tts",
+    "video_gen",
+    "video",
+    "homeassistant",
+    "x_search",
+]
+
+# Extra env placeholders rendered into .env.example (secrets arrive via
+# the host env file mapped by entrypoint.sh PROFILE_<NAME>_<VAR>).
+[env]
+DISCORD_BOT_TOKEN = ""
+GITHUB_APP_ID = ""
+GITHUB_APP_INSTALLATION_ID = ""
+GITHUB_APP_PRIVATE_KEY_PATH = ""
+
+# Headless Chromium CDP sidecar — see config/profiles/default/profile.toml
+# (the s6 service chromium-cdp serves CDP on 127.0.0.1:9333; gated by
+# HERMES_CHROMIUM_CDP in compose).
+[config_extra.browser]
+cdp_url = "http://127.0.0.1:9333"
