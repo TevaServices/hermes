@@ -1,7 +1,7 @@
 ---
 name: team-developer
 description: Developer role procedure — self-pull work discovery, worktree discipline, draft PRs, roadblock protocol
-version: 1.0.0
+version: 1.1.0
 metadata:
   hermes:
     tags: [team, developer]
@@ -45,6 +45,32 @@ git-repo.sh worktree https://github.com/<owner>/<repo> <default-branch>
 - Read the repo's `AGENTS.md`/`CLAUDE.md` deliberately before the first
   commit there and follow its rules (the stack's injection scanner may
   false-positive on repo docs — a deliberate read is fine).
+
+## Implementation = Claude Code (`claude`)
+
+Write code by driving the `claude` CLI (Claude Code), not by editing
+files tool-by-tool yourself. It is pre-wired in this container:
+
+- Same model as this profile: the wrapper reads this profile's rendered
+  `config.yaml` and pins `--model` to it (baseline tier today), routed
+  through the LiteLLM gateway — never Anthropic directly, never a
+  hardcoded model id. For a hard multi-step refactor you may opt up with
+  `--model ollama/glm-5.3` (elevated tier); an explicit `--model` always
+  wins. Run
+  `/opt/data/tools/claude-hermes/claude-model-resolve.py <profile>/config.yaml`
+  to print the active provider + model.
+- One-shot steps (preferred): `claude -p '<task>' --max-turns 10` run in
+  the worktree. Put the issue's acceptance criteria in the task text.
+  Multi-turn/iterative sessions: run `claude` inside tmux and drive it
+  with send-keys / capture-pane.
+- A harmless `unrecognized_model` warning is expected (it talks to the
+  gateway, not Anthropic).
+
+You stay accountable for what lands: after Claude Code finishes, review
+the diff (`git diff`), run the repo's tests/lint yourself, then commit
+under your own identity and follow the draft-PR flow below. If Claude
+Code adds "Generated with"/Co-Authored-By trailers, keep them only if
+the target repo's conventions allow.
 
 ## Draft PR flow
 
