@@ -68,6 +68,31 @@ enabled = true
 provider = "litellm"
 model = "ollama/nemotron-3-nano:30b"
 
+# --- Agile SaaS team routing -----------------------------------------------
+# The team profiles (planner / developer / reviewer) live under
+# config/profiles/<name>/ and share this container + the multiplexed
+# Discord connection. Each team bot has its own Discord token (resolved
+# from its own .env via entrypoint.sh PROFILE_<NAME>_* mapping); the
+# routes below send each team channel's traffic to its profile. Channel
+# IDs are filled in after the bots join the server (routes keyed on
+# chat_id are most-specific; thread_id outranks chat_id).
+#
+# To discover IDs: Discord → Advanced settings → Developer Mode, then
+# right-click a channel → "Copy Channel ID". Unmatched traffic keeps
+# the historical default-profile behavior (this main agent).
+#
+# NOTE: a team profile with platforms=["discord"] but NO token of its
+# own (PROFILE_<NAME>_DISCORD_BOT_TOKEN empty) is skipped by the
+# multiplexer with a warning — the team stays dormant until its token
+# lands. That is the intended staged-rollout behavior.
+#
+# To enable routing, UNCOMMENT the block below and fill in the channel
+# IDs (Developer Mode → right-click channel → Copy Channel ID):
+# [config_extra.gateway.profile_routes]
+# planning_channel = { platform = "discord", chat_id = "<#planning id>", profile = "planner" }
+# dev_channel      = { platform = "discord", chat_id = "<#dev id>",      profile = "developer" }
+# reviews_channel  = { platform = "discord", chat_id = "<#reviews id>",  profile = "reviewer" }
+
 # Extra env var placeholders render.py should list in .env.example.
 # [env]
 # MY_TOOL_TOKEN = ""

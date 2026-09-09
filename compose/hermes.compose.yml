@@ -80,11 +80,13 @@ services:
       # service, and the entrypoint re-applies the overlay. (Do NOT bind
       # -mount /overlay: on a fresh clone there is no local build/ dir,
       # and a stale local copy would shadow the freshly baked one.)
-      # GitHub App private key (root-owned on host, created during setup —
-      # see secrets/hermes-main.env.example). Must exist before deploy.
-      # The entrypoint copies it into $HERMES_HOME/home/ (runtime-owned)
-      # and repoints GITHUB_APP_PRIVATE_KEY_PATH there.
-      - ${HERMES_ENV_DIR:?}/github-app-main.pem:/run/hermes-pem/github-app-main.pem:ro
+      # GitHub App private keys (root-owned on host, created during
+      # setup — see secrets/hermes-main.env.example). The whole secrets
+      # dir is mounted read-only: github-app-main.pem for the main App,
+      # github-app-<profile>.pem for each team-profile App (planner,
+      # developer, reviewer). The entrypoint copies each into the
+      # runtime-owned tool-homes and repoints the env vars there.
+      - ${HERMES_ENV_DIR:?}/:/run/hermes-pem:ro
       # Komodo control-plane API auth header (X-API-KEY). komodo-core joins
       # hermes-net, so the agent manages the control plane itself at
       # http://komodo-core-1:9120 — see config/profiles/main/skills/komodo-ops.

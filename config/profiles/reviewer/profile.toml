@@ -1,0 +1,44 @@
+# "reviewer" agent profile — quality gate (reviews, merges after human gate).
+
+# Renders into the image at /overlay/profiles/reviewer/ and runs INSIDE
+# the same container as the default profile (official image's s6
+# supervision; the default profile's multiplexed gateway routes Discord
+# per channel via gateway.profile_routes — named gateways are NOT
+# started: do NOT run `hermes -p reviewer gateway start` while
+# multiplexing).
+
+# Review demands judgment over context size — run on the "elevated"
+# tier (glm-5.3) with baseline as the (downward) failure fallback.
+model = "elevated"
+fallback_model = "baseline"
+integrations = ["honcho", "firecrawl"]
+platforms = ["discord"]
+
+[config_extra]
+# Team-role toolset fence: the DOCUMENTED global-disable key
+# (agent.disabled_toolsets — applies after per-platform tool config and
+# always removes the listed toolsets). The reviewer reads and runs
+# (file/terminal/search/web/memory/skills/discord) but never writes to
+# git and gets no browser, media generation, delegation, agent-side
+# cronjob, or computer_use/homeassistant.
+[config_extra.agent]
+disabled_toolsets = [
+    "browser",
+    "cronjob",
+    "delegation",
+    "computer_use",
+    "image_gen",
+    "tts",
+    "video_gen",
+    "video",
+    "homeassistant",
+    "x_search",
+]
+
+# Extra env placeholders rendered into .env.example (secrets arrive via
+# the host env file mapped by entrypoint.sh PROFILE_<NAME>_<VAR>).
+[env]
+DISCORD_BOT_TOKEN = ""
+GITHUB_APP_ID = ""
+GITHUB_APP_INSTALLATION_ID = ""
+GITHUB_APP_PRIVATE_KEY_PATH = ""
