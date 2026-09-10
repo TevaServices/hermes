@@ -96,3 +96,100 @@ model = "ollama/nemotron-3-nano:30b"
 # Extra env var placeholders render.py should list in .env.example.
 # [env]
 # MY_TOOL_TOKEN = ""
+
+# --- Tool/skill pruning (2026-09-10) ----------------------------------------
+# Everything below is OFF because it is unusable or unused on this host,
+# verified by probing the live environment (no GPU, no display, no matching
+# credentials/binaries). Re-enable any line by deleting it here and pushing.
+
+# Dead TOOLSETS on this container (agent.disabled_toolsets applies after
+# per-platform tool config and always removes the listed toolsets):
+[config_extra.agent]
+disabled_toolsets = [
+    "computer_use",   # cua-driver absent, no X display, no GPU
+    "image_gen",      # LiteLLM gateway exposes no /v1/images endpoint
+    "video",          # ffmpeg present but never used; video analysis rides vision
+]
+
+# Background review (agent/background_review.py): the end-of-turn fork that
+# re-reasons each turn for memory/skill improvements (~30k tokens/turn).
+# Memory writes stay available via the memory toolset; /refine still works.
+[config_extra.auxiliary.background_review]
+enabled = false
+
+# Dead SKILLS — matching is against frontmatter `name` (agent/skill_utils.py).
+#   MLOps (40): GPU-model training/serving guides — no GPU on this host.
+#   Integration skills (29): require credentials/binaries/services this box
+#   does not have (email, SaaS tokens, Tenor, Obsidian vault, emulators, …).
+[config_extra.skills]
+disabled = [
+    "airtable",
+    "ascii-video",
+    "audiocraft-audio-generation",
+    "axolotl",
+    "blogwatcher",
+    "box",
+    "chroma",
+    "clip",
+    "codex",
+    "computer-use",
+    "distributed-llm-pretraining-torchtitan",
+    "dspy",
+    "email-inbox-triage",
+    "evaluating-llms-harness",
+    "faiss",
+    "fine-tuning-with-trl",
+    "gguf-quantization",
+    "gif-search",
+    "google-workspace",
+    "grpo-rl-training",
+    "guidance",
+    "heartmula",
+    "hermes-atropos-environments",
+    "himalaya",
+    "huggingface-accelerate",
+    "huggingface-hub",
+    "huggingface-tokenizers",
+    "inference-sh-cli",
+    "instructor",
+    "jupyter-live-kernel",
+    "lambda-labs-gpu-cloud",
+    "linear",
+    "llama-cpp",
+    "llava",
+    "manim-video",
+    "mcporter",
+    "minecraft-modpack-server",
+    "modal-serverless-gpu",
+    "nano-pdf",
+    "nemo-curator",
+    "notion",
+    "obliteratus",
+    "obsidian",
+    "opencode",
+    "openhue",
+    "optimizing-attention-flash",
+    "outlines",
+    "parallel-cli",
+    "peft-fine-tuning",
+    "pinecone",
+    "pokemon-player",
+    "pytorch-fsdp",
+    "pytorch-lightning",
+    "qdrant-vector-search",
+    "segment-anything-model",
+    "serving-llms-vllm",
+    "simpo-training",
+    "slime-rl-training",
+    "songsee",
+    "songwriting-and-ai-music",
+    "sparse-autoencoder-training",
+    "stable-diffusion-image-generation",
+    "tensorrt-llm",
+    "unsloth",
+    "weights-and-biases",
+    "whisper",
+    "xitter",
+    "xurl",
+    "youtube-content"
+]

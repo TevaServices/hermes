@@ -264,6 +264,19 @@ def build_mcp_servers(profile: dict, integrations: dict) -> dict:
             if integ.get("mcp_env"):
                 block["env"] = dict(integ["mcp_env"])
             servers[key] = block
+        # Optional per-server tool filtering — same shape the Hermes MCP
+        # loader expects (mcp_servers.<name>.tools.{include,exclude}, the
+        # lists `hermes tools disable <server>:<tool>` maintains). Used to
+        # trim tool schemas an integration cannot actually serve (see
+        # firecrawl below: cloud-only routes 404/500/503 self-hosted).
+        if integ.get("mcp_tools_exclude"):
+            servers[key].setdefault("tools", {})["exclude"] = list(
+                integ["mcp_tools_exclude"]
+            )
+        if integ.get("mcp_tools_include"):
+            servers[key].setdefault("tools", {})["include"] = list(
+                integ["mcp_tools_include"]
+            )
     return servers
 
 

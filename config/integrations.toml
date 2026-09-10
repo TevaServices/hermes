@@ -36,7 +36,42 @@ mcp_env = { FIRECRAWL_API_URL = "http://firecrawl-api:3002", FIRECRAWL_API_KEY =
 # TEST_API_KEY is what the self-hosted Firecrawl API accepts when
 # USE_DB_AUTHENTICATION=false.
 required_env = ["FIRECRAWL_API_KEY"]
-
+# The firecrawl-mcp server exposes ~27 tools, but the SELF-HOSTED API
+# only implements part of the /v2 surface (verified against the running
+# API + upstream controllers, 2026-09-10). Working: scrape, search,
+# crawl (+status), map, extract, parse, batch/scrape. Everything keyed to
+# cloud-only backends fails here — excluded so their schemas don't pin
+# every turn behind tool_search and never get called:
+#   agent, agent_status            → cloud agent-orchestrator (+browser)
+#   interact, interact_stop        → /v2/browser needs BROWSER_SERVICE_URL
+#                                    (503 "feature is not configured")
+#   developer_search               → proxies Firecrawl's hosted search index
+#   research_* (5)                 → /v2/search/research proxy (cloud-only)
+#   monitor_* (8)                  → monitor store needs cloud artifacts
+#                                    (GCS); controller 500s self-hosted
+#   feedback, search_feedback      → quality-telemetry for hosted search
+mcp_tools_exclude = [
+    "firecrawl_agent",
+    "firecrawl_agent_status",
+    "firecrawl_interact",
+    "firecrawl_interact_stop",
+    "firecrawl_developer_search",
+    "firecrawl_research_search_papers",
+    "firecrawl_research_read_paper",
+    "firecrawl_research_related_papers",
+    "firecrawl_research_search_github",
+    "firecrawl_research_inspect_paper",
+    "firecrawl_monitor_create",
+    "firecrawl_monitor_update",
+    "firecrawl_monitor_get",
+    "firecrawl_monitor_delete",
+    "firecrawl_monitor_list",
+    "firecrawl_monitor_run",
+    "firecrawl_monitor_checks",
+    "firecrawl_monitor_check",
+    "firecrawl_feedback",
+    "firecrawl_search_feedback",
+]
 # Add further MCP integrations the same way — either url-based (see
 # honcho) or stdio command-based (see firecrawl) — then list the
 # integration key in a profile's `integrations = [...]`.
