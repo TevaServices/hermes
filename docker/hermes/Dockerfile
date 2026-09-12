@@ -38,7 +38,19 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # Each must be re-anchored at every HERMES_REF bump, and DELETED once
 # upstream adopts the fix (the build says so — see below).
 #
-# Currently one patch, fixing tools/approval.py: `grep` inside a quoted
+# TWO patches currently.
+#
+# 2. cron/scheduler.py — bot-chat delivery dropped HERMES_HOME
+# unconditionally before spawning `hermes -p <name> chat`, which is right
+# when HERMES_HOME points AT a profile (it would shadow -p) but wrong when
+# it is the ROOT that holds profiles/, as in this stack (/opt/data holds
+# profiles/<name>). Dropping it makes the child fall back to the native
+# ~/.hermes, so every delivery failed with "Profile '<name>' does not
+# exist" and no cron job could ever wake a named profile. The patch drops
+# it only when it really is a profile home (<root>/profiles/<name>),
+# which is exactly the case the original comment describes.
+#
+# 1. tools/approval.py: `grep` inside a quoted
 # `$(...)` command substitution makes the
 # grep-operand scanner surface an inner word it then can't tokenize
 # (unbalanced quote) -> hardline-blocks the entire command, even though

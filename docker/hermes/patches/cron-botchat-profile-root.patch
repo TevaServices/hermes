@@ -1,0 +1,22 @@
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -2664,7 +2664,18 @@
+         argv += ["-p", profile]
+         # -p owns profile resolution in the child; a leftover HERMES_HOME
+         # from THIS scheduler's profile must not shadow it.
+-        env.pop("HERMES_HOME", None)
++        #
++        # But only drop it when it points AT a profile
++        # (<root>/profiles/<name>). In Docker/custom deployments where
++        # HERMES_HOME is the ROOT holding profiles/ (this stack:
++        # /opt/data/profiles/<name>), dropping it makes the child fall
++        # back to the native ~/.hermes, where the named profile does not
++        # exist — so EVERY bot-chat delivery dies with
++        # "Profile '<name>' does not exist". Keeping the root lets
++        # `-p <name>` resolve exactly as it does everywhere else.
++        _hh = (env.get("HERMES_HOME") or "").rstrip("/")
++        if os.path.basename(os.path.dirname(_hh)) == "profiles":
++            env.pop("HERMES_HOME", None)
+ 
+     # The prefix tells the receiving bot this is scheduled output, not the
+     # human typing — mirrors the Bot Mode sender-attribution convention.
