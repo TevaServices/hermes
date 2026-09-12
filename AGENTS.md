@@ -277,7 +277,11 @@ checking the host's actual resources:
   `error 1010` (set a real UA string), and bot DMs fail with
   403/code 50278 "no mutual guilds" when the recipient's server-DM
   privacy setting blocks server members — @mention in a server channel
-  pings them instead.
+  pings them instead. **Each team profile runs its own Discord bot**
+  (`PROFILE_<NAME>_DISCORD_BOT_TOKEN`); a profile left on the main token
+  is refused by the gateway ("same credential — refusing to start the
+  duplicate") and stays dormant. See
+  §Provisioning per-profile identities.
 - **GitHub access** is skills-based, not an integration: the agent's
   `github-*` skills drive `gh` CLI + git, and the image installs gh
   (pinned tarball — rebuild required to bump). Auth mode in use:
@@ -289,8 +293,10 @@ checking the host's actual resources:
     `GITHUB_APP_INSTALLATION_ID` are the only GitHub vars in the env file
     (PEM at `/etc/hermes/github-app-<profile>.pem` — the default profile
     uses `github-app-main.pem`; root:ubuntu 640, bind-mounted read-only
-    at `/run/hermes-pem/`, the file must exist before deploy — one app
-    per profile is the plan). The entrypoint copies the PEM into the
+    at `/run/hermes-pem/`, the file must exist before deploy). **Every
+    profile now has its own app** — see
+    §Provisioning per-profile identities for the inventory and for how to
+    add one for a new profile. The entrypoint copies the PEM into the
     runtime-owned tool-home (`$HERMES_HOME/home/`) and exports
     `GITHUB_APP_PRIVATE_KEY_PATH` itself — the env file never names the
     path, because s6 services couldn't read the host mount anyway.
@@ -345,6 +351,85 @@ worktree model provides the isolation (one branch, one checkout).
 Consequence of the network attachment: the hermes stack must be deployed
 before komodo-core can start with it (`hermes_net` is declared external in
 komodo's compose).
+
+## Provisioning per-profile identities (GitHub Apps + Discord bots)
+
+Every profile has its OWN bot identity in both GitHub and Discord — the
+team roles must be distinguishable from one another and from the main
+agent, and must never share or impersonate another's. Both halves need one
+manual step that no API can perform; the two scripts in `scripts/` wrap
+everything around it.
+
+Inventory (all four provisioned and verified live):
+
+| Profile | GitHub App | App ID | Discord bot | Bot ID |
+|---|---|---|---|---|
+| default | `hermes-main` | 4860240 | Hermes Main | 1546241126980391063 |
+| planner | `hermes-planner` | 4921863 | Hermes Planner | 1548360503150248116 |
+| developer | `hermes-dev` | 4921866 | Hermes Developer | 1548361258653319338 |
+| reviewer | `hermes-reviewer` | 4921867 | Hermes Reviewer | 1548361448038866954 |
+
+Installation IDs, git identities, and bot tokens live in
+`/etc/hermes/hermes-main.env` as `PROFILE_<NAME>_*`. App and bot IDs are
+not secret, but **PEMs and bot tokens are**: never echo them, never commit
+them, and route them through the scripts below rather than a shell history
+or a chat transcript.
+
+### GitHub App for a new profile — `scripts/create-github-apps.py`
+
+GitHub has **no API to create an App** and `gh` cannot do it. The App
+Manifest flow is the only automatable path, and it needs the account
+owner's browser: the script serves the manifest from a local HTTP server,
+auto-submits it to `github.com/settings/apps/new`, catches GitHub's
+redirect, and exchanges the temporary code for the App's id + private key
+at `POST /app-manifests/{code}/conversions`. Its `setup_url` catches the
+post-install redirect, so the installation id is captured without anyone
+reading it off a URL.
+
+Two clicks per app — **Create GitHub App**, then **Install** with "All
+repositories". Run it where the browser is:
+
+    python3 scripts/create-github-apps.py [profile ...]   # default: the 3 team profiles
+
+Artifacts land in gitignored `build/github-apps/`: the PEM (mode 600),
+`results.json`, `env-lines.txt`, and `host-install.sh`. Then on the host,
+run `host-install.sh` (installs each PEM as root:ubuntu 640 into
+`/etc/hermes/`) and append `env-lines.txt` to
+`/etc/hermes/hermes-main.env`. Re-running is safe — an existing App name
+fails at GitHub's own name check before anything is created.
+
+### Bot token for a new team profile — `scripts/set-team-discord-tokens.py`
+
+Run **on the host**. It prompts for each team bot token with hidden input
+(`getpass`), so no token reaches a shell history, a process list, or a
+chat transcript, and it validates every token against Discord *before*
+writing. It refuses a token Discord rejects, the main bot's token (which
+re-creates the duplicate-credential refusal), a user token, or one already
+entered for a different role. It then rewrites the
+`PROFILE_<NAME>_DISCORD_BOT_TOKEN` lines in `/etc/hermes/hermes-main.env`
+(idempotent — existing lines are replaced) and prints each bot's invite
+URL, carrying the main bot's permission integer.
+
+Create the applications first at
+https://discord.com/developers/applications. On each one's Bot tab enable
+**Message Content** AND **Server Members** — the adapter requests both and
+discord.py refuses to connect without them (enable Presence too, to match
+the existing bots). A bot token works as soon as the app exists, but the
+bot is not *in* the guild until someone authorizes the invite URL.
+
+### Activating a new profile
+
+1. Create both identities with the scripts above.
+2. Land the credentials in `/etc/hermes/hermes-main.env`
+   (`PROFILE_<NAME>_GITHUB_APP_ID`, `_GITHUB_APP_INSTALLATION_ID`,
+   `_GH_GIT_NAME`, `_GH_GIT_EMAIL`, `_DISCORD_BOT_TOKEN`).
+3. Point the profile's Discord channel at it: add a route under
+   `[config_extra.gateway.profile_routes]` in the default profile's
+   `profile.toml`. Unrouted channels keep the default agent's behavior.
+4. Commit + deploy, then verify in the logs — the entrypoint logs
+   `gh authed via GitHub App (home=…, app id=…)` per profile, and the
+   gateway logs `[Discord] Connected as <bot>` plus
+   `✓ discord connected (profile: <name>)`.
 
 ## Local development (this repo)
 

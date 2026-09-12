@@ -12,6 +12,11 @@ mise.local.toml
 # copies the templates to /etc/hermes on the host.
 secrets/*.env
 
+# GitHub App private keys are per-profile credentials — never committed.
+# scripts/create-github-apps.py writes them to the gitignored build/ tree;
+# this line is the backstop for anyone who drops one here by hand.
+secrets/*.pem
+
 # Python
 __pycache__/
 *.pyc
