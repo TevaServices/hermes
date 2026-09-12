@@ -148,6 +148,12 @@ RUN chmod 0755 /opt/claude-hermes/claude \
 # python3 is the image's own interpreter; render.py is stdlib-only.
 COPY render.py /tmp/render.py
 COPY config/ /tmp/config/
+# render.py resolves ROOT from its own location, which here is /tmp — so
+# the job scripts it validates (config/cron.toml -> CRON_SCRIPT_DIR =
+# ROOT/docker/hermes) must exist at /tmp/docker/hermes too, or every
+# declared cron job looks like it references a missing script and the
+# build fails. Copied only for the render step; removed below.
+COPY docker/hermes/ /tmp/docker/hermes/
 # Render every profile into /overlay, then arrange the runtime layout:
 #   /overlay/default/          — the root ("default") profile overlay.
 #                                The repo's primary profile is named
@@ -163,7 +169,7 @@ RUN python3 /tmp/render.py --build-root /overlay \
       case "$b" in default|profiles) continue ;; esac; \
       mv "$d" "/overlay/profiles/$b"; \
     done \
- && rm -rf /tmp/render.py /tmp/config
+ && rm -rf /tmp/render.py /tmp/config /tmp/docker
 
 COPY docker/hermes/entrypoint.sh /usr/local/bin/hermes-stack-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/hermes-stack-entrypoint.sh

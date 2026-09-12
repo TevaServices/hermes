@@ -50,6 +50,13 @@ SOUL_OPERATING = CONFIG / "SOUL_OPERATING.md"
 # at boot. Validating against it here means a typo'd script name fails the
 # BUILD rather than becoming an "unrunnable" job that the scheduler
 # silently auto-pauses in production.
+#
+# ROOT is the directory holding render.py, which is NOT always the repo
+# root: the Dockerfile renders from /tmp (it COPYs render.py and config/
+# there). The Dockerfile therefore also COPYs docker/hermes/ to
+# /tmp/docker/hermes/ so this check resolves identically inside the build —
+# without that, a job script that exists in the repo looks missing at
+# build time and fails the deploy (which is exactly what happened).
 CRON_SPEC = CONFIG / "cron.toml"
 CRON_SCRIPT_DIR = ROOT / "docker" / "hermes"
 # `profile` is dropped: the rendered file is already per-profile.
@@ -280,7 +287,9 @@ def load_cron_jobs(profile_names: set[str]) -> dict[str, list[dict]]:
         if not script.is_file():
             raise ConfigError(
                 f"cron job '{job['name']}': script '{job['script']}' not found "
-                f"in docker/hermes/ (job scripts are baked to /usr/local/bin)"
+                f"in {CRON_SCRIPT_DIR} — job scripts live in docker/hermes/ "
+                f"(baked to /usr/local/bin). If this is the IMAGE BUILD, the "
+                f"Dockerfile must COPY docker/hermes/ next to render.py."
             )
         key = (profile, job["name"])
         if key in seen:
