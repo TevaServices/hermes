@@ -204,7 +204,23 @@ fi
 
 # --- 3. is anything even onboarded? --------------------------------------
 REPOS=$(gh search repos --owner "$OWNER" --topic "$TOPIC" --limit 100 \
-            --json nameWithOwner --jq '.[] | .nameWithOwner' 2>/dev/null)
+            --json fullName --jq '.[] | .fullName' 2>"$ERR")
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    # Do NOT swallow this. A failed topic query and an empty one look
+    # identical, and the empty branch below reports "NOT ONBOARDED" —
+    # which is how a wrong --json field name ("nameWithOwner" instead of
+    # "fullName") spent its life being reported as a repo that was never
+    # onboarded, while the repo WAS onboarded and the topic WAS set.
+    if incident "TOPIC QUERY BROKEN  could not list '$TOPIC' repos under '$OWNER' (gh exit $rc).
+  stderr: $(head -2 "$ERR" | tr '\n' ' ')
+  Without this the onboarded-repo check is meaningless — do not trust
+  any 'NOT ONBOARDED' conclusion until this succeeds."; then
+        exit 2
+    fi
+    exit 0
+fi
+
 NR=$(count_lines "$REPOS")
 if [ "$NR" -eq 0 ]; then
     if incident "NOT ONBOARDED  no repo under '$OWNER' carries the '$TOPIC' topic.
