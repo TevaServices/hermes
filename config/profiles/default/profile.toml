@@ -86,12 +86,15 @@ model = "ollama/nemotron-3-nano:30b"
 # multiplexer with a warning — the team stays dormant until its token
 # lands. That is the intended staged-rollout behavior.
 #
-# To enable routing, UNCOMMENT the block below and fill in the channel
-# IDs (Developer Mode → right-click channel → Copy Channel ID):
-# [config_extra.gateway.profile_routes]
-# planning_channel = { platform = "discord", chat_id = "<#planning id>", profile = "planner" }
-# dev_channel      = { platform = "discord", chat_id = "<#dev id>",      profile = "developer" }
-# reviews_channel  = { platform = "discord", chat_id = "<#reviews id>",  profile = "reviewer" }
+# To enable routing, fill in the channel IDs (Developer Mode →
+# right-click channel → Copy Channel ID). Only routes for channels that
+# actually exist belong here — a route naming a channel the bot cannot
+# see simply never matches. Channels with no route (#hermes,
+# #hermes-home) keep the default agent's behavior.
+[config_extra.gateway.profile_routes]
+planning_channel = { platform = "discord", chat_id = "1548362748516114482", profile = "planner" }
+dev_channel      = { platform = "discord", chat_id = "1548351307809689710", profile = "developer" }
+reviews_channel  = { platform = "discord", chat_id = "1548362773098922156", profile = "reviewer" }
 
 # Extra env var placeholders render.py should list in .env.example.
 # [env]
