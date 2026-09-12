@@ -26,9 +26,16 @@
 # Usage:
 #   git-repo.sh ensure <git-url>
 #       Idempotent central bare clone; prints the bare repo's path.
+#   git-repo.sh fetch [<git-url>]
+#       Refresh a central clone (or ALL of them) from origin — no args
+#       fetches every <host>/<owner>/<repo>.git under $REPOS. Always
+#       updates remote-tracking refs (origin/*) AND the local mirror of
+#       the default branch (refs/heads/<branch>) so worktrees cut from
+#       the clone's local branches are current. Network failures are
+#       reported but never fatal (a stale clone beats a dead script).
 #   git-repo.sh worktree <git-url> [branch] [dest]
-#       ensure + `git worktree add` for THIS session; prints the worktree
-#       path. Defaults: branch = remote default branch, dest =
+#       ensure + fetch + `git worktree add` for THIS session; prints the
+#       worktree path. Defaults: branch = remote default branch, dest =
 #       $HERMES_WORKTREES_DIR/<session-slug>/<repo>. Pass an explicit dest
 #       for a second checkout within the same session.
 #   git-repo.sh list
@@ -77,11 +84,62 @@ ensure() {
   printf '%s\n' "$dest"
 }
 
-cmd="${1:-}"; shift || true
+# Refresh one bare clone: fetch origin's refs AND fast-forward the local
+# branch mirrors (refs/heads/*). Worktrees are cut from local branches, so
+# a plain `git fetch` (origin/* only) is not enough — e418654-style stale
+# worktrees happened exactly because main was mirrored once at clone time
+# and never moved again.
+#
+# Safe under set -eu: network failure -> message + return 1, and callers
+# decide. `fetch` with no arg loops over every clone and never fails the
+# command (stale clone beats dead script), but still exits nonzero if
+# EVERY clone failed so cron can signal.
+fetch_bare() {
+  bare="$1"
+  if ! git -C "$bare" fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune 2>/tmp/git-repo-fetch.err; then
+    echo "git-repo: fetch failed for $bare:" >&2
+    sed 's/^/  /' /tmp/git-repo-fetch.err >&2
+    rm -f /tmp/git-repo-fetch.err
+    return 1
+  fi
+  rm -f /tmp/git-repo-fetch.err
+  # Fast-forward local branch mirrors to their origin counterparts.
+  git -C "$bare" for-each-ref --format='%(refname:short)' refs/remotes/origin |
+    grep -v '/HEAD$' |
+    while IFS= read -r r; do
+      local_ref="refs/heads/${r#origin/}"
+      if git -C "$bare" show-ref --verify --quiet "$local_ref"; then
+        # Only fast-forward; never move a local branch backwards.
+        if git -C "$bare" merge-base --is-ancestor "$local_ref" "$r" 2>/dev/null; then
+          git -C "$bare" update-ref "$local_ref" "$r"
+        fi
+      fi
+    done
+  printf '%s\n' "$bare"
+}
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   ensure)
     [ "${1:-}" ] || { echo "usage: git-repo.sh ensure <git-url>" >&2; exit 2; }
     ensure "$1"
+    ;;
+  fetch)
+    if [ "${1:-}" ]; then
+      bare="$REPOS/$(repo_id "$1")"
+      [ -d "$bare" ] || { echo "git-repo: no central clone for $1 (run: git-repo.sh ensure $1)" >&2; exit 1; }
+      fetch_bare "$bare"
+    else
+      rc=0; total=0; ok=0
+      for bare in $(find "$REPOS" -mindepth 1 -maxdepth 3 -type d -name '*.git' 2>/dev/null | sort); do
+        total=$((total + 1))
+        if fetch_bare "$bare"; then ok=$((ok + 1)); else rc=1; fi
+      done
+      echo "git-repo fetch: $ok/$total repo(s) refreshed"
+      # All-failed -> nonzero so cron/monitoring can signal; partial ok -> 0.
+      [ "$total" -gt 0 ] && [ "$ok" -eq 0 ] && exit 1
+      exit "$rc"
+    fi
     ;;
   worktree)
     [ "${1:-}" ] || { echo "usage: git-repo.sh worktree <git-url> [branch] [dest]" >&2; exit 2; }
@@ -91,6 +149,11 @@ case "$cmd" in
       branch="$(git -C "$bare" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
       branch="${branch:-main}"
     fi
+    # Refresh the clone BEFORE cutting the worktree: this is the whole
+    # point — a worktree from a stale local branch defeats the shared
+    # clone. Failure is non-fatal (offline session still gets a worktree;
+    # it just sees the last-fetched state).
+    fetch_bare "$bare" || echo "git-repo: proceeding with last-fetched state" >&2
     repo_name="$(basename "${url%.git}")"
     dest="${3:-$WORKTREES/$(session_slug)/$repo_name}"
     if [ -e "$dest" ]; then
