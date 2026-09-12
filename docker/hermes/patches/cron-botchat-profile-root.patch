@@ -1,21 +1,35 @@
 --- a/cron/scheduler.py
 +++ b/cron/scheduler.py
-@@ -2664,7 +2664,18 @@
+@@ -2662,9 +2662,30 @@
+     env = os.environ.copy()
+     if profile:
          argv += ["-p", profile]
-         # -p owns profile resolution in the child; a leftover HERMES_HOME
-         # from THIS scheduler's profile must not shadow it.
+-        # -p owns profile resolution in the child; a leftover HERMES_HOME
+-        # from THIS scheduler's profile must not shadow it.
 -        env.pop("HERMES_HOME", None)
-+        #
-+        # But only drop it when it points AT a profile
-+        # (<root>/profiles/<name>). In Docker/custom deployments where
-+        # HERMES_HOME is the ROOT holding profiles/ (this stack:
-+        # /opt/data/profiles/<name>), dropping it makes the child fall
-+        # back to the native ~/.hermes, where the named profile does not
-+        # exist — so EVERY bot-chat delivery dies with
-+        # "Profile '<name>' does not exist". Keeping the root lets
-+        # `-p <name>` resolve exactly as it does everywhere else.
-+        _hh = (env.get("HERMES_HOME") or "").rstrip("/")
-+        if os.path.basename(os.path.dirname(_hh)) == "profiles":
++        # Point HERMES_HOME at the TARGET PROFILE. Neither of the two
++        # obvious alternatives is correct here:
++        #   * DROPPING it loses the root in Docker/custom layouts (profiles
++        #     live at HERMES_HOME/profiles/<name>), so the child falls back
++        #     to the native ~/.hermes and the profile does not exist at
++        #     all — every delivery dies with "Profile '<name>' does not
++        #     exist".
++        #   * KEEPING the scheduler's value leaves the child's home on the
++        #     ROOT (the default profile), so anything that resolves
++        #     credentials from the home rather than from -p --
++        #     `hermes send`'s get_hermes_home()/.env, and the GitHub App
++        #     env -- acts as the DEFAULT profile. Observed live: the main
++        #     bot posted a developer status line into #dev, and the child
++        #     inherited a sibling profile's GITHUB_APP_ID.
++        # Pinning the profile dir keeps -p and the home consistent, so
++        # every .env lookup is scoped to the profile that is actually
++        # running. `-p` still owns resolution (main.py short-circuits when
++        # HERMES_HOME's parent is "profiles").
++        try:
++            from hermes_cli.profiles import get_profile_dir
++
++            env["HERMES_HOME"] = str(get_profile_dir(profile))
++        except Exception:
 +            env.pop("HERMES_HOME", None)
  
      # The prefix tells the receiving bot this is scheduled output, not the

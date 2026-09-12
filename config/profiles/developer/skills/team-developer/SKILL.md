@@ -84,7 +84,31 @@ idle state, run `team-queue.sh --verbose`.
 
 If you ever find yourself with an empty queue across every repo while
 planner believes it has routed you work, that discrepancy **is** the
-bug — say so on `#dev` instead of waiting for the next cron wake.
+bug — so say so on `#dev` instead of waiting for the next cron wake.
+
+### Resuming interrupted work (the in-flight label)
+
+The queue lists `status/in-progress` items FIRST, then `status/ready`. An
+in-progress item is **your own unfinished work** — a previous turn was
+interrupted (a deploy restarted the container, the turn timed out, the
+session died) and it is still yours. **Resume it before claiming anything
+new.**
+
+Your worktree is per session slug and the slug is stable across your cron
+wakes, so unfinished work is normally still on disk:
+
+```bash
+git-repo.sh worktree https://github.com/<owner>/<repo> <default-branch>
+git status                       # uncommitted work from the interrupted turn
+git branch --show-current        # the branch you already made
+git log --oneline -5
+```
+
+Read that state BEFORE writing anything. Do not start the item over from
+scratch, and do not create a second branch. If the branch has no commits
+and the tree is clean, the turn died before it produced anything — then
+start properly. If you find work you cannot account for, say so in the
+issue thread rather than discarding it.
 
 ## Worktree discipline
 
@@ -128,6 +152,25 @@ the target repo's conventions allow.
 
 ## Draft PR flow
 
+0. **Open the work-item thread** the moment you claim the item, so the
+   status line has somewhere to live and the item has one place to look:
+
+   ```bash
+   team-thread.sh open "owner/repo#N" "#N · <short title>"
+   team-thread.sh post "owner/repo#N" "claimed; plan: …"
+   ```
+
+   One thread per work item, and it stays open until the PR is **merged**
+   — do NOT close it at handoff (`review/ready`), because the item is not
+   done then: review rounds and the human gate are still ahead. Closing is
+   automatic: `Closes #N` closes the issue on merge, and the queue
+   script's sweep archives the thread when it sees the issue closed. `open`
+   is idempotent, so a later turn (a `review/changes` round, a resumed
+   turn) reuses the same thread rather than opening a second one.
+
+   `team-thread.sh post` speaks as your own bot; use it for the status
+   lines the conventions ask for instead of `hermes send`, which can only
+   post into the channel, not the item's thread.
 1. Open the draft PR EARLY (first meaningful commit):
    `gh pr create --draft --fill --base main`.
 2. Commit with your own identity; small, conventional commits.

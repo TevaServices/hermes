@@ -53,10 +53,11 @@ IMAGE_SCRIPT_DIR = Path("/usr/local/bin")
 
 # Scripts that job scripts EXEC rather than being scheduled themselves.
 # Seeded alongside any declared job so a profile's scripts dir is
-# self-contained: review-queue.sh execs team-queue.sh, and while it can
-# also find it on PATH, depending on the runtime PATH for a file we
-# control is a needless failure mode.
-SHARED_SCRIPTS = ("team-queue.sh",)
+# self-contained: review-queue.sh execs team-queue.sh (which in turn runs
+# team-thread.sh for its housekeeping sweep), and while they can also find
+# them on PATH, depending on the runtime PATH for a file we control is a
+# needless failure mode.
+SHARED_SCRIPTS = ("team-queue.sh", "team-thread.sh")
 
 
 def log(msg: str) -> None:

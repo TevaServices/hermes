@@ -56,12 +56,37 @@ like an empty queue.)
 A PR still carrying `review/ready` is **unreviewed** — claim it in the
 same turn you pick it up. Post the verdict to `#reviews` when done.
 
+The queue lists `review/in-progress` FIRST, then `review/ready`: an
+in-progress PR is **your own interrupted review**, and you resume it
+before starting a new one.
+
+### The work-item thread
+
+Open a thread in `#reviews` for the item when you claim it, and post the
+verdict into it — one thread per work item, and the developer may have its
+own in `#dev` for the same item:
+
+```bash
+team-thread.sh open "owner/repo#N" "#N · review"
+team-thread.sh post "owner/repo#N" "gates: … verdict: …"
+```
+
+Keep it open until the PR is **merged**. On merge the issue auto-closes
+(`Closes #N`) and the queue script's sweep archives the thread; when YOU
+merge, that sweep is what closes it, so you do not need to close it by
+hand. Use `team-thread.sh close "owner/repo#N"` only if the item is
+abandoned or duplicated.
+
+`team-thread.sh` speaks as your own bot (it reads the token and the
+channel from this profile's own `$HERMES_HOME`), so threads and posts
+never appear under another role's identity.
+
 ### The verdict and the loop back
 
 - **Pass**: `gh pr review <n> --approve`, then
   `gh pr edit <n> --remove-label review/in-progress --add-label review/approved`,
   then request the user's review (`--add-reviewer <owner>` — a HUMAN, which
-  works) and post the verdict to `#reviews`.
+  works) and post the verdict into the item's thread.
 - **Fail**: `gh pr review <n> --request-changes -b '<issues explained>'`,
   then swap `review/in-progress` → `review/changes`.
 

@@ -40,15 +40,20 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 #
 # TWO patches currently.
 #
-# 2. cron/scheduler.py — bot-chat delivery dropped HERMES_HOME
-# unconditionally before spawning `hermes -p <name> chat`, which is right
-# when HERMES_HOME points AT a profile (it would shadow -p) but wrong when
-# it is the ROOT that holds profiles/, as in this stack (/opt/data holds
-# profiles/<name>). Dropping it makes the child fall back to the native
-# ~/.hermes, so every delivery failed with "Profile '<name>' does not
-# exist" and no cron job could ever wake a named profile. The patch drops
-# it only when it really is a profile home (<root>/profiles/<name>),
-# which is exactly the case the original comment describes.
+# 2. cron/scheduler.py — bot-chat delivery must POINT HERMES_HOME at the
+# target profile before spawning `hermes -p <name> chat`. Upstream drops
+# it. Dropping is right when HERMES_HOME points AT a profile (it would
+# shadow -p) but wrong when it is the ROOT holding profiles/, as here
+# (/opt/data holds profiles/<name>): the child falls back to the native
+# ~/.hermes, so every delivery died with "Profile '<name>' does not
+# exist" and no cron job could wake a named profile at all. Simply KEEPING
+# the root is no better — the child's home then points at the DEFAULT
+# profile, so anything resolving credentials from the home rather than
+# from -p (`hermes send`'s get_hermes_home()/.env, the GitHub App env)
+# acts as the default profile; observed live as the main bot posting a
+# developer status line into #dev, and the child inheriting a sibling
+# profile's GITHUB_APP_ID. The patch sets it to get_profile_dir(profile),
+# so -p and the home agree and every .env lookup is profile-scoped.
 #
 # 1. tools/approval.py: `grep` inside a quoted
 # `$(...)` command substitution makes the
@@ -119,11 +124,13 @@ COPY docker/hermes/review-queue.sh /usr/local/bin/review-queue.sh
 # source of truth for script CONTENT and config/cron.toml for its
 # schedule.
 COPY docker/hermes/cron-reconcile.py /usr/local/bin/cron-reconcile.py
+COPY docker/hermes/team-thread.sh /usr/local/bin/team-thread.sh
 RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/hermes-bootstrap-profiles.sh \
                /usr/local/bin/git-repo.sh \
                /usr/local/bin/team-queue.sh \
                /usr/local/bin/review-queue.sh \
+               /usr/local/bin/team-thread.sh \
                /usr/local/bin/cron-reconcile.py
 
 # Headless Chromium for the browser tools (browser-harness / browser_exec).

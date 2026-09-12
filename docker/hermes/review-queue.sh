@@ -12,11 +12,15 @@
 #   exit 0  work listed (the agent wakes), or healthy-and-empty (silent)
 #   2/3/4/5 an incident — surfaced once, then deduped
 #
+# The queue is `review/in-progress` THEN `review/ready`: a review this
+# profile already claimed comes back to it first, so an interrupted review
+# turn resumes instead of being silently orphaned. See team-queue.sh.
+#
 # Quiet IS the default (the cron contract) because the scheduler invokes a
 # no_agent script with no arguments. Run --verbose when you want to see the
 # healthy-but-idle state.
 #
-# Usage: review-queue.sh [--verbose] [--quiet] [--label LABEL]
+# Usage: review-queue.sh [--verbose] [--quiet] [--label LABEL]...
 
 set -u
 

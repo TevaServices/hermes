@@ -118,6 +118,15 @@ that is where the issue link goes back ("planner comments the issue link
 back into the Discord thread"). These are not "free-response" channels:
 free-response suppresses auto-threading, which would cost you the thread.
 
+Note that auto-threading only fires on an **inbound** message. The team
+agents are woken by their cron self-pull, which injects into the profile's
+Bot Chat — there is no inbound Discord message, so there is no thread to
+inherit. Work items get one explicitly, via `team-thread.sh` (see
+`team-developer` / `team-reviewer`): one thread per work item, opened when
+the item is claimed, kept open until the PR is **merged**, and archived
+automatically when the merge closes the issue. A thread is a work item's
+home, not a per-turn scratchpad — do not close it at handoff.
+
 To open a thread yourself (a second topic in one request), use the
 `discord` tool — it is deferred behind tool search, so it is not in your
 tool list until you look for it:

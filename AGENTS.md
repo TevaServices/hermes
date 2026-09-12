@@ -652,6 +652,35 @@ is already logged in as its own App installation
 (`/opt/data/profiles/<name>/home/.config/gh/hosts.yml`), verified live
 from inside a `no_agent` job.
 
+**The queues are resume-first, and that is load-bearing.** The self-pull
+defaults to `status/in-progress` THEN `status/ready` (and
+`review/in-progress` THEN `review/ready`), because a cron job passes no
+arguments to its script, so the default IS the behaviour. An item a
+profile already claimed is its own unfinished work — an interrupted turn
+(a deploy restart, a timeout) leaves it claimed, hence no longer `ready`,
+hence invisible to a ready-only queue, and the work would sit half-done
+forever. In-flight first means a restart resumes rather than orphans.
+The worktree makes that cheap: the session slug is stable across cron
+wakes, so the interrupted turn's branch and uncommitted changes are still
+on disk under `/opt/data/worktrees/shared/<repo>`.
+
+**Work-item Discord threads (`team-thread.sh`).** One thread per work
+item, in the calling profile's own channel, kept open until the PR is
+**merged**. `bot-chat` wakes use the Bot Chat, and auto-threading only
+fires on inbound Discord messages, so the thread is created explicitly
+rather than inherited. The mapping is persisted under
+`$HERMES_HOME/cache/threads/` because each cron wake is a fresh session
+with no chat context — the agent cannot remember a thread id between
+turns. Lifetime is enforced by `team-thread.sh sweep`, called from the
+queue script (token-free, no agent turn): the merge closes the issue
+(`Closes #N`), and sweep turns "issue closed" into "thread archived". So
+a thread cannot be stranded open just because the agent never woke again.
+The bot token and channel are derived from the profile's own
+`$HERMES_HOME` (`.env` + rendered `config.yaml`), so each role posts as
+its own bot. Threads are owned by the bot that created them, which is why
+each profile sweeps its OWN — a reviewer cannot archive a thread the
+developer opened.
+
 **`deliver` must NAME the profile (`bot-chat:<name>`).** Bare `bot-chat`
 is documented as "the job's own profile", but on this stack it is not:
 the delivery spawns `hermes chat` and, with no profile argument, the child
