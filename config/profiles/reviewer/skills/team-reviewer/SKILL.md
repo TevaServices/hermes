@@ -37,8 +37,11 @@ gh pr edit <n> --repo owner/repo --remove-label review/ready \
   --add-label review/in-progress
 ```
 
-`review-queue.sh` (baked at `/usr/local/bin/review-queue.sh`) wraps the
-query below and prints one line per PR, `owner/repo#N  title  url`:
+`review-queue.sh` is **quiet by default** — that is the cron contract
+(the scheduler invokes it with no arguments), so an empty run prints
+nothing and silence means "nothing to review". Add `--verbose` when you
+are checking by hand and want to see the idle state. It wraps the query
+below and prints one line per PR, `owner/repo#N  title  url`:
 
 ```bash
 gh search prs --owner <owner> --label review/ready --state open \

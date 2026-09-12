@@ -66,14 +66,21 @@ errored on every run and nobody noticed, because a dead queue looks
 exactly like a quiet week.)
 
 So: **every empty result goes through `team-queue.sh`, and you treat
-its exit code as the signal.**
+its output and exit code as the signal.**
 
-- `exit 0` + `QUEUE EMPTY` — genuinely nothing routed. Idle is correct.
-- `exit 0` + issues — claim one and work it.
+The script is **quiet by default** (that is the cron contract — the
+scheduler invokes it with no arguments), so silence is the normal idle
+state, not a fault. When you are checking by hand and want to SEE the
+idle state, run `team-queue.sh --verbose`.
+
+- **no output, `exit 0`** — genuinely nothing routed. Idle is correct.
+- issues listed, `exit 0` — claim one and work it.
 - `exit 2` / `3` / `4` / `5` — **an incident, not an idle state.** The
-  script says which: query failure, blind search (token/scope), nothing
-  onboarded, or a repo missing the routing label. Post the script's own
-  message to `#dev` the same turn. Do not report "no work available".
+  script prints which (it does so once, then stays quiet until the
+  condition changes, so a repeat is expected and is not a new fault):
+  query failure, blind search (token/scope), nothing onboarded, or a repo
+  missing the routing label. Post the script's own message to `#dev` the
+  same turn. Do not report "no work available".
 
 If you ever find yourself with an empty queue across every repo while
 planner believes it has routed you work, that discrepancy **is** the
