@@ -35,6 +35,40 @@ disabled_toolsets = [
     "x_search",
 ]
 
+# Discord: #reviews ONLY, and no @mention needed there.
+#
+# NOTE THE FORM. These keys go in the NESTED `platforms.discord.extra`
+# block — NOT the public top-level `discord:` one. The public form's
+# require_mention is translated by the plugin hook
+# (plugins/platforms/discord/adapter.py _apply_yaml_config) into
+# PROCESS-GLOBAL os.environ["DISCORD_REQUIRE_MENTION"], first-writer-wins.
+# All four profiles share one gateway process under
+# GATEWAY_MULTIPLEX_PROFILES, so that write leaks: the default profile's
+# extra carries no require_mention, adapter.py::_discord_require_mention
+# falls through to os.getenv, and the MAIN bot would answer every message
+# in every channel it can see. The nested form lands in
+# PlatformConfig.extra (config.py PlatformConfig.from_dict), which the
+# adapter reads FIRST and which is per-profile by construction — the same
+# isolation rule as issue #72348.
+#
+# require_mention = false skips the mention gate. Deliberately NOT
+# `free_response_channels`: a free-response channel sets is_free_channel,
+# which upstream ALSO uses to skip auto-threading (adapter.py:
+# `skip_thread = ... or is_free_channel`) — and approval requests and
+# verdicts belong in a thread per PR.
+#
+# allowed_channels is load-bearing, not decoration: require_mention is
+# profile-wide, so without the fence this bot would answer every message
+# in every channel it can see — #hermes and its teammates' channels
+# included. Threads stay reachable because the gate matches a thread's
+# parent channel too. Keep the two keys together. It does NOT widen
+# authorization: DISCORD_ALLOWED_USERS remains the gate (adapter
+# _is_allowed_user falls back to channel-scoped access only when no
+# user/role allowlist exists).
+[config_extra.platforms.discord.extra]
+allowed_channels = ["1548362773098922156"]
+require_mention = false
+
 # Extra env placeholders rendered into .env.example (secrets arrive via
 # the host env file mapped by entrypoint.sh PROFILE_<NAME>_<VAR>).
 [env]

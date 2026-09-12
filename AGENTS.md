@@ -287,6 +287,57 @@ checking the host's actual resources:
   is refused by the gateway ("same credential — refusing to start the
   duplicate") and stays dormant. See
   §Provisioning per-profile identities.
+  **Team channels**: each team profile sets, in the NESTED
+  `[config_extra.platforms.discord.extra]` block,
+  `allowed_channels = ["<its channel id>"]` + `require_mention = false`, so
+  its bot answers every message in its own channel with no @mention — and
+  nowhere else. The default profile sets the same pair for `#hermes` +
+  `#hermes-home` (the unrouted channels: `1510637179267973220`,
+  `1548351069707567144`), so it keeps serving those without an @mention and
+  stays out of the team channels. **The nesting is load-bearing, not
+  style.** The public
+  top-level `discord:` form is translated by the plugin hook
+  (plugins/platforms/discord/adapter.py `_apply_yaml_config`) into
+  process-global `os.environ["DISCORD_REQUIRE_MENTION"]`, first-writer-wins
+  — and all four profiles share one gateway process under
+  `GATEWAY_MULTIPLEX_PROFILES`, so that write leaks to any profile that
+  does not set `require_mention` itself — it falls through to `os.getenv`
+  and inherits a sibling's value, which is exactly how the MAIN bot would
+  end up answering every message in every channel it can see.
+  **The whole mention/threading family behaves this
+  way** — `require_mention`, `thread_require_mention`,
+  `bots_require_inline_mention`, `auto_thread`, `reactions`,
+  `history_backfill`, `history_backfill_limit` are all env-bridged without
+  the `_skip_env_bridge` guard #72348 added for the channel/allow gates:
+  set them under `platforms.discord.extra`, not `discord:`, or they turn
+  process-global. Verified live in the running image: public form →
+  `DISCORD_REQUIRE_MENTION=false` in the process env; nested form →
+  `PlatformConfig.extra` and no env write. The nested key reaches
+  `PlatformConfig.extra` via `PlatformConfig.from_dict`, and
+  `_discord_require_mention` reads `extra` FIRST — the same per-profile
+  isolation rule as issue #72348. Deliberately NOT `free_response_channels`
+  either: a free-response channel sets `is_free_channel`, which upstream
+  also uses to skip auto-threading (`skip_thread = ... or is_free_channel`),
+  which would kill the thread-per-request the team workflow relies on
+  ("planner comments the issue link back into the Discord thread" — live:
+  the planner bot owns threads in #planning). `require_mention = false`
+  skips only the mention gate. `allowed_channels` is load-bearing
+  (require_mention is profile-wide, so without the fence the bot would
+  answer in every channel it can see) and it does NOT widen authorization —
+  `DISCORD_ALLOWED_USERS` stays the gate; `_is_allowed_user` falls back to
+  channel-scoped access only when no user/role allowlist exists.
+  **Threads** work: the adapter auto-threads (`DISCORD_AUTO_THREAD`,
+  default true) and the reply follows into the thread — verified live
+  (three bot-owned threads in #planning, zero creation failures ever
+  logged). An agent-opened thread is the deferred `discord` tool's
+  `create_thread` action (`tool_search` → `tool_call`); agents get no
+  send-message tool, so posting into a thread outside the auto-thread flow
+  is `hermes send --to discord:<channel>:<thread>`. Creating one needs
+  CREATE_PUBLIC_THREADS + SEND_MESSAGES_IN_THREADS *in that channel*: a
+  channel overwrite beats the guild-level grant, so the invite integer
+  carrying those bits (`scripts/set-team-discord-tokens.py`) is necessary
+  but not sufficient. Diagnose with
+  `python3 scripts/discord-thread-doctor.py`.
 - **GitHub access** is skills-based, not an integration: the agent's
   `github-*` skills drive `gh` CLI + git, and the image installs gh
   (pinned tarball — rebuild required to bump). Auth mode in use:
@@ -433,8 +484,8 @@ komodo's compose).
 Every profile has its OWN bot identity in both GitHub and Discord — the
 team roles must be distinguishable from one another and from the main
 agent, and must never share or impersonate another's. Both halves need one
-manual step that no API can perform; the two scripts in `scripts/` wrap
-everything around it.
+manual step that no API can perform; the scripts in `scripts/` wrap
+everything around it (`create-github-apps.py`, `set-team-discord-tokens.py`).
 
 Inventory (all four provisioned and verified live):
 
@@ -528,6 +579,10 @@ docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hermes|honcho|firecrawl|
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3002/v0/health/readiness   # 200
 docker exec hermes-main hermes mcp test honcho      # Connected, ~31 tools
 docker exec hermes-main hermes mcp test firecrawl   # tools discovered
+# Discord threads: every bot thread-capable in every routed channel (add
+# --probe to create + archive a real thread). Named problems say whether
+# the bit is missing at guild level or denied by a channel overwrite.
+python3 scripts/discord-thread-doctor.py            # all ✓, exit 0
 # Gateway: /v1/models should list the explicit entries PLUS the live
 # Ollama Cloud catalogue (as ollama/<id>) — if it instead returns a
 # swarm of openai/… names, check_provider_endpoint isn't taking effect.

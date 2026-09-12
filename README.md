@@ -62,7 +62,10 @@ docker/hermes/          thin image over the official agent image + entrypoint
 compose/                four stacks: hermes, honcho, firecrawl, litellm (shared hermes-net)
 secrets/                *.env.example templates (real files never committed)
 komodo/                 Resource Sync definitions + setup guide
-scripts/                bootstrap-host.sh, check-updates.sh
+scripts/                host setup + credential/diagnostic helpers
+                        (bootstrap-host.sh, create-github-apps.py,
+                        set-team-discord-tokens.py, discord-thread-doctor.py)
+                        + container cron shims (prune-repos.sh, refresh-repos.sh)
 ```
 
 ## The agile SaaS team (planner / developer / reviewer)
@@ -84,7 +87,13 @@ entrypoint into each profile's own `.env`). planner cannot push
 (Read-only code + issue/project writes); developer cannot merge
 (branch protection + no merge rights); reviewer merges only after
 the user's approval. The default profile's `gateway.profile_routes` sends
-each team channel to its profile.
+each team channel to its profile, and each role's channel is its **own**
+(per-profile `platforms.discord.extra`: `allowed_channels` +
+`require_mention = false`): the bot answers there without being @mentioned
+and ignores the others. `#hermes` and `#hermes-home` stay with the default
+agent, fenced to those two and likewise mention-free. A
+request in a team channel gets its own auto-created thread, so the issue
+link comes back in that thread — see the `team-conventions` skill.
 
 ## How configuration works (the abstraction)
 

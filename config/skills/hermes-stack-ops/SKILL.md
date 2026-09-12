@@ -136,6 +136,19 @@ without gateway creds it degrades to stock claude.
   bare urllib gets Cloudflare `error 1010`. Bot DMs fail (403 code 50278)
   when the recipient blocks server-member DMs — @mention in a server
   channel instead.
+- Discord threads: the adapter auto-threads an @mention by default
+  (`DISCORD_AUTO_THREAD`), and the reply follows into the thread. A
+  *free-response* channel skips that (`skip_thread = ... or
+  is_free_channel`) — which is why the team channels use
+  `allowed_channels` + `require_mention = false` instead. Agents get no
+  send-message tool, so a thread opened deliberately takes the deferred
+  `discord` tool (`tool_search` → `tool_call`, action `create_thread`)
+  and `hermes send --to discord:<channel>:<thread>` to post into it.
+  Creation needs CREATE_PUBLIC_THREADS + SEND_MESSAGES_IN_THREADS *in
+  that channel*: a channel overwrite beats the guild-level grant, so
+  holding the bits at guild level is not enough. MANAGE_THREADS is only
+  for managing other people's threads. Diagnose from the host with
+  `python3 scripts/discord-thread-doctor.py`.
 - Commit attribution defaults to `hermes-agent <hermes-agent@localhost>`;
   the human's identity is not configured — don't impersonate it.
 - Scheduled tasks (cron) are available: the scheduler is embedded in this

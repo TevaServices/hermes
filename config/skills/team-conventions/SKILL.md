@@ -73,6 +73,47 @@ entrypoint from the profile env).
 - The repo registry (see `team-onboarding`) is the source of truth for
   which repos are under the team's workflow and their settings.
 
+## Discord channels and threads
+
+Each role's channel is **yours alone**: `allowed_channels` +
+`require_mention = false` (in `config/profiles/<role>/profile.toml`,
+under the nested `[config_extra.platforms.discord.extra]` block) means
+your bot answers every message there with no @mention, and ignores every
+other channel — including your teammates'. An @mention elsewhere will not
+reach you; cross-role traffic goes through GitHub, per the workflow above.
+
+A request in your channel **gets its own auto-created thread** (named from
+the message), and your reply lands in it — so do the work in that thread:
+that is where the issue link goes back ("planner comments the issue link
+back into the Discord thread"). These are not "free-response" channels:
+free-response suppresses auto-threading, which would cost you the thread.
+
+To open a thread yourself (a second topic in one request), use the
+`discord` tool — it is deferred behind tool search, so it is not in your
+tool list until you look for it:
+
+1. `tool_search` — e.g. `"create discord thread"` returns `discord`.
+2. `tool_call` — `{name: "discord", arguments: {action: "create_thread",
+   channel_id: "<channel id>", name: "<thread name>"}}`; add `message_id`
+   to anchor it to an existing post. It returns the `thread_id`.
+
+Agents get **no send-message tool** (outbound platform messaging is not
+model-driven upstream), and your turn's reply lands in the channel, not in
+a thread you opened mid-turn — so post *inside* it with the CLI from
+`terminal`:
+
+    hermes send --to discord:<channel_id>:<thread_id> "<your post>"
+
+It resolves credentials from the active profile's `$HERMES_HOME/.env`, so
+it should speak as your own bot — confirm the first post shows your role's
+bot before relying on it.
+
+If creation fails, Discord's reason is relayed verbatim — usually
+`Bot lacks CREATE_PUBLIC_THREADS in this channel, or cannot view it.` That
+is a server-side permission, not something to retry: say so in the channel
+instead of working around it (host-side check:
+`python3 scripts/discord-thread-doctor.py`).
+
 ## Multi-installation tokens
 
 The team's GitHub Apps are installed per account/org. Token env vars
