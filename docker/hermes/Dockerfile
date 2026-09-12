@@ -11,6 +11,10 @@
 #
 # What we add on top (kept minimal — each COPY/RUN is a separate final
 # layer so config-only pushes invalidate only the last one):
+#   0. A source patch to upstream tools/approval.py — see
+#      docker/hermes/patches/ and AGENTS.md §"Security tuning (guard
+#      friction)". Placed FIRST so a config-only push still cache-hits
+#      it, and so a rebase of the patch invalidates everything after.
 #   1. gh CLI (pinned tarball) + the GitHub App token helper + git
 #      credential helper — the agent manages its own infra over git/gh.
 #   2. The declarative config sources (config/, render.py) rendered at
@@ -28,6 +32,53 @@
 #
 ARG HERMES_REF=v2026.8.31
 FROM nousresearch/hermes-agent:${HERMES_REF}
+
+# ── Source patches over upstream ──────────────────────────────────────
+# docker/hermes/patches/*.patch are applied to /opt/hermes at build time.
+# Each must be re-anchored at every HERMES_REF bump, and DELETED once
+# upstream adopts the fix (the build says so — see below).
+#
+# Currently one patch, fixing tools/approval.py: `grep` inside a quoted
+# `$(...)` command substitution makes the
+# grep-operand scanner surface an inner word it then can't tokenize
+# (unbalanced quote) -> hardline-blocks the entire command, even though
+# the block is unconditional (not bypassable by --yolo, /yolo,
+# approvals.mode, or command_allowlist) and reports ~150-byte commands
+# as "command parser limit or malformed executable payload". That shape
+# is exactly the scripting this stack asks its agents for, so it was
+# blocking the behaviour we want. The patch skips an unparseable operand
+# instead of failing the command; it is fail-closed, because skipping
+# only declines to MASK text as data (and the hardline path discards the
+# masked variant anyway, using only the malformed flag).
+#
+# `git apply` rather than `patch` (the base image has no patch binary);
+# it works outside a git repo, which matters because .dockerignore drops
+# .git. Three outcomes, deliberately:
+#   * applies        -> normal path.
+#   * already applied-> upstream adopted the fix: NOTICE + continue, so
+#                       the image still builds and the operator removes
+#                       the patch file.
+#   * neither        -> upstream refactored the code: FAIL the build
+#                       loudly rather than ship an unpatched image.
+COPY docker/hermes/patches/ /tmp/hermes-patches/
+RUN set -e; cd /opt/hermes; \
+    for p in /tmp/hermes-patches/*.patch; do \
+      [ -e "$p" ] || continue; \
+      base="$(basename "$p")"; \
+      if git apply --check -p1 "$p" 2>/dev/null; then \
+        git apply -p1 "$p"; \
+        echo "applied $base"; \
+      elif git apply --check -R -p1 "$p" 2>/dev/null; then \
+        echo "NOTICE: $base is ALREADY APPLIED upstream — upstream has"; \
+        echo "        adopted this fix; delete docker/hermes/patches/$base"; \
+      else \
+        echo "ERROR: $base neither applies nor is applied — upstream"; \
+        echo "       moved the code. Re-anchor the patch, or delete it"; \
+        echo "       if upstream fixed the issue."; \
+        exit 1; \
+      fi; \
+    done; \
+    rm -rf /tmp/hermes-patches
 
 # gh CLI (pinned tarball for the build host's architecture — this image
 # is only ever built on the homelab host): the agent's github-* skills

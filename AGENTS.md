@@ -85,7 +85,12 @@ defaults through compose, so only mise.toml needs the edit), plus
 renders — the build-time stamp is derived from the base image). The ref is now
 the FROM tag of the official base image — the official image publishes
 per-release, so a ref bump both upgrades the agent code and refreshes the
-supervision tree. Then RunBuild → DeployStack, and always verify
+supervision tree. **Also re-check the source patches** in
+`docker/hermes/patches/` — they are anchored to upstream line numbers, so a
+ref bump is exactly when they break. You will not have to guess: an
+already-fixed patch reverse-applies and the build prints a NOTICE telling
+you to delete it, while a moved anchor FAILS the build
+(§Security tuning (guard friction)). Then RunBuild → DeployStack, and always verify
 `hermes mcp test honcho` + `hermes mcp test firecrawl` against the new
 image — Hermes' MCP SDK pin is where HTTP-transport breakage has landed
 before (mcp 2.x renamed `streamablehttp_client`; refs from v2026.8.31
@@ -308,6 +313,77 @@ checking the host's actual resources:
   - **PAT fallback**: `GH_TOKEN` authenticates gh natively; git routes
     through `gh auth git-credential`. Prefer a fine-grained PAT scoped
     to the specific repos (Contents/Issues/Pull requests read+write).
+
+### Security tuning (guard friction)
+
+This stack's agents live in `terminal`, and two guard behaviours were
+blocking the script-shaped work we *want* them to do, so both were loosened
+deliberately (2026-09-12). Baseline measured from the live `state.db`: 1066
+of 1164 terminal commands were newline-free one-liners, 22 came back
+blocked, 91 carried an approval note.
+
+1. **`tools/approval.py` source patch** — `docker/hermes/patches/`, applied
+   in the Dockerfile with `git apply` (the base image has no `patch`
+   binary; `git apply` works outside a repo, which matters because
+   `.dockerignore` drops `.git`).
+   Upstream hardline-blocks any command whose grep-operand scanner surfaces
+   a word it cannot tokenize — which is what happens whenever `grep`
+   appears inside a quoted `$(...)`, i.e. the very common
+   `sed -n "$(grep -n 'x' f | cut -d: -f1),+45p" f`. The block is
+   unconditional (no `--yolo`, approval mode, or `command_allowlist`
+   reaches it) and reported ~150-byte commands as *"command parser limit or
+   malformed executable payload"*. It was the single largest source of
+   blocked calls — 9 of them saved under `/opt/data/cache/blocked-scripts/`,
+   every one a false positive. The patch skips an unparseable operand
+   instead of failing the whole command, and is fail-closed: skipping only
+   declines to *mask* text as data, and the hardline path discards the
+   masked variant anyway (it uses only the malformed flag).
+   **Deleting it later is signalled by the build**: if upstream adopts the
+   fix the patch reverse-applies and the build prints a NOTICE instead of
+   failing; if upstream only moves the code the build FAILS, so an
+   unpatched image is never shipped silently.
+2. **Tirith pre-approvals, config only — Tirith itself stays ON.**
+   `render.py` seeds `command_allowlist` with `tirith:<rule_id>` keys for
+   every profile. `approval.py` loads that list at *module import*
+   (`tools/approval.py:5971`), and a Tirith finding's approval key is
+   `tirith:<rule_id>`, so listing a key permanently auto-approves that one
+   rule. The six seeded rules are the ones that actually fired on this
+   stack's own legitimate work: `analysis_incomplete` (the `$(...)` /
+   dynamic-command shape), `plain_http_to_sink` (our internal HTTP
+   services), `mass_file_deletion` (worktree/build churn),
+   `curl_pipe_shell`, `pipe_to_interpreter`, `blast_find_delete`.
+   `tirith:mass_file_deletion` is the most aggressive inclusion and the
+   first to drop if the ransomware-shaped burst check is wanted back — the
+   unconditional hardline floor still blocks `rm -rf /` either way.
+   Extend by hand from `tirith audit stats --format json` → `top_rules`.
+   Note `approvals.mode` is the default `smart`, so heredoc / `-e -c`
+   patterns already auto-approve; only Tirith's HIGH/CRITICAL findings were
+   demanding a human.
+
+### Steering profiles toward scripts
+
+`config/SOUL_OPERATING.md` is appended to **every** rendered profile's
+`SOUL.md` by `render.py` — one source, all four profiles. SOUL.md rides the
+system prompt on every turn, unlike a skill (lazily loaded), so always-on
+behaviour belongs there; the per-profile SOUL.md stays the role document.
+
+The block tells each profile: 3+ shell/file operations for one goal → **one
+call**; a chain with logic between the calls (filter, branch, loop, retry,
+reduce output before it reaches context) → **`execute_code`**; a shell chore
+(git, builds, `gh`, docker, tests) → **write a script with `write_file`
+and run it by path** — which is also the friction-free path past both guards
+above; and never inline a big payload (heredocs, giant one-liners, nested
+`$(...)` are what the scanners mis-parse).
+
+Why it was needed: the terminal tool's own description steers work *away*
+from shell — *"Do NOT use cat/head/tail (use read_file), grep/rg/find/ls
+(use search_files), sed/awk (use patch)"* — which turns one shell pipeline
+into three or four separate tool calls, one turn each. `execute_code` is the
+tool built to collapse exactly that (*"collapsing multi-step tool chains
+into a single inference turn"*) and was sitting at 118 of 2264 calls.
+Target baseline to beat: **1.12 calls/turn, 81% of turns a single call,
+50.5% exactly one `terminal` call, runs up to 29 consecutive single-command
+turns.**
 
 ## Agent self-management (skills + control-plane access)
 

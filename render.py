@@ -33,6 +33,34 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config"
 BUILD = ROOT / "build"
 
+# Stack-wide operating-discipline block, appended to EVERY rendered
+# profile's SOUL.md. SOUL.md rides the system prompt on every turn, unlike
+# a skill (lazily loaded), so this is the right home for behaviour that
+# must hold on every single turn. One source, all profiles.
+SOUL_OPERATING = CONFIG / "SOUL_OPERATING.md"
+
+# Tirith rules pre-approved for every profile. A Tirith finding raises an
+# approval gate keyed `tirith:<rule_id>`; tools/approval.py loads
+# `command_allowlist` from config at MODULE IMPORT (approval.py:5971) and
+# is_approved() consults it, so listing a key here permanently
+# auto-approves that rule. These six are the ones that actually fired on
+# this stack's own legitimate work, mined from the live state.db
+# (Sep 2026). Tirith itself stays ON — only these rules are pre-approved.
+# Extend by hand from `tirith audit stats --format json` -> top_rules.
+# See AGENTS.md §"Security tuning (guard friction)".
+TIRITH_PREAPPROVED_RULES = [
+    # "Nested executable body could not be resolved" — the $(...) /
+    # dynamic-command shape, i.e. exactly the scripting we ask for.
+    "tirith:analysis_incomplete",
+    # Our own internal plain-HTTP services (komodo-core:9120, litellm:4000).
+    "tirith:plain_http_to_sink",
+    # Worktree/build churn. The hardline floor still blocks `rm -rf /`.
+    "tirith:mass_file_deletion",
+    "tirith:curl_pipe_shell",
+    "tirith:pipe_to_interpreter",
+    "tirith:blast_find_delete",
+]
+
 
 def set_build_root(path: str | None) -> None:
     """Override the output root (default <repo>/build).
@@ -196,6 +224,11 @@ def validate(models: dict, providers: dict, integrations: dict) -> None:
     for key in integrations:
         if not key.strip():
             raise ConfigError("integration names must be non-empty")
+    # `--check` returns before render_profile runs, so the operating block
+    # would otherwise go unverified on the fast validation path. Every
+    # profile depends on it; a missing file must fail loudly here.
+    if not SOUL_OPERATING.is_file():
+        raise ConfigError(f"missing operating-discipline block: {SOUL_OPERATING}")
 
 
 def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[dict, dict]:
@@ -352,6 +385,15 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     memory_cfg.update(mem_extra)
     config["memory"] = memory_cfg
 
+    # Tirith pre-approvals (see TIRITH_PREAPPROVED_RULES). UNION with
+    # anything the profile set via [config_extra.command_allowlist], so a
+    # profile can add entries but never accidentally drops the stack-wide
+    # ones. Loaded by tools/approval.py at import; see AGENTS.md
+    # §"Security tuning (guard friction)".
+    allowlist = set(config.get("command_allowlist") or [])
+    allowlist.update(TIRITH_PREAPPROVED_RULES)
+    config["command_allowlist"] = sorted(allowlist)
+
     # Authoritative schema stamp, set after config_extra so a profile
     # cannot (accidentally) claim a version the rendered shape doesn't
     # have — see latest_config_version() for why this exists at all.
@@ -388,6 +430,11 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     soul = profile_dir / "SOUL.md"
     if soul.is_file():
         shutil.copy2(soul, out_dir / "SOUL.md")
+    # Append the stack-wide operating discipline to EVERY profile — the
+    # per-role SOUL.md stays the role document, the shared rules live in
+    # one file. A profile with no SOUL.md of its own still gets the block.
+    with open(out_dir / "SOUL.md", "a", encoding="utf-8") as fh:
+        fh.write("\n" + SOUL_OPERATING.read_text(encoding="utf-8"))
 
     # Stack-wide skills (config/skills/) merge into EVERY rendered profile
     # — operating-manual skills every agent in this stack should carry.

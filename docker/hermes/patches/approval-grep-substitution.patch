@@ -1,0 +1,24 @@
+--- a/tools/approval.py
++++ b/tools/approval.py
+@@ -1683,9 +1683,20 @@
+                 "grep", "egrep",
+             }:
+                 continue
+             tokens = _shell_tokens_with_spans(segment, start)
+             if tokens is None:
+-                return [], True
++                # Unparseable grep operand -- typically a $(...) command
++                # substitution nested in a quoted operand: the word-span
++                # scanner surfaces the inner `grep`, but tokenizing from
++                # there hits an unbalanced quote. Skip this operand instead
++                # of failing the whole command. Skipping only declines to
++                # MASK text as data, so it can surface more to the scanners
++                # below, never less -- and the hardline path discards the
++                # masked variant entirely (it uses only this malformed
++                # flag), making a parse hiccup here a pure false-positive
++                # block, including on sub-500-byte commands it reported as
++                # "oversized". See AGENTS.md.
++                continue
+             args = tokens[1:]
+             pcre = False
+             explicit_patterns = False
