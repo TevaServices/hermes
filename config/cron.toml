@@ -15,12 +15,13 @@
 # is actually something to do. An agent-prompted job would burn a full
 # inference turn every tick just to discover there is nothing to do.
 #
-# `deliver = "bot-chat"` (bare) injects the output into the job's OWN
-# profile's Bot Chat as a message the agent responds to — that is the
-# wake-up path. Delivering to the profile's Discord channel would NOT
-# work: the Discord adapter drops the bot's own messages
-# (adapter.py: `if message.author == self._client.user`), so the agent
-# would never see it.
+# `deliver = "bot-chat:<profile>"` injects the output into that profile's
+# Bot Chat as a message the agent responds to — that is the wake-up path
+# (name the profile explicitly; see "deliver must NAME the profile"
+# below for why bare `bot-chat` is wrong on this stack). Delivering to the
+# profile's Discord channel would NOT work: the Discord adapter drops the
+# bot's own messages (adapter.py: `if message.author == self._client.user`),
+# so the agent would never see it.
 #
 # ## The scripts and their contract
 #
@@ -45,8 +46,26 @@
 #   schedule  cron expression or interval ("30m", "every 2h")
 #   script    file seeded into <profile>/scripts/
 #   no_agent  true = script stdout delivered verbatim (see above)
-#   deliver   "bot-chat" (own profile) | "local" (save, no delivery)
+#   deliver   "bot-chat:<profile>" (ALWAYS name it — see below) |
+#             "local" (save, no delivery)
 #   prompt    optional; only meaningful for agent jobs (no_agent = false)
+#
+# ## deliver must NAME the profile
+#
+# Bare `bot-chat` means "the job's own profile", but that resolution is
+# NOT what happens on this stack. The delivery runs the target profile's
+# agent via `hermes chat`, and with no profile argument the subprocess
+# inherits the firing scheduler's HERMES_HOME — and under
+# GATEWAY_MULTIPLEX_PROFILES every profile's ticker shares the gateway
+# process, whose HERMES_HOME is the DEFAULT profile. Observed live: the
+# developer's queue was delivered to the main profile and
+# `hermes-main[bot]` claimed a developer issue, breaking the
+# identity model ("never impersonate another role").
+#
+# `bot-chat:<name>` instead passes `-p <name>` and DROPS HERMES_HOME from
+# the child env (scheduler.py: `env.pop("HERMES_HOME", None)`), so the
+# turn really runs as the named profile. The name is validated at create
+# time against the local profile tree.
 #
 # Managed names are prefixed "team: " — that prefix is what `--prune`
 # treats as stack-owned, so a job the AGENT created for itself is never
@@ -62,7 +81,7 @@ name = "team: dev self-pull"
 schedule = "*/5 * * * *"
 script = "team-queue.sh"
 no_agent = true
-deliver = "bot-chat"
+deliver = "bot-chat:developer"
 
 # Reviewer self-pull: poll the `review/ready` PR label every 5 minutes.
 # The review request itself cannot be used as the handoff — bot
@@ -73,4 +92,4 @@ name = "team: review self-pull"
 schedule = "*/5 * * * *"
 script = "review-queue.sh"
 no_agent = true
-deliver = "bot-chat"
+deliver = "bot-chat:reviewer"

@@ -12,7 +12,11 @@
 #   exit 0  work listed (the agent wakes), or healthy-and-empty (silent)
 #   2/3/4/5 an incident — surfaced once, then deduped
 #
-# Usage: review-queue.sh [--cron] [--quiet] [--label LABEL]
+# Quiet IS the default (the cron contract) because the scheduler invokes a
+# no_agent script with no arguments. Run --verbose when you want to see the
+# healthy-but-idle state.
+#
+# Usage: review-queue.sh [--verbose] [--quiet] [--label LABEL]
 
 set -u
 

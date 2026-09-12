@@ -652,6 +652,28 @@ is already logged in as its own App installation
 (`/opt/data/profiles/<name>/home/.config/gh/hosts.yml`), verified live
 from inside a `no_agent` job.
 
+**`deliver` must NAME the profile (`bot-chat:<name>`).** Bare `bot-chat`
+is documented as "the job's own profile", but on this stack it is not:
+the delivery spawns `hermes chat` and, with no profile argument, the child
+inherits the firing scheduler's `HERMES_HOME` — and under
+`GATEWAY_MULTIPLEX_PROFILES` every profile's ticker shares the gateway
+process, whose `HERMES_HOME` is the DEFAULT profile. Observed live:
+the developer's queue was delivered to the main profile and
+`hermes-main[bot]` claimed a developer issue, violating the
+identity model. `bot-chat:<name>` instead passes `-p <name>` **and drops
+`HERMES_HOME` from the child env** (`scheduler.py:
+env.pop("HERMES_HOME", None)`), so the turn really runs as the named
+profile.
+
+**The bot-chat delivery timeout is raised to 3600s stack-wide**
+(`render.py` → `cron.bot_chat_delivery_timeout_seconds`). A bot-chat
+delivery runs a full agent turn synchronously inside the job's execution,
+and the upstream default of 600s does not merely warn — on expiry the
+child is KILLED. Live: the developer agent claimed its issue at 16:19 and
+was killed at 16:21 having done nothing further. Holding the execution
+open also serialises the 5-minute poll against a running turn, so the
+next tick cannot stack a second wake on work already in flight.
+
 ## Local development (this repo)
 
 Local runs use **mise** (not Makefile): `mise run up`, `mise run logs`,

@@ -42,20 +42,32 @@
 #
 # Usage:
 #   team-queue.sh [--kind issues|prs] [--label LABEL] [--owner OWNER]
-#                 [--author LOGIN] [--cron] [--quiet]
+#                 [--author LOGIN] [--verbose] [--quiet]
 #
-#   --cron   The no_agent cron contract (see config/cron.toml). Stdout is
-#            DELIVERED verbatim and an EMPTY stdout is silent, so:
-#              * work found      -> print it (the agent wakes and works)
-#              * healthy + empty -> print NOTHING (zero tokens, no noise)
-#              * incident        -> print it ONCE, then stay silent until
-#                                   the condition changes (state file), so
-#                                   a persistent fault wakes the team once
-#                                   instead of every tick.
-#            In --cron mode the exit code tracks "did I emit anything
-#            new", not "is the world healthy" — a deduped incident is
-#            silent AND exits 0 so it cannot generate a failure ping on
-#            every single tick. The emitted message is the durable record.
+#   THE DEFAULT IS THE CRON CONTRACT, because that is how this runs in
+#   production and the scheduler gives no way to say so: a no_agent job
+#   is invoked as `bash <script>` with NO ARGUMENTS (scheduler.py:
+#   `argv = [_bash, str(path)]`). An opt-in `--cron` flag therefore never
+#   fires under cron — the delivered output was the healthy-but-idle
+#   "QUEUE EMPTY" line, waking the profile's agent on every tick with
+#   nothing to do. So quiet is the default and --verbose is the opt-out.
+#
+#   Default (no flags), stdout is DELIVERED verbatim and EMPTY stdout is
+#   silent:
+#     * work found      -> print it (the agent wakes and works)
+#     * healthy + empty -> print NOTHING (zero tokens, no noise)
+#     * incident        -> print it ONCE, then stay silent until the
+#                          condition changes (state file), so a
+#                          persistent fault wakes the team once instead
+#                          of every tick.
+#   In that mode the exit code tracks "did I emit anything new", not "is
+#   the world healthy" — a deduped incident is silent AND exits 0 so it
+#   cannot generate a failure ping on every tick. The emitted message is
+#   the durable record.
+#
+#   --verbose  Human/debug mode: always print the healthy-but-idle line
+#              and never dedupe incidents. Use this when you are running
+#              it by hand and want to see the state.
 #
 # Env: TEAM_OWNER (default the user), TEAM_QUEUE_LABEL, TEAM_TOPIC
 #      (default hermes-team), HERMES_HOME (for the dedupe state file).
@@ -69,7 +81,7 @@ LABEL=""
 OWNER="${TEAM_OWNER:-<owner>}"
 TOPIC="${TEAM_TOPIC:-hermes-team}"
 AUTHOR=""
-CRON=0
+VERBOSE=0
 QUIET=0
 
 while [ $# -gt 0 ]; do
@@ -78,7 +90,11 @@ while [ $# -gt 0 ]; do
         --label) LABEL="$2"; shift 2 ;;
         --owner) OWNER="$2"; shift 2 ;;
         --author) AUTHOR="$2"; shift 2 ;;
-        --cron) CRON=1; shift ;;
+        --verbose) VERBOSE=1; shift ;;
+        # Accepted as a no-op: cron behaviour is the DEFAULT now. An older
+        # caller — or a skill that has not been updated — passing the old
+        # flag must not hard-fail with exit 64 inside a cron run.
+        --cron) shift ;;
         --quiet) QUIET=1; shift ;;
         # Print the header comment block: line 2 through the last `#`
         # line before the first non-comment line, so the range tracks the
@@ -119,11 +135,15 @@ state_file() {
         "$(printf '%s' "$LABEL" | tr -c 'a-zA-Z0-9' '-')"
 }
 
-# Emit an incident, honouring the --cron dedupe contract.
+# Emit an incident, honouring the dedupe contract.
 # $@ = the lines to emit. Returns 1 when suppressed (unchanged), else 0.
+#
+# Always STDOUT, never stderr: under cron stdout IS the delivery channel
+# (stderr goes to the job's log and reaches nobody), and for a human it is
+# the thing they actually read.
 incident() {
-    if [ "$CRON" -eq 0 ]; then
-        fail "$@"
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "$@"
         return 0
     fi
     key=$(printf '%s' "$*" | cksum | tr -d ' ')
@@ -140,7 +160,6 @@ incident() {
 # Clear the dedupe state on a healthy run, so a fault that recurs after a
 # good period is reported again rather than being suppressed forever.
 clear_state() {
-    [ "$CRON" -eq 1 ] || return 0
     rm -f "$(state_file)" 2>/dev/null || true
 }
 
@@ -281,8 +300,8 @@ if [ -n "$MISSING" ]; then
 fi
 
 clear_state
-if [ "$CRON" -eq 1 ]; then
-    exit 0    # healthy + empty: silent, zero tokens
+if [ "$VERBOSE" -eq 0 ]; then
+    exit 0    # healthy + empty: SILENT (zero tokens — the cron default)
 fi
 log "QUEUE EMPTY  query healthy: $NR onboarded repo(s), all labelled"
 log "  $LABEL, nothing routed to $OWNER right now."

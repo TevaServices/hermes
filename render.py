@@ -59,6 +59,12 @@ SOUL_OPERATING = CONFIG / "SOUL_OPERATING.md"
 # build time and fails the deploy (which is exactly what happened).
 CRON_SPEC = CONFIG / "cron.toml"
 CRON_SCRIPT_DIR = ROOT / "docker" / "hermes"
+# Merged into every rendered config (see render_profile) — a profile can
+# override any individual key via [config_extra.cron].
+STACK_CRON_DEFAULTS = {
+    # 600 (upstream) kills a real agent turn mid-flight; see render_profile.
+    "bot_chat_delivery_timeout_seconds": 3600,
+}
 # `profile` is dropped: the rendered file is already per-profile.
 _JOB_FIELDS = ("name", "schedule", "script", "no_agent", "deliver", "prompt")
 
@@ -443,6 +449,27 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
+
+    # Cron: raise the bot-chat delivery cap for EVERY profile.
+    #
+    # A bot-chat delivery runs the target profile's agent for a FULL TURN,
+    # SYNCHRONOUSLY inside the cron job's execution, under a timeout whose
+    # upstream default is 600s — and on expiry that child is killed. A real
+    # work turn is far longer than 600s, so the default does not merely
+    # log a warning, it terminates the agent mid-task: observed live, the
+    # developer agent claimed its issue at 16:19 and was killed at 16:21
+    # having done nothing further.
+    #
+    # Stack-wide rather than per profile because the value is read by
+    # whichever scheduler fires the job, which under
+    # GATEWAY_MULTIPLEX_PROFILES is not necessarily the job's own profile.
+    # Holding the execution open also SERIALISES the 5-minute poll against
+    # a running turn — the next tick cannot stack a second wake on top of
+    # work already in flight. Merged (not replaced) so a profile may still
+    # override any individual key via [config_extra.cron].
+    cron_cfg = dict(STACK_CRON_DEFAULTS)
+    cron_cfg.update(config.get("cron") or {})
+    config["cron"] = cron_cfg
 
     # Memory: provider plugin + built-in store caps for EVERY profile.
     # The memory-provider plugin (plugins/memory/honcho, agent_init.py
