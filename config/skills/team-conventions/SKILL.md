@@ -31,7 +31,12 @@ entrypoint from the profile env).
 1. **Idea** (Discord, from the user) → planner writes the **issue** (goal,
    acceptance criteria, design decisions) → planner comments the issue
    link back into the Discord thread.
-2. **Ready** → issue assigned to developer (planner or the user).
+2. **Ready** → planner routes the issue to developer by moving it to
+   `status/ready`. **The label is the handoff** — GitHub App bot
+   identities cannot be assigned issues or PRs (403 /
+   `cannot be assigned to issues or pull requests`, for every bot, no
+   token change fixes it), so the assignee field is unused by design.
+   Developer claims the issue by swapping to `status/in-progress`.
 3. **Implementation** → developer works a branch, opens a **draft PR
    early** (`Closes #N`), keeps the issue updated via comments, moves
    the board item through its columns (see boards below).
@@ -39,10 +44,16 @@ entrypoint from the profile env).
    decision in the PR/issue, hands the information to planner via a
    GitHub comment `@hermes-planner` (planner may surface it to
    the user on Discord; developer never messages the user directly).
-5. **Review** → developer marks the PR ready for review → reviewer runs
-   the gates (`team-reviewer` skill): pass = approve + mark ready +
-   request the user's review; fail = "Request changes" with issues
-   explained, back to developer.
+5. **Review** → developer marks the PR ready (`gh pr ready`) AND labels
+   it `review/ready` — **the label is the handoff**, because bot
+   identities cannot be requested as PR reviewers (the request is
+   rejected, and the REST form silently drops it). Reviewer claims it by
+   swapping to `review/in-progress`, then runs the gates
+   (`team-reviewer` skill): pass = approve + `review/approved` +
+   request the user's review; fail = "Request changes" + `review/changes`
+   with issues explained, back to developer. A developer fix re-adds
+   `review/ready` — that re-add is what wakes the reviewer again, so
+   never merge a fix silently.
 6. **Human gate** → the user reviews → reviewer merges (only reviewer
    merges) or routes the user's flags back to developer.
 7. Issue auto-closes via `Closes #N`; reviewer/board updates status to
@@ -62,6 +73,25 @@ entrypoint from the profile env).
 - Moving items through columns/labels is planner's job (developer and
   reviewer do it for their own cards when a self-serve step is natural,
   e.g. developer sets In Progress when starting a card).
+
+### The routing labels (these ARE the queues)
+
+Nothing in this team is routed by assignment or review request — both
+are impossible for App bot identities. Each handoff is a label that the
+receiving role polls and then *consumes*, which is also what stops a
+queue from re-serving the same item every tick:
+
+| Label | On | Means | Owner moves it to |
+|---|---|---|---|
+| `status/ready` | issue | routed to developer | `status/in-progress` (on claim) |
+| `status/blocked` | issue | needs a decision | — (planner/the user) |
+| `review/ready` | PR | routed to reviewer | `review/in-progress` (on claim) |
+| `review/changes` | PR | back with developer | re-add `review/ready` when fixed |
+| `review/approved` | PR | waiting on the user | — (reviewer merges on approval) |
+
+The onboarding procedure creates this whole set per repo; a missing one
+is a real fault (work routed there goes invisible), which the queue
+scripts report rather than silently showing an empty queue.
 
 ## Cross-referencing
 

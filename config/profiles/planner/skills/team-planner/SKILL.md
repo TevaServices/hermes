@@ -47,17 +47,40 @@ self-sufficient.>
   (`status/backlog` → `status/ready` → …) with
   `gh issue edit <n> --remove-label … --add-label …`.
 
-## Assigning developer work
+## Routing developer work
 
-Issue → Ready, then assign `hermes-dev[bot]`:
+**The handoff is the label, not an assignee.** GitHub App bot
+identities cannot be assigned issues or PRs at all — the API rejects it
+with 403 / `cannot be assigned to issues or pull requests`, and
+`GET /repos/{owner}/{repo}/assignees/{login}` returns 404 for every bot.
+That is a rule about the *assignee's* account type, so **no token
+change fixes it**: the user's own user token, on his own repo, fails
+identically. `--add-assignee hermes-dev[bot]` will always fail —
+do not retry it, and do not report it as a credential problem.
+
+Moving the issue to Ready *is* the routing: `status/ready` is
+developer's queue.
 
 ```bash
-gh issue edit owner/repo#N --add-assignee hermes-dev[bot]
+gh issue edit owner/repo#N --add-label status/ready
 ```
 
-Developer discovers assigned work via its self-pull cron; no Discord
-ping is needed (a `#dev` post announcing the handoff is courteous and
-expected for non-trivial specs).
+Developer discovers routed work via its self-pull cron and claims it by
+swapping the label to `status/in-progress`; no Discord ping is needed (a
+`#dev` post announcing the handoff is courteous and expected for
+non-trivial specs).
+
+**Verify the label actually landed** before you consider the handoff
+done:
+
+```bash
+gh issue view owner/repo#N --json labels --jq '.labels[].name'
+```
+
+The handoff is silent by design, so a label that failed to apply leaves
+the issue sitting invisibly in the backlog — and an idle developer looks
+exactly like a developer with nothing to do. If `status/ready` is
+missing, that is the incident; fix it or raise it, don't move on.
 
 ## Roadblock intake
 
@@ -73,11 +96,17 @@ When developer comments a roadblock decision
 3. If it changes the design: update the issue body (GitHub = system of
    record) before developer resumes.
 
-## Daily standup digest (weekdays ~09:00 ET, cron)
+## Daily standup digest (weekdays ~09:00 ET — NOT yet scheduled)
+
+> These digests are **not** cron jobs today. The only declared jobs are
+> the two `no_agent` self-pull queues in `config/cron.toml`; a digest is
+> an agent job (it needs an inference turn), so scheduling it is a
+> standing token cost that has not been approved. Run this procedure on
+> request (`hermes cron run` will not help — there is no job).
 
 Aggregate across ALL onboarded repos (search-based, no per-board crawl):
 
-1. Merged yesterday: `gh search prs --merged:">=YYYY-MM-DD" --owner <account>` per installation
+1. Merged yesterday: `gh search prs --owner <account> --merged ">=YYYY-MM-DD"` per installation
    (repeat per account with the right token).
 2. In flight: open PRs (draft + ready) by team bots; issues in
    Ready/In Progress (label- or board-based per repo registry).
@@ -86,7 +115,9 @@ Aggregate across ALL onboarded repos (search-based, no per-board crawl):
 4. Today: top of each repo's Ready column/label.
 5. Post to Discord `#planning` (≤ 30 lines, repo-prefixed references).
 
-## Weekly sprint review (Fri ~16:00 ET, cron)
+## Weekly sprint review (Fri ~16:00 ET — NOT yet scheduled)
+
+> Same as the standup: run on request; not a scheduled job today.
 
 1. Collect the week's merged PRs, closed issues, and carry-over.
 2. Write a sprint-log issue in the most-active repo (label

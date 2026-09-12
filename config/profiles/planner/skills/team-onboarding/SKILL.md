@@ -45,6 +45,22 @@ skips.
      --color 0E8A16 --description "Ready for implementation"
    # … repeat for the other five
    ```
+   **Also create the routing labels for the PR side** — they are the
+   reviewer's queue and the fix-loop signal, not decoration (see
+   `team-conventions` → "The routing labels"):
+   ```bash
+   gh label create review/ready --repo <owner>/<repo> \
+     --color 1D76DB --description "Ready for review (reviewer's queue)"
+   gh label create review/in-progress --repo <owner>/<repo> \
+     --color FBCA04 --description "Review in progress"
+   gh label create review/changes --repo <owner>/<repo> \
+     --color D93F0B --description "Changes requested — back with developer"
+   gh label create review/approved --repo <owner>/<repo> \
+     --color 0E8A16 --description "Approved — awaiting the user"
+   ```
+   A repo onboarded without these will stall the review loop silently:
+   the queue scripts report the missing label rather than showing an
+   empty queue, which is deliberate.
 
 3. **Branch protection on `main`** — needs Administration write; on 403
    it becomes a manual checklist item:
@@ -69,7 +85,9 @@ skips.
 4. **CI workflow.** If the repo has no `.github/workflows/ci.yml`,
    open a PR (planner cannot push to a new branch — open a draft PR
    from a branch developer creates, or have developer do it; simplest:
-   write the issue `owner/repo#N "Add CI"` and assign developer).
+   write the issue `owner/repo#N "Add CI"` and route it to developer by
+   labelling it `status/ready` — the label is the handoff, since App
+   bots cannot be assignees).
 
 5. **Verify team App access.** With the reviewer App's token for this
    installation, confirm the App can read the repo; with the dev App's

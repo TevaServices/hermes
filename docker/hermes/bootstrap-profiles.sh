@@ -46,10 +46,43 @@ copy_overlay() {
   fi
 }
 
+# Reconcile the profile's GitOps-declared cron jobs (rendered from
+# config/cron.toml into the overlay as cron.json). NOT a copy: a profile's
+# cron store is runtime state (run history, failure streaks, notepads), so
+# the reconciler drives the `hermes cron` CLI to create/edit in place and
+# leaves everything else alone. It also seeds the job scripts into
+# <profile>/scripts/, which is where the scheduler requires them — a
+# no_agent job whose script is missing is "unrunnable" and gets
+# auto-paused at the first tick.
+#
+# Failures here are reported but never fatal: a profile with a broken
+# cron declaration must still boot and serve its gateway.
+reconcile_cron() {
+  overlay="$1"
+  target="$2"
+  spec="$overlay/cron.json"
+  name="$(basename "$target")"
+  [ "$target" = "$HERMES_HOME" ] && name="default"
+  if [ ! -f "$spec" ]; then
+    return 0
+  fi
+  if [ ! -f /usr/local/bin/cron-reconcile.py ]; then
+    log "cron-reconcile.py missing from the image; skipped cron for '$name'"
+    return 0
+  fi
+  if python3 /usr/local/bin/cron-reconcile.py \
+       --home "$target" --spec "$spec" --prune; then
+    log "reconciled cron for '$name'"
+  else
+    log "WARNING: cron reconcile reported problems for '$name' (see above)"
+  fi
+}
+
 # Default profile lives at the root of HERMES_HOME.
 if [ -d "$OVERLAY_ROOT/default" ]; then
   copy_overlay "$OVERLAY_ROOT/default" "$HERMES_HOME"
   log "applied overlay: default"
+  reconcile_cron "$OVERLAY_ROOT/default" "$HERMES_HOME"
 fi
 
 # Named profiles live under $HERMES_HOME/profiles/<name>/. A profile is
@@ -72,6 +105,7 @@ if [ -d "$OVERLAY_ROOT/profiles" ]; then
     fi
     copy_overlay "$overlay" "$target"
     log "applied overlay: $name"
+    reconcile_cron "$overlay" "$target"
   done
 fi
 

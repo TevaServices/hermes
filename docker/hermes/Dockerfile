@@ -99,9 +99,20 @@ RUN curl -fsSL --retry 3 \
 COPY docker/hermes/github-app-token.sh /usr/local/bin/github-app-token.sh
 COPY docker/hermes/bootstrap-profiles.sh /usr/local/bin/hermes-bootstrap-profiles.sh
 COPY docker/hermes/git-repo.sh /usr/local/bin/git-repo.sh
+COPY docker/hermes/team-queue.sh /usr/local/bin/team-queue.sh
+COPY docker/hermes/review-queue.sh /usr/local/bin/review-queue.sh
+# Cron job scripts are ALSO seeded per profile at boot
+# (cron-reconcile.py) — the scheduler requires a job's script to live
+# under <HERMES_HOME>/scripts/, so /usr/local/bin is the image-side
+# source of truth for script CONTENT and config/cron.toml for its
+# schedule.
+COPY docker/hermes/cron-reconcile.py /usr/local/bin/cron-reconcile.py
 RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/hermes-bootstrap-profiles.sh \
-               /usr/local/bin/git-repo.sh
+               /usr/local/bin/git-repo.sh \
+               /usr/local/bin/team-queue.sh \
+               /usr/local/bin/review-queue.sh \
+               /usr/local/bin/cron-reconcile.py
 
 # Headless Chromium for the browser tools (browser-harness / browser_exec).
 # The base image already bakes the Playwright Chromium headless shell

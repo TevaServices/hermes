@@ -558,6 +558,100 @@ bot is not *in* the guild until someone authorizes the invite URL.
    gateway logs `[Discord] Connected as <bot>` plus
    `✓ discord connected (profile: <name>)`.
 
+### Routing work to a profile: labels, never assignees
+
+**GitHub App bot identities cannot be issue/PR assignees.** This is a
+platform rule about the *assignee's* account type, not about
+credentials — verified live (2026-09-12) and the reason the team's
+planner→developer handoff was dead:
+
+- `POST /issues/N/assignees` → 403 for `hermes-*[bot]` **from
+  the planner's app token AND from the user's own user token on his own
+  repo**. Assigning a *human* works; assigning `dependabot[bot]` fails
+  the same way, so it is not specific to our Apps.
+- GraphQL states it outright: `Could not assign agent:
+  hermes-planner[bot] cannot be assigned to issues or pull
+  requests.`
+- The cheap probe is `GET /repos/{owner}/{repo}/assignees/{login}` →
+  **204 assignable / 404 not** (human 204, every bot 404).
+
+So the assignee field is unused by design and the team routes by
+**label**: `status/ready` IS the handoff (planner sets it, developer
+claims by swapping to `status/in-progress`). Do not "fix" this with a
+PAT or a machine user — a PAT acting as the user fails identically.
+Bots *authoring* issues/PRs works fine, which is why the reviewer leg
+(`gh search prs --author 'hermes-dev[bot]'`) was never affected.
+
+`team-queue.sh` (baked at `/usr/local/bin/team-queue.sh`) wraps the
+developer's self-pull **with a loud failure mode**, because an empty
+search and a broken search are indistinguishable downstream — the
+original command used `--assignee:x --state:open --is:issue`, which is
+invalid gh syntax on all three counts (the `--flag:value` colon form
+does not exist; it is `--flag value`), so it errored on every run and
+nothing noticed. Exit codes are the contract: `0` healthy (work or a
+genuine `QUEUE EMPTY`), `2` query failed, `3` blind search (token or
+scope), `4` nothing carries the `hermes-team` topic, `5` an onboarded
+repo is missing the routing label. **2–5 are incidents to surface, not
+idle states.** Grep new skills for the colon form before shipping them.
+
+### Scheduled jobs are GitOps-declared (`config/cron.toml`)
+
+Every cron job is declared in **`config/cron.toml`**, rendered per
+profile by `render.py` into `<overlay>/cron.json`, and reconciled into
+that profile's cron store at container boot by
+`docker/hermes/cron-reconcile.py` (invoked from `bootstrap-profiles.sh`).
+Hand-creating a job with `hermes cron` is the same mistake as
+hand-editing `/opt/data/config.yaml`: it survives until the next boot,
+then the reconciler overwrites it.
+
+- **The store is runtime state, so it is reconciled, never copied.**
+  `$HERMES_HOME/cron/jobs.json` holds run history, failure streaks,
+  `next_run_at` and per-job notepads. Overwriting it from the image on
+  each deploy — the way config.yaml/SOUL.md are overwritten — would reset
+  all of that, so the reconciler drives the `hermes cron` CLI to
+  create/edit in place instead. A job whose stored config already matches
+  the declaration is left completely untouched.
+- **`hermes cron create` exits 0 even when it fails** (it prints
+  `Failed to create job: …` on stdout). The reconciler therefore verifies
+  every create/edit/prune by **reading the store back** and reports a
+  failure when the change did not land. Same lesson as the REST
+  reviewer-request endpoint (201, bot silently dropped): a status code is
+  not evidence.
+- **Matching is by name**, which is why `render.py` rejects duplicate
+  `(profile, name)` pairs at build time — a duplicate would edit the wrong
+  job. Names are namespaced `team: `; `--prune` only ever removes that
+  prefix, so a job an AGENT created for itself is never deleted.
+- **Job scripts are validated against `docker/hermes/` at build time.**
+  A `no_agent` job whose script is missing is "unrunnable", and the
+  scheduler **auto-pauses** it at the first tick — so a typo'd script
+  name fails `mise run validate` instead of becoming a dead job in
+  production. At boot the script is seeded from `/usr/local/bin/` into
+  `<profile>/scripts/` (the scheduler refuses a script outside
+  `$HERMES_HOME/scripts`), chowned to the profile home's owner when boot
+  runs as root — a root-owned scripts dir is unwritable to the ticker,
+  which would create the job and then never fire it.
+- Deleting a job from `config/cron.toml` DOES take effect: an empty spec
+  still runs the prune pass, so removal is not the one edit that silently
+  never applies.
+
+**The self-pull jobs are `no_agent` scripts, deliberately.** A `no_agent`
+job delivers its script's stdout verbatim and **empty stdout is silent** —
+no message, no agent turn, no tokens. That is what makes a 5-minute poll
+affordable: the poll is free and the agent wakes only when there is work.
+`deliver = "bot-chat"` (bare) injects into the job's OWN profile's Bot
+Chat as a message the agent responds to; delivering to the profile's
+Discord channel would NOT work, because the Discord adapter drops the
+bot's own messages (`adapter.py`:
+`if message.author == self._client.user`). Incidents are printed **once
+and then deduped** via a state file, so a persistent fault wakes the team
+a single time instead of every tick.
+
+`GH_TOKEN` is absent from a cron script's environment (subprocess env is
+credential-stripped by design) — that is fine, because the profile's `gh`
+is already logged in as its own App installation
+(`/opt/data/profiles/<name>/home/.config/gh/hosts.yml`), verified live
+from inside a `no_agent` job.
+
 ## Local development (this repo)
 
 Local runs use **mise** (not Makefile): `mise run up`, `mise run logs`,

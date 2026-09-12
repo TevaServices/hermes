@@ -1,0 +1,76 @@
+# Scheduled jobs — declared here, reconciled into each profile's cron
+# store at container boot (bootstrap-profiles.sh -> cron-reconcile.py).
+#
+# This file is the source of truth. Editing a profile's cron store by
+# hand is the same mistake as hand-editing /opt/data/config.yaml: it
+# works until the next boot, then the reconciler puts it back. Use
+# `hermes cron` for experiments; land anything permanent here.
+#
+# ## Why no_agent scripts
+#
+# A no_agent job runs its script and delivers the script's STDOUT
+# verbatim to `deliver`. Empty stdout = SILENT — no message, no agent
+# turn, no tokens. That is what makes a frequent self-pull affordable:
+# the poll itself is free, and the profile's agent only wakes when there
+# is actually something to do. An agent-prompted job would burn a full
+# inference turn every tick just to discover there is nothing to do.
+#
+# `deliver = "bot-chat"` (bare) injects the output into the job's OWN
+# profile's Bot Chat as a message the agent responds to — that is the
+# wake-up path. Delivering to the profile's Discord channel would NOT
+# work: the Discord adapter drops the bot's own messages
+# (adapter.py: `if message.author == self._client.user`), so the agent
+# would never see it.
+#
+# ## The scripts and their contract
+#
+# `script` names a file under the profile's scripts dir; the reconciler
+# seeds it from the image (/usr/local/bin/) on every boot, so the image
+# is the source of truth for script CONTENT and this file for its
+# SCHEDULE. A job whose script is missing is "unrunnable" and the
+# scheduler AUTO-PAUSES it — which is why seeding is done at boot, before
+# s6 starts anything.
+#
+# Both queue scripts exit 0 with output when there is work, exit 0 with
+# NO output when they are healthy-but-idle, and print an incident ONCE
+# (then stay silent until the condition changes) when the pipeline is
+# broken. See docker/hermes/team-queue.sh for the full exit-code table.
+#
+# ## Fields
+#
+#   profile   which profile owns the job (its cron store + its scripts dir)
+#   name      stable identity — the reconciler matches on this, so
+#             RENAMING A JOB HERE CREATES A SECOND ONE unless you also
+#             remove the old
+#   schedule  cron expression or interval ("30m", "every 2h")
+#   script    file seeded into <profile>/scripts/
+#   no_agent  true = script stdout delivered verbatim (see above)
+#   deliver   "bot-chat" (own profile) | "local" (save, no delivery)
+#   prompt    optional; only meaningful for agent jobs (no_agent = false)
+#
+# Managed names are prefixed "team: " — that prefix is what `--prune`
+# treats as stack-owned, so a job the AGENT created for itself is never
+# removed by the reconciler.
+
+# Developer self-pull: poll the `status/ready` label every 5 minutes.
+# When planner routes an issue, the next tick prints it, the developer's
+# agent wakes with the issue in front of it, and claims it by swapping
+# the label to `status/in-progress`.
+[[jobs]]
+profile = "developer"
+name = "team: dev self-pull"
+schedule = "*/5 * * * *"
+script = "team-queue.sh"
+no_agent = true
+deliver = "bot-chat"
+
+# Reviewer self-pull: poll the `review/ready` PR label every 5 minutes.
+# The review request itself cannot be used as the handoff — bot
+# identities cannot be requested as PR reviewers (see review-queue.sh).
+[[jobs]]
+profile = "reviewer"
+name = "team: review self-pull"
+schedule = "*/5 * * * *"
+script = "review-queue.sh"
+no_agent = true
+deliver = "bot-chat"

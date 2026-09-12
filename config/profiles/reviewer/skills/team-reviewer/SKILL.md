@@ -1,7 +1,7 @@
 ---
 name: team-reviewer
 description: Reviewer gate set — fixed checklist (security, tests, style, testability), verdicts, merge protocol
-version: 1.0.0
+version: 1.1.0
 metadata:
   hermes:
     tags: [team, reviewer, review-gates]
@@ -16,21 +16,63 @@ add gates mid-review (propose new ones to the user, apply next review).
 
 ## Self-pull: finding review work (the cron runs this query)
 
-Draft PRs ready for review authored by the dev bot:
+**`review/ready` IS the handoff.** The developer marks a PR ready with
+`gh pr ready` AND adds the label; that label is your queue.
+
+You cannot be *requested* as a reviewer — bot identities are rejected
+(`gh pr edit --add-reviewer 'hermes-reviewer[bot]'` →
+"GraphQL: Could not resolve user with login …"), and the REST endpoint
+is worse: it answers **201 and silently drops the bot**, so a status
+code is not evidence. Author-based search is a fine fallback but on its
+own it re-lists every open PR on every tick, including ones you already
+reviewed — the label is what makes the queue finite and poll-safe.
 
 ```bash
-gh search prs --author:hermes-dev[bot] --state:open \
-  --is:draft --limit 30 --json repository,number,title,url
+# find review work — run per installation/account with that account's
+# token (GH_TOKEN_<ACCOUNT>; see team-github-token)
+review-queue.sh
+
+# claim the PR you picked (same turn, BEFORE reviewing)
+gh pr edit <n> --repo owner/repo --remove-label review/ready \
+  --add-label review/in-progress
 ```
 
-(per installation/account token — see `team-github-token`). A PR counts
-as "ready for review" when it is NOT draft. So actually:
-`gh search prs --author:hermes-dev[bot] --state:open` minus
-drafts; plus any PR where the user has flagged changes that came back
-from his review (comment mentions). Also self-pull your own open
-"Request changes" reviews where developer has since pushed new commits
-(re-review). Priority: user-flagged re-reviews > non-draft PRs >
-re-reviews. Post the verdict to `#reviews` when done.
+`review-queue.sh` (baked at `/usr/local/bin/review-queue.sh`) wraps the
+query below and prints one line per PR, `owner/repo#N  title  url`:
+
+```bash
+gh search prs --owner <owner> --label review/ready --state open \
+  --author 'hermes-dev[bot]' \
+  --limit 30 --json repository,number,title,url
+```
+
+(Note the **space** in `--author` / `--state`: the `--author:` colon
+form is not valid gh syntax and fails every run, which looks exactly
+like an empty queue.)
+
+A PR still carrying `review/ready` is **unreviewed** — claim it in the
+same turn you pick it up. Post the verdict to `#reviews` when done.
+
+### The verdict and the loop back
+
+- **Pass**: `gh pr review <n> --approve`, then
+  `gh pr edit <n> --remove-label review/in-progress --add-label review/approved`,
+  then request the user's review (`--add-reviewer <owner>` — a HUMAN, which
+  works) and post the verdict to `#reviews`.
+- **Fail**: `gh pr review <n> --request-changes -b '<issues explained>'`,
+  then swap `review/in-progress` → `review/changes`.
+
+Developer fixes and hands back by re-adding `review/ready` (it removes
+`review/changes` at the same time) — that label re-add is what wakes you
+for the second pass. Do not re-review a PR that has no `review/ready`
+label: it is either claimed (`review/in-progress`), already approved, or
+back with the developer.
+
+Re-reviews the developer did NOT re-hand-off, and anything the user
+flagged in comments that came back from his review, jump the queue.
+Priority: user-flagged > re-handoffs > new PRs.
+
+See `team-developer` for the developer's half of this handoff.
 
 ## The gates
 

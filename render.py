@@ -39,6 +39,22 @@ BUILD = ROOT / "build"
 # must hold on every single turn. One source, all profiles.
 SOUL_OPERATING = CONFIG / "SOUL_OPERATING.md"
 
+# Scheduled jobs, declared once for the whole stack in config/cron.toml and
+# rendered PER PROFILE (build/<name>/cron.json -> /overlay/profiles/<name>/
+# cron.json). Rendered as JSON, not YAML/TOML, because the consumer is the
+# boot reconciler (docker/hermes/cron-reconcile.py), which drives the
+# `hermes cron` CLI — see that file and the header of config/cron.toml.
+#
+# CRON_SCRIPT_DIR is where the job scripts live in the REPO; they are baked
+# to /usr/local/bin in the image and seeded into each profile's scripts dir
+# at boot. Validating against it here means a typo'd script name fails the
+# BUILD rather than becoming an "unrunnable" job that the scheduler
+# silently auto-pauses in production.
+CRON_SPEC = CONFIG / "cron.toml"
+CRON_SCRIPT_DIR = ROOT / "docker" / "hermes"
+# `profile` is dropped: the rendered file is already per-profile.
+_JOB_FIELDS = ("name", "schedule", "script", "no_agent", "deliver", "prompt")
+
 # Tirith rules pre-approved for every profile. A Tirith finding raises an
 # approval gate keyed `tirith:<rule_id>`; tools/approval.py loads
 # `command_allowlist` from config at MODULE IMPORT (approval.py:5971) and
@@ -231,6 +247,54 @@ def validate(models: dict, providers: dict, integrations: dict) -> None:
         raise ConfigError(f"missing operating-discipline block: {SOUL_OPERATING}")
 
 
+def load_cron_jobs(profile_names: set[str]) -> dict[str, list[dict]]:
+    """Return {profile: [job, ...]} from config/cron.toml, validated.
+
+    Fails the build on anything that would produce a job the scheduler
+    cannot run or the reconciler cannot match: an unknown profile, a
+    missing required field, a duplicate (profile, name) — the reconciler
+    matches jobs BY NAME, so a duplicate would edit the wrong one — or a
+    script that does not exist in the image.
+    """
+    if not CRON_SPEC.is_file():
+        return {}
+    by_profile: dict[str, list[dict]] = {}
+    seen: set[tuple[str, str]] = set()
+    for job in load_toml(CRON_SPEC).get("jobs", []):
+        profile = job.get("profile")
+        if profile not in profile_names:
+            raise ConfigError(
+                f"cron job '{job.get('name')}' targets unknown profile "
+                f"'{profile}'. Known: {', '.join(sorted(profile_names))}"
+            )
+        for field in ("name", "schedule", "script"):
+            if not job.get(field):
+                raise ConfigError(
+                    f"cron job for profile '{profile}' is missing '{field}'"
+                )
+        if bool(job.get("no_agent")) and not job.get("script"):
+            raise ConfigError(
+                f"cron job '{job['name']}': no_agent requires a script"
+            )
+        script = CRON_SCRIPT_DIR / job["script"]
+        if not script.is_file():
+            raise ConfigError(
+                f"cron job '{job['name']}': script '{job['script']}' not found "
+                f"in docker/hermes/ (job scripts are baked to /usr/local/bin)"
+            )
+        key = (profile, job["name"])
+        if key in seen:
+            raise ConfigError(
+                f"duplicate cron job name '{job['name']}' for profile "
+                f"'{profile}' — the reconciler matches by name"
+            )
+        seen.add(key)
+        by_profile.setdefault(profile, []).append(
+            {k: v for k, v in job.items() if k in _JOB_FIELDS}
+        )
+    return by_profile
+
+
 def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[dict, dict]:
     """Return (model block, custom_providers entries) for a model alias.
 
@@ -347,7 +411,8 @@ def collect_env_keys(profile: dict, model_key: str, models: dict,
 # ----------------------------------------------------------------- rendering
 
 def render_profile(name: str, profile: dict, profile_dir: Path,
-                   models: dict, providers: dict, integrations: dict) -> dict:
+                   models: dict, providers: dict, integrations: dict,
+                   cron_jobs: list[dict] | None = None) -> dict:
     model_key = profile.get("model")
     if model_key not in models:
         raise ConfigError(
@@ -447,6 +512,16 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if skills.is_dir():
         shutil.copytree(skills, out_dir / "skills", dirs_exist_ok=True)
 
+    # This profile's scheduled jobs (config/cron.toml). Rendered, NOT
+    # applied: the profile's cron store is runtime state (run history,
+    # failure streaks, notepads) and writing jobs.json from here would
+    # clobber it on every deploy. bootstrap-profiles.sh reconciles this
+    # file into the store at boot via the CLI, which preserves that state.
+    # Always written, even when empty, so the overlay is self-describing.
+    (out_dir / "cron.json").write_text(
+        json.dumps({"jobs": cron_jobs or []}, indent=2) + "\n"
+    )
+
     env_keys = collect_env_keys(profile, model_key, models, providers, integrations)
     env_lines = [
         "# Generated by render.py for the '{name}' profile — DO NOT EDIT.".format(name=name),
@@ -485,17 +560,24 @@ def main() -> int:
         validate(models, providers, integrations)
 
         profile_root = CONFIG / "profiles"
-        profile_dirs = sorted(
+        all_profile_dirs = sorted(
             d for d in profile_root.iterdir()
             if d.is_dir() and (d / "profile.toml").is_file()
         )
+        # Cron jobs are validated against EVERY profile, not just the
+        # (possibly --profile-filtered) render set, so rendering one
+        # profile does not fail on another profile's jobs.
+        cron_by_profile = load_cron_jobs({d.name for d in all_profile_dirs})
+
+        profile_dirs = all_profile_dirs
         if args.profile:
             profile_dirs = [d for d in profile_dirs if d.name == args.profile]
             if not profile_dirs:
                 raise ConfigError(f"no such profile: {args.profile}")
 
         if args.check:
-            print("config valid")
+            jobs = sum(len(v) for v in cron_by_profile.values())
+            print(f"config valid ({jobs} cron job(s) declared)")
             return 0
 
         rows = []
@@ -504,6 +586,7 @@ def main() -> int:
             rows.append(render_profile(
                 profile_dir.name, profile, profile_dir,
                 models, providers, integrations,
+                cron_by_profile.get(profile_dir.name, []),
             ))
 
         width = max(len(r["profile"]) for r in rows)

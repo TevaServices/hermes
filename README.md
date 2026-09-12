@@ -73,7 +73,8 @@ scripts/                host setup + credential/diagnostic helpers
 Three named Hermes profiles work as a GitHub-first agile team — **GitHub
 is the system of record, Discord is the discussion surface**. The
 `team-conventions` skill (config/skills/, shared by every profile)
-defines the workflow: idea → issue → assigned developer → **draft PR** →
+defines the workflow: idea → issue → routed developer (label
+`status/ready` — GitHub App bots cannot be assignees) → **draft PR** →
 reviewer gates (`team-reviewer`) → human gate (the user) → reviewer
 merges. Repos join the workflow via the planner's `team-onboarding`
 skill (adds the `hermes-team` topic tag, a per-repo board or status
