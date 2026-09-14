@@ -127,6 +127,18 @@ the item is claimed, kept open until the PR is **merged**, and archived
 automatically when the merge closes the issue. A thread is a work item's
 home, not a per-turn scratchpad — do not close it at handoff.
 
+**Post with the helpers, never with a hand-rolled request.** Use
+`team-thread.sh post "<key>" "…"` for a work item's thread, or
+`hermes send --to discord:<channel>` for the channel. Specifically, do
+**not** read a token out of `$HERMES_HOME/.env` with `grep … | head -1`
+and call the Discord REST API yourself. That is not a shortcut, it is a
+trap: `.env` files can contain more than one definition of a key (a
+profile's file inherits the default profile's own vars), and a
+first-match reader silently picks the wrong one. It has already caused a
+developer status line to be posted into `#dev` by the **main** bot —
+a wrong-identity post that looked like it worked. The helpers resolve
+credentials the same way the runtime does, so they cannot drift.
+
 To open a thread yourself (a second topic in one request), use the
 `discord` tool — it is deferred behind tool search, so it is not in your
 tool list until you look for it:

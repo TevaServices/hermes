@@ -97,13 +97,32 @@ if [ -f "$ENV_MOUNT" ]; then
       [ -d "$profile_dir" ] || continue
       profile_name="$(basename "${profile_dir%/}")"
       profile_env="${profile_dir%/}/.env"
-      # Copy the host env file MINUS every PROFILE_* line (teammates'
-      # secrets stay out of each profile's own .env scope), then append
-      # THIS profile's mapped vars: PROFILE_<NAME>_<VAR> -> <VAR>, so
-      # PROFILE_DEVELOPER_DISCORD_BOT_TOKEN reaches the developer
-      # profile as DISCORD_BOT_TOKEN.
-      grep -vE '^PROFILE_[A-Z0-9]+_[A-Z0-9_]+=' "$ENV_MOUNT" > "$profile_env" || true
       prefix="PROFILE_${profile_name^^}_"
+      # Which bare names will THIS profile define? (PROFILE_<NAME>_<VAR>
+      # -> <VAR>, below.) Those are exactly the names the inherited copy
+      # must NOT keep a copy of.
+      own=$(env | grep -oE "^${prefix}[A-Z0-9_]+=" 2>/dev/null \
+              | sed "s/^${prefix}//; s/=$//" | tr '\n' '|' | sed 's/|$//' || true)
+      # Copy the host env file MINUS every PROFILE_* line (teammates'
+      # secrets stay out of each profile's own .env scope) AND minus the
+      # host's own bare copies of the names this profile overrides.
+      #
+      # That second exclusion is load-bearing, not tidiness. The host env
+      # file carries the DEFAULT profile's own secrets under their bare
+      # names (DISCORD_BOT_TOKEN, GITHUB_APP_ID, …), so without it this
+      # profile's .env ends up defining each of those keys TWICE — the
+      # default profile's value first, this profile's appended after.
+      # The dotenv loader is last-wins and so resolves correctly, which
+      # hid this for a long time; but ANY first-match reader gets the
+      # default profile's credential. Observed live: the developer agent
+      # posted into #dev as the MAIN bot, because it read the token with
+      # `grep … | head -1` — which is exactly what an agent reaching for
+      # a secret writes. Duplicate keys are a trap; leave only one.
+      if [ -n "$own" ]; then
+        grep -vE "^PROFILE_[A-Z0-9]+_[A-Z0-9_]+=|^(${own})=" "$ENV_MOUNT" > "$profile_env" || true
+      else
+        grep -vE '^PROFILE_[A-Z0-9]+_[A-Z0-9_]+=' "$ENV_MOUNT" > "$profile_env" || true
+      fi
       # `|| true` inside the brace group: with no PROFILE_<NAME>_* vars in
       # the container env (team not onboarded yet), grep exits 1 and
       # pipefail would otherwise kill the entrypoint silently (set -e).
