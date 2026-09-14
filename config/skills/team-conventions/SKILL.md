@@ -93,6 +93,59 @@ The onboarding procedure creates this whole set per repo; a missing one
 is a real fault (work routed there goes invisible), which the queue
 scripts report rather than silently showing an empty queue.
 
+## Surfaces the team does NOT touch (user-owned)
+
+Some changes are deliberately outside every team identity. This is a
+policy choice, not a limitation to route around — do not look for a
+token trick, a different App, or an API path. Both of these already have
+a mechanism; use it.
+
+- **`.github/workflows/*`** — GitHub refuses to create or update a
+  workflow file from an App token that lacks the `workflows` permission,
+  and **no team App has it, on purpose**: a workflow file runs arbitrary
+  code with the repo's secrets, so granting it would widen what a
+  compromised or confused agent could do. A push that touches one is
+  rejected server-side (`refusing to allow a GitHub App to create or
+  update workflow … without 'workflows' permission`) and there is no API
+  way to change an App's own permissions — `PATCH /app` is 404; it is an
+  owner-only UI action.
+  **So: an item that needs CI/workflow changes is the user's to land.**
+  Write the proposed file content into the issue (or the work-item
+  thread) so it can be reviewed and applied verbatim, label the issue
+  `blocked`, and say plainly that it is waiting on the user. Do **not**
+  commit it to a branch and attempt the push — it cannot succeed, and the
+  turn is better spent. Everything else about the item is still yours:
+  the design, the content, the review.
+- **Branch protection** (see the registry) — similarly owner-only.
+
+## Never report a state change you have not verified
+
+Every handoff here is a GitHub state change — a label swap, `gh pr ready`,
+a comment. **Read it back before you report it.**
+
+A status message claiming work that did not land is worse than a failure,
+because the queues ARE the labels: a label that never applied is
+indistinguishable from "nothing to do", so the pipeline stalls silently
+while the transcript says it succeeded. This has already happened — a
+turn reported *"review/ready label added"* while the PR was still a draft
+with no labels, and the reviewer, correctly idle, looked like the
+problem. The developer's own queue now prints `!! HANDOFF INCOMPLETE` for
+exactly this state; if you see that line, it is describing your previous
+turn, not someone else's.
+
+Read back after each handoff, and compare with what you intended:
+
+```bash
+gh issue view <n> --repo <owner/repo> --json labels --jq '[.labels[].name]|join(",")'
+gh pr view    <n> --repo <owner/repo> --json isDraft,labels
+```
+
+`gh issue edit` / `gh pr edit` print a URL on success but do **not** fail
+loudly when the change was a no-op — a URL is not evidence. If the
+read-back disagrees with what you claim, say so on the work-item thread
+and fix it. "I could not confirm X" is a useful report; "X is done" when
+it is not costs the team a whole cycle.
+
 ## Cross-referencing
 
 - Discord ↔ GitHub: Discord messages carry `owner/repo#123` links;

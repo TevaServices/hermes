@@ -194,6 +194,48 @@ incident() {
     return 0
 }
 
+# --- handoff audit --------------------------------------------------------
+# An in-progress item whose PR is open but NOT handed off is the one state
+# that LOOKS like progress and is actually a stall. The hand-off is
+# `gh pr ready` PLUS the `review/ready` label, so a PR that skipped either
+# is invisible to the reviewer — whose queue IS that label — and the item
+# sits in status/in-progress indefinitely, looking busy while nothing
+# moves. Worse, an agent can report a hand-off it never performed: observed
+# live, a turn whose summary said "review/ready label added" while the PR
+# was still a draft with no labels. Nothing downstream noticed, because a
+# missing label is indistinguishable from "nothing to review".
+#
+# So the queue says it out loud, in the same output the agent already
+# reads. Deterministic, no agent turn required.
+audit_handoffs() {
+    printf '%s\n' "$1" | while IFS= read -r line; do
+        printf '%s\n' "$line"
+        key=$(printf '%s' "$line" | awk '{print $1}')
+        case "$key" in */*'#'*) ;; *) continue ;; esac
+        repo=${key%#*}; num=${key##*#}
+        labels=$(gh issue view "$num" --repo "$repo" --json labels \
+                    --jq '[.labels[].name]|join(",")' 2>/dev/null) || continue
+        case ",$labels," in *",status/in-progress,"*) ;; *) continue ;; esac
+        pr=$(gh pr list --repo "$repo" --state open --limit 50 \
+               --json number,isDraft,labels,body \
+               --jq "[.[] | select((.body // \"\") | test(\"(?i)closes #${num}\\\\b\"))] | .[0]
+                     | if . == null then \"\" else \"\\(.number)|\\(.isDraft)|\\([.labels[].name]|join(\",\"))\" end" \
+               2>/dev/null) || continue
+        [ -n "$pr" ] || continue
+        pnum=${pr%%|*}; rest=${pr#*|}; pdraft=${rest%%|*}; plabels=${rest#*|}
+        why=""
+        [ "$pdraft" = "true" ] && why="still a draft"
+        case ",$plabels," in
+            *",review/ready,"*) ;;
+            *) if [ -n "$why" ]; then why="$why and missing review/ready"
+               else why="missing review/ready"; fi ;;
+        esac
+        [ -n "$why" ] || continue
+        printf '    !! HANDOFF INCOMPLETE: PR #%s is %s — the reviewer cannot see it until `gh pr ready` + `review/ready`\n' \
+               "$pnum" "$why"
+    done
+}
+
 # Clear the dedupe state on a healthy run, so a fault that recurs after a
 # good period is reported again rather than being suppressed forever.
 clear_state() {
@@ -239,7 +281,11 @@ if [ "$N" -gt 0 ]; then
     clear_state
     log "QUEUE OK  $N item(s) labelled $LABELS for $OWNER:"
     [ "$QUIET" -eq 1 ] || log ""
-    printf '%s\n' "$QUEUE"
+    if [ "$KIND" = "issues" ]; then
+        audit_handoffs "$QUEUE"
+    else
+        printf '%s\n' "$QUEUE"
+    fi
     exit 0
 fi
 
