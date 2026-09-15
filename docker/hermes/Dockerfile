@@ -38,7 +38,21 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # Each must be re-anchored at every HERMES_REF bump, and DELETED once
 # upstream adopts the fix (the build says so — see below).
 #
-# TWO patches currently.
+# THREE patches currently.
+#
+# 3. gateway/platforms/base.py — build_auto_tts_output_path() must not
+# point /tmp when HERMES_WRITE_SAFE_ROOT is set. This stack sets
+# HERMES_WRITE_SAFE_ROOT=/opt/data (Dockerfile below), and the TTS tool
+# hard-rejects any output_path outside the safe root with
+# "output_path targets a protected credential or system path" — a silent
+# JSON failure, no exception, no log line. Upstream's auto-TTS path
+# builder hardcodes tempfile.gettempdir()/hermes_voice/, so on this image
+# EVERY automatic voice reply (Discord voice-channel speech, voice-input
+# auto-TTS) failed before synthesis: the bot joined the VC, transcribed
+# speech fine, but never spoke (observed live 2026-09-14). The patch
+# redirects to the TTS tool's default dir (HERMES_HOME/cache/audio,
+# under the safe root) only when /tmp is outside the configured safe
+# roots; stock behavior (no HERMES_WRITE_SAFE_ROOT) is byte-identical.
 #
 # 2. cron/scheduler.py — bot-chat delivery must POINT HERMES_HOME at the
 # target profile before spawning `hermes -p <name> chat`. Upstream drops

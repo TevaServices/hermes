@@ -1,0 +1,43 @@
+diff --git a/gateway/platforms/base.py b/gateway/platforms/base.py
+index 3ad1ea1..e7942b3 100644
+--- a/gateway/platforms/base.py
++++ b/gateway/platforms/base.py
+@@ -252,12 +252,32 @@ def build_auto_tts_output_path(platform) -> str:
+     from tools.tts_tool import OPUS_VOICE_PLATFORMS
+ 
+     ext = "ogg" if _platform_name(platform) in OPUS_VOICE_PLATFORMS else "mp3"
+-    audio_path = os.path.join(
+-        tempfile.gettempdir(),
+-        "hermes_voice",
+-        f"tts_reply_{uuid.uuid4().hex[:12]}.{ext}",
+-    )
+-    os.makedirs(os.path.dirname(audio_path), exist_ok=True)
++    stem = f"tts_reply_{uuid.uuid4().hex[:12]}.{ext}"
++    # HERMES_WRITE_SAFE_ROOT (Docker/sealed images) hard-denies writes
++    # outside its roots - and /tmp is not under it. The TTS tool's
++    # write-safety check would then fail EVERY auto voice reply with
++    # "output_path targets a protected credential or system path"
++    # (observed live: Discord voice-channel joins transcribed fine but
++    # never spoke - the failure is a silent JSON error, not an exception).
++    # Prefer a directory under the safe root when one is set and /tmp is
++    # outside it; the TTS tool's own default (HERMES_HOME/cache/audio)
++    # already lives under the safe root in those layouts.
++    tmp_parent = os.path.realpath(tempfile.gettempdir())
++    safe_roots = [
++        os.path.realpath(p)
++        for p in os.environ.get("HERMES_WRITE_SAFE_ROOT", "").split(os.pathsep)
++        if p
++    ]
++    if safe_roots and not any(
++        tmp_parent == r or tmp_parent.startswith(r + os.sep) for r in safe_roots
++    ):
++        from tools.tts_tool import DEFAULT_OUTPUT_DIR
++
++        base = os.path.join(DEFAULT_OUTPUT_DIR, "hermes_voice")
++    else:
++        base = os.path.join(tmp_parent, "hermes_voice")
++    audio_path = os.path.join(base, stem)
++    os.makedirs(base, exist_ok=True)
+     return audio_path
+ 
+ 
