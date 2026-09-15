@@ -138,6 +138,28 @@ Run ALL gates before any verdict. Cite evidence (file:line) per gate.
 Security gates (1–3) are non-negotiable: any finding → Request changes,
 always.
 
+### Running the gates on real code
+
+"Verify claims: actually run the tests / reproduce the check where
+feasible" means the code, not the PR description. Two shapes:
+
+- **Reproduce it yourself** in a worktree (`git-repo.sh worktree <url>`),
+  running the repo's own test/lint commands — that is the evidence a gate
+  citation needs. For a deep dive into an unfamiliar diff ("what does this
+  change actually touch, what does it break"), drive `claude` in print mode
+  with a question and have it cite `file:line` — the wrapper runs on your
+  own model through the gateway (`hermes-stack-ops`).
+- **Fan a gate out to a subagent** when it should be checked *without* the
+  framing you have already built: a security pass whose conclusion you want
+  reached independently, or a large diff whose reading would flood your
+  context. Give the child `goal` + `context` — the diff, the repo, the gate
+  text, what you already found. It knows nothing about this review.
+
+Either way **the verdict is yours, and so is the read-back.** A child's
+"looks fine" is a claim, not evidence: cite `file:line` yourself, and never
+approve on a summary you did not check. You still never push, never commit,
+never author a fix.
+
 ## Verdicts
 
 - **Request changes**: one GitHub review; every finding as a separate

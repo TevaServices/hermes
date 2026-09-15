@@ -153,13 +153,21 @@ COPY docker/hermes/review-queue.sh /usr/local/bin/review-queue.sh
 # schedule.
 COPY docker/hermes/cron-reconcile.py /usr/local/bin/cron-reconcile.py
 COPY docker/hermes/team-thread.sh /usr/local/bin/team-thread.sh
+COPY docker/hermes/prune-repos.sh /usr/local/bin/prune-repos.sh
+COPY docker/hermes/refresh-repos.sh /usr/local/bin/refresh-repos.sh
+# claude-update.sh also lands here (not only in /opt/claude-hermes/) so
+# the reconciler can seed it as the default profile's daily job script.
+COPY docker/hermes/claude-update.sh /usr/local/bin/claude-update.sh
 RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/hermes-bootstrap-profiles.sh \
                /usr/local/bin/git-repo.sh \
                /usr/local/bin/team-queue.sh \
                /usr/local/bin/review-queue.sh \
                /usr/local/bin/team-thread.sh \
-               /usr/local/bin/cron-reconcile.py
+               /usr/local/bin/cron-reconcile.py \
+               /usr/local/bin/prune-repos.sh \
+               /usr/local/bin/refresh-repos.sh \
+               /usr/local/bin/claude-update.sh
 
 # Headless Chromium for the browser tools (browser-harness / browser_exec).
 # The base image already bakes the Playwright Chromium headless shell

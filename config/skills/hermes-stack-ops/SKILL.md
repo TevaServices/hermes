@@ -98,33 +98,161 @@ baked helper — do NOT `git clone` into your own space:
   worktrees are always kept. `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`
   override the locations.
 
-**Coding delegation = Claude Code, on THIS profile's model.** The `claude`
-command is a wrapper (baked in `docker/hermes/claude*`, copied to
-`/opt/data/tools/claude-hermes/` at boot) around a volume-installed
-`claude-real` CLI (the `@anthropic-ai/claude-code` bundle, symlinked into
-`/opt/data/bin` and `/usr/local/bin`). Every invocation re-reads the
-profile's rendered `config.yaml` and pins Claude Code to exactly the model
-Hermes is running (`model.default`, e.g. `ollama/glm-5.3-flash`), routed
-through the LiteLLM gateway via `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`
-(`$LITELLM_API_KEY`) — never Anthropic directly, and never a hardcoded
-model id. The cheap-model slot (`ANTHROPIC_SMALL_FAST_MODEL`) follows
-`smart_model_routing.cheap_model`. An explicit `--model` flag always wins;
-without gateway creds it degrades to stock claude.
+### Claude Code (`claude`) — available to EVERY profile
 
-- **Usage**: prefer print mode for one-shots —
-  `claude -p 'task' --max-turns 10` in the project workdir; use tmux
-  (`tmux new-session -d -s cc …`) for multi-turn/interactive work.
-  In claude's shell, `claude_model` prints the active model.
-- **Updates are NOT pinned**: the entrypoint provisions the registry's
-  `latest` at boot (idempotent), and the no-agent cron job
-  `claude-code-update` (script `scripts/claude-update.sh` → runs
-  `/opt/data/tools/claude-hermes/claude-update.sh`, daily 4:37am) swaps
-  `claude-real` atomically when the registry moves. Silent when up to
-  date. Model/config changes reach the wrapper on the next container
-  start (config re-apply); until then pass `--model <id>` explicitly.
-- **Expected noise**: `unrecognized_model` from Claude Code on any
-  `ollama/*` model id — cosmetic; it is talking to the gateway, not
-  Anthropic. `--max-turns` is print-mode-only (prevents runaways).
+`claude` is not the developer's tool; every profile has it. It is the
+shape for **writing or changing code** — reach for it instead of editing
+files one tool call at a time. It is a wrapper (baked in
+`docker/hermes/claude*`, copied to `/opt/data/tools/claude-hermes/` at
+boot) around a volume-installed `claude-real` native binary (the
+`@anthropic-ai/claude-code-linux-arm64` platform package, symlinked into
+`/opt/data/bin` and `/usr/local/bin`).
+
+Every invocation re-reads the rendered `config.yaml` for `$HERMES_HOME` —
+so each profile gets its own model — and pins Claude Code to exactly the
+model Hermes is running (`model.default`, e.g. `ollama/glm-5.3-flash`),
+routed through the LiteLLM gateway via
+`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` (`$LITELLM_API_KEY`) — never
+Anthropic directly, and never a hardcoded model id. The cheap-model slot
+(`ANTHROPIC_SMALL_FAST_MODEL`) follows `smart_model_routing.cheap_model`.
+An explicit `--model` flag always wins; without gateway creds it degrades
+to stock claude.
+
+**Driving it**
+
+- One-shot (preferred): `claude -p '<task>' --max-turns 10`, run in the
+  project worktree. Put the acceptance criteria in the task text.
+- Multi-turn / iterative: `tmux new-session -d -s cc …`, driven with
+  send-keys / capture-pane.
+- A hard multi-step refactor may opt up a tier: `--model ollama/glm-5.3`
+  (elevated) instead of the profile's default.
+- In claude's shell, `claude_model` prints the active model;
+  `/opt/data/tools/claude-hermes/claude-model-resolve.py <config.yaml>`
+  prints provider + primary + cheap model for a given profile.
+- **You stay accountable for what lands.** After it finishes, read
+  `git diff`, run the repo's tests/lint yourself, and commit under your
+  own identity. A `claude` run is a claim until you have verified it.
+- **When NOT to use it**: `claude` writes code. For reasoning whose
+  intermediate output should stay out of your context, use
+  `delegate_task` (below); for a mechanical multi-step shell/file job,
+  `execute_code` is cheaper.
+
+**Updates are NOT pinned**: the entrypoint provisions the registry's
+`latest` at boot (idempotent), and the declared no-agent cron job
+`team: claude code update` (script `claude-update.sh`, daily 4:37am)
+swaps `claude-real` atomically when the registry moves. Silent when up to
+date. Model/config changes reach the wrapper on the next container start
+(config re-apply); until then pass `--model <id>` explicitly.
+
+**The installer's shape is load-bearing.** Since the 2.1.x cutover the
+wrapper package `@anthropic-ai/claude-code` ships only `install.cjs` + a
+`bin/claude.exe` stub; the ~230 MB native binary lives in a per-platform
+package (`@anthropic-ai/claude-code-linux-arm64` here) at
+`package/claude`. The old installer fetched `package/bundle/cli.js` from
+the wrapper tarball — a path that had stopped existing — so **every**
+install failed (boot included) and `claude-real` sat frozen for weeks.
+The installer now resolves the platform package itself, extracts
+`package/claude`, runs it for `--version`, and only then renames it over
+`claude-real`. If you ever need to debug it: a failing install prints its
+reason on **stdout** and exits non-zero, deliberately — a `no_agent` job
+discards stderr, and a failure hidden on stderr is a failure that reports
+`ok` forever.
+
+**Expected noise**: `unrecognized_model` from Claude Code on any `ollama/*`
+model id — cosmetic; it is talking to the gateway, not Anthropic.
+`--max-turns` is print-mode-only (prevents runaways).
+
+### Subagents (`delegate_task`) — fresh context, isolated
+
+Enabled for every profile. Spawns a child with its own context and its own
+terminal; only its final summary returns to the parent.
+
+- **Bounds on this stack** (`STACK_DELEGATION_DEFAULTS` in render.py;
+  a profile may override one key via `[config_extra.delegation]`):
+  `max_concurrent_children: 2` (upstream code default is **10** — this
+  host is deliberately small, and a batch is where a run's tokens
+  concentrate); `max_spawn_depth: 1` (flat — children are leaves and never
+  get `delegate_task` back); and `worktree_isolation: false`, which is
+  deliberate — see below.
+- **A child knows nothing about your conversation.** Paths, the exact
+  error, what you already ruled out — all of it goes in `goal` + `context`.
+- **Leaf children cannot** call `delegate_task`, `clarify`, `memory`,
+  `send_message`, or `cronjob_manage`. They keep `execute_code`. So a
+  subagent can never schedule anything, and can never ask a human.
+- **A child inherits the parent's `disabled_toolsets`** (delegate_tool_
+  toolsets.py) — a profile's fence is therefore also its children's fence,
+  and the model cannot grant a child a capability the parent lacks (the
+  schema has no `toolsets` parameter).
+- **Durability**: delegation is process-local — a restart does not resume a
+  running child. Work that must survive a restart is a scheduled job.
+- **Verify the summary.** A child's report is a claim; read the diff or run
+  the test before you build on it.
+
+**Why `worktree_isolation` stays OFF here.** It is not an upstream default
+key, and on this stack it actively misbehaves — because agents already work
+inside a per-session git worktree (`git-repo.sh`), not a plain clone:
+
+- Subagent worktrees would nest at
+  `<session-worktree>/.worktrees/subagent-<id>`, and
+  `_ensure_gitignore_entry()` appends `.worktrees/` to the **session
+  worktree's own** `.gitignore` — a working-tree modification in the
+  parent's tree, which the agent's next commit can sweep in.
+- A child's branch is created off the session HEAD but lives in the
+  **shared central object store**, so `hermes-subagent/*` branches are
+  visible to every profile and session instead of staying session-scoped,
+  and are lost only when `prune-repos.sh` removes the session dir.
+
+Children share the parent's cwd instead, which is already the session's
+worktree — the isolation this stack needs, it already has.
+
+### Background jobs
+
+- **In-session, long-running**: `terminal` with `background=True` and
+  `notify_on_complete=True`. The completion re-enters the conversation —
+  do not poll it.
+- **Beyond the session, or recurring**: the `cronjob` toolset
+  (`cronjob_manage`) is enabled for every profile. Two rules, enforced by
+  policy rather than by the tool:
+  - **Self-cleaning only.** A job you create removes itself once its
+    condition resolves — `cronjob_manage` with `action="remove"` on its own
+    id, then answer (upstream: a job may remove itself and still report its
+    final response). Never leave a standing recurring job behind; that is
+    unattended spend forever.
+  - **A persistent watchdog goes through the repo.** A permanent schedule
+    belongs in `config/cron.toml` in `<owner>/hermes` — rendered per
+    profile, reconciled at boot, reviewed in a PR. Ask for it. Names
+    prefixed `team: ` are the reconciler's and the only ones it prunes;
+    anything you create is yours and will never be removed for you, which
+    is precisely why it must clean up after itself.
+- **A job runs in a fresh session with no chat context**, and its FINAL
+  RESPONSE is what gets delivered — prompts must be self-contained and
+  cannot ask questions.
+- **Script-only (`no_agent`) jobs cost zero tokens**: stdout is delivered
+  verbatim and empty output is silence. Prefer that shape; wake an agent
+  only when there is a decision to make.
+- **If you write a job script, its diagnostics go on STDOUT and a real
+  failure exits non-zero.** stderr is discarded, so `echo … >&2` in a job
+  script is the same as deleting the message — and `exit 0` on a failure
+  is worse, because the run records `ok` and the job cheerfully redelivers
+  the wrong thing forever. That exact combination (`package/bundle/cli.js`
+  gone, failure on stderr, `exit 0`) hid a completely broken Claude Code
+  installer for weeks. Exit non-zero and the scheduler delivers its own
+  failure notice, deduped per signature.
+- **Delivery targets**: `bot-chat:<profile>` wakes that profile's agent
+  (use it when a decision is needed — always name the profile);
+  `discord:<chat_id>` posts into a channel as an outbound message (the
+  "adapter drops the bot's own messages" rule is about INBOUND, so it does
+  not apply) — that is what the stack's own housekeeping jobs use to
+  report to **#hermes-home** (`1548351069707567144`). `local` saves
+  without delivering. `DISCORD_HOME_CHANNEL` is the same channel, and is
+  what the gateway's own system messages (restart/shutdown notices,
+  connect-time warnings) route to.
+- **`cron.allow_agent_scheduling` stays false** (the upstream default), so
+  an agent *running inside* a cron job cannot schedule further jobs. That
+  is loop prevention, not a restriction on you — it does not gate the
+  toolset in a normal gateway session.
+- A job's `model`/`provider` are deliberately not agent-settable; do not
+  try to point unattended spend at a different model.
 
 ## Pitfalls
 

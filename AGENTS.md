@@ -362,27 +362,116 @@ deliberately.
    out twice the gate escalates to a human button even though the model
    would have approved — the model's latency, not its verdict, was deciding.
 
-### Steering profiles toward scripts
+### Steering the profiles' working style
 
 `config/SOUL_OPERATING.md` is appended to **every** rendered profile's
 `SOUL.md` by `render.py` — one source, all four profiles. SOUL.md rides the
 system prompt on every turn, unlike a skill (lazily loaded), so always-on
 behaviour belongs there; the per-profile SOUL.md stays the role document.
 
-The block tells each profile: 3+ shell/file operations for one goal → **one
-call**; a chain with logic between the calls (filter, branch, loop, retry,
-reduce output before it reaches context) → **`execute_code`**; a shell
-chore (git, builds, `gh`, docker, tests) → **write a script with
-`write_file` and run it by path** — which is also the friction-free path
-past both guards above; and never inline a big payload (heredocs, giant
-one-liners, nested `$(...)` are what the scanners mis-parse).
+The block covers four things:
 
-Why it was needed: the terminal tool's own description steers work *away*
-from shell ("do NOT use cat/head/tail — use read_file, grep/rg/find/ls —
-use search_files, sed/awk — use patch"), which turns one shell pipeline
-into three or four separate tool calls, one turn each. `execute_code` is
-the tool built to collapse exactly that and was underused relative to that
-baseline.
+- **Think before acting** — read the real file/config/response rather than
+  reasoning from the name; pick the shape before the first call; when two
+  approaches both look right, choose one and say what it traded away; and
+  never report a state change that was not read back (the same rule
+  `team-conventions` enforces for GitHub handoffs).
+- **Turn count is the cost** — 3+ shell/file operations for one goal → **one
+  call**; a chain with logic between the calls (filter, branch, loop, retry,
+  reduce output before it reaches context) → **`execute_code`**; a shell
+  chore (git, builds, `gh`, docker, tests) → **write a script with
+  `write_file` and run it by path** — which is also the friction-free path
+  past the approval guards; never inline a big payload (heredocs, giant
+  one-liners, nested `$(...)` are what the scanners mis-parse).
+- **Subagents** (`delegate_task`) where only the conclusion should return —
+  with the freshness rule (a child knows nothing about the conversation),
+  the verify-the-summary rule, and the local concurrency bound.
+- **Background jobs** — `terminal(background=True, notify_on_complete=True)`
+  in-session; a scheduled job only for work that outlives the session, and
+  then self-cleaning.
+
+Why the scripting half was needed: the terminal tool's own description
+steers work *away* from shell ("do NOT use cat/head/tail — use read_file,
+grep/rg/find/ls — use search_files, sed/awk — use patch"), which turns one
+shell pipeline into three or four separate tool calls, one turn each.
+`execute_code` is the tool built to collapse exactly that and was underused
+relative to that baseline.
+
+### Delegation + background jobs (enabled 2026-09-15)
+
+`delegation` and `cronjob` were removed from the three team profiles'
+`agent.disabled_toolsets`; the default profile already had both. Their
+fences said "teammates are dispatched via GitHub self-pull queues" and
+"digests run as scheduler jobs in the default profile" — which left the
+team roles with no way to reason in fresh context or to watch something
+over time.
+
+- **Bounds are stack-wide**: `STACK_DELEGATION_DEFAULTS` in `render.py`,
+  merged into every profile's top-level `delegation:` block exactly like
+  `STACK_CRON_DEFAULTS` / `memory` / `auxiliary`, and overridable per
+  profile via `[config_extra.delegation]`. Values:
+  `max_concurrent_children: 2`, `max_spawn_depth: 1` (flat — children are
+  leaves), `worktree_isolation: false`.
+- **Check upstream defaults against the CODE, not the prose.** In
+  `hermes_cli/config_defaults.py::DEFAULT_CONFIG["delegation"]`,
+  `max_concurrent_children` defaults to **10** (upstream's own
+  `tools/AGENTS.md` says 3 and the website says 3 — both wrong), and
+  `worktree_isolation` is not a default key at all. Re-verify at a
+  HERMES_REF bump; the docs have been wrong on both counts.
+- **`worktree_isolation` must stay OFF here.** It assumes a plain clone, but
+  agents already work in a per-session worktree: the child's worktree nests
+  at `<session-worktree>/.worktrees/subagent-<id>`,
+  `_ensure_gitignore_entry()` appends `.worktrees/` to the SESSION
+  worktree's own `.gitignore` (dirtying the parent's tree, where the next
+  commit can sweep it in), and the child's branch lands in the SHARED
+  central object store rather than staying session-scoped.
+- **A child inherits the parent's `disabled_toolsets`**
+  (`delegate_tool_toolsets.py`), so a profile fence is also a child fence —
+  and `delegation` in that list removes `delegate_task` from the profile
+  *and* from every child it could spawn. A child can never gain a
+  capability the parent lacks: the schema has no `toolsets` parameter and
+  `_build_children` hardcodes inheritance. Leaf children additionally lose
+  `clarify`, `memory`, `send_message` and `cronjob_manage`, so a subagent
+  can never schedule or ask a human.
+- **`cron.allow_agent_scheduling` stays at its default (false)** — it gates
+  only whether an agent *running inside* a cron job receives the `cronjob`
+  toolset (`cron/scheduler.py::_resolve_cron_disabled_toolsets`, loop
+  prevention). It does NOT gate the tool in a normal gateway session, so
+  `agent.disabled_toolsets` remains the reliable stack-side fence. Do not
+  "fix" a cron-job-cannot-schedule report by flipping it.
+- **Agent-created jobs are self-cleaning by policy** (SOUL_OPERATING + the
+  skill): a job an agent creates removes itself once its condition
+  resolves; a *persistent* watchdog must be declared in `config/cron.toml`
+  via a PR instead. Names prefixed `team: ` stay the reconciler's alone, so
+  nothing an agent creates is ever pruned for it — which is exactly why it
+  must clean up after itself.
+- **`claude` (Claude Code) is documented for every profile, not just
+  developer.** The wrapper was always on PATH for all of them (symlinked at
+  `/opt/data/bin/claude`, model resolved from each profile's own
+  `$HERMES_HOME/config.yaml`), but the usage instructions lived only in
+  `team-developer`. The canonical contract now lives in the stack-wide
+  `hermes-stack-ops` skill, with a "writing code → `claude`" entry in the
+  SOUL_OPERATING shape ladder, so planner and reviewer reach for it too.
+  The role split is the part that matters: `claude` writes code,
+  `delegate_task` reasons in fresh context, `execute_code` does mechanical
+  bulk.
+- **The Claude Code installer had to be rewritten (2026-09-15).** Since
+  the 2.1.x cutover `@anthropic-ai/claude-code` is no longer a CLI bundle:
+  the wrapper package ships `install.cjs` + a `bin/claude.exe` stub, and
+  the ~230 MB native binary lives in a per-platform package
+  (`@anthropic-ai/claude-code-linux-arm64`, `libc: ['glibc']`,
+  `package/claude`) that its postinstall copies over the stub.
+  `claude-update.sh` and `claude-provision.sh` both fetched
+  `package/bundle/cli.js` from the wrapper tarball — a path that stopped
+  existing — so **every** install failed, boot included, and `claude-real`
+  was frozen at 2.1.267 (Sep 9). Both now resolve the platform package
+  themselves (`uname -m` → arm64/x64, musl probed via
+  `/lib/ld-musl-*.so.1`), extract `package/claude` onto the volume, run it
+  for `--version`, and only then rename it over `claude-real`. Verified
+  live: 2.1.100-stub → 2.1.273 in 19s, and a forced failure printed to
+  stdout, exited 1, and left the previous binary intact. The install
+  failure had also been **invisible by construction** — message on stderr,
+  `exit 0` — which the new scripts fix; see the cron section below.
 
 ## Agent self-management (skills + control-plane access)
 
@@ -416,7 +505,12 @@ helper (baked at `/usr/local/bin/git-repo.sh`) manages both: `ensure`
 checkout; auto-creates a session branch `s/<slug>` when the requested
 branch is checked out elsewhere), `list`, and `prune --days N` (drop
 session dirs idle > N days, then `git worktree prune` — run weekly via
-`scripts/prune-repos.sh`, scheduled as a no-agent cron job). Overrides:
+`docker/hermes/prune-repos.sh`, scheduled as a no-agent cron job; and the
+`fetch` sweep that keeps the local branch mirrors current runs daily via
+`docker/hermes/refresh-repos.sh`). Both live in `docker/hermes/` because
+they are cron JOB scripts — `render.py` validates a declared job's script
+against that directory, and the reconciler seeds it from
+`/usr/local/bin/`. Overrides:
 `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`. Everything is
 runtime-uid-owned, so every profile reaches the same store; git's worktree
 model provides the isolation (one branch, one checkout).
@@ -548,16 +642,59 @@ it survives until the next boot, then the reconciler overwrites it.
 - Deleting a job from `config/cron.toml` DOES take effect: an empty spec
   still runs the prune pass, so removal is not the one edit that silently
   never applies.
+- **Delivery targets, and the two kinds of job.** The declared jobs split
+  by what should happen when they speak:
+  - `deliver = "bot-chat:<profile>"` — **wake that profile's agent** with
+    the output as a message it responds to. For handovers (the two
+    self-pull queues). ALWAYS name the profile — see below.
+  - `deliver = "discord:<chat_id>"` — **post into a channel** as the
+    owning profile's bot. Used by the three housekeeping jobs
+    (`team: claude code update` 04:37, `team: weekly worktree prune`
+    Mon 05:00, `team: daily repo refresh` 06:00), which report to
+    **#hermes-home** (`1548351069707567144`): there is no decision for an
+    agent to make, so waking one would be a wasted turn. This is an
+    OUTBOUND send — the "the adapter drops the bot's own messages" rule
+    that rules out bot-chat-by-Discord is about INBOUND delivery, so it
+    does not apply here.
+  - `deliver = "local"` — save, deliver nothing. `origin` is meaningless
+    for a job declared here (there was no originating chat).
+  - All three housekeeping jobs are **silent when healthy** (empty stdout
+    = no message), and all three **exit non-zero on a real failure**, so
+    the scheduler's own deduped failure notice reaches #hermes-home.
+- **A job script's diagnostics belong on STDOUT, and a failure must exit
+  non-zero.** A `no_agent` job delivers stdout verbatim and **discards
+  stderr**, so a failure printed to stderr is a failure nobody sees — and
+  `exit 0` on top of it makes the run record `ok`, which is how
+  `claude-update.sh` reported success every day for weeks while
+  `claude-real` sat frozen at 2.1.267 (see "Claude Code" below).
+- **`DISCORD_HOME_CHANNEL=1548351069707567144`** (in
+  `/etc/hermes/hermes-main.env`; template in
+  `secrets/hermes-main.env.example`) points the *gateway's own* system
+  messages at the same channel — restart/shutdown notices
+  (`PlatformConfig.gateway_restart_notification`, default true), the
+  connect-time warning, and any job delivered with `all`/`home` routing.
+  Setting `home_channel` from env is not part of the env-bridged
+  mention/threading family that leaks across profiles under
+  `GATEWAY_MULTIPLEX_PROFILES`, so it does not touch the team channels'
+  `allowed_channels`/`require_mention` fence.
+- **The three housekeeping jobs were once hand-seeded, un-prefixed, and
+  undeclared** (`claude-code-update`, `weekly git worktree prune`, `daily
+  central repo refresh`, all `deliver = origin`). That is the failure mode
+  this whole section exists to prevent: they survived only in the default
+  profile's store, `claude-update.sh` was not even in the image's
+  `/usr/local/bin` seed set, and a volume rebuild would have lost all
+  three silently. They are now declared above, `team: `-prefixed (so
+  `--prune` owns them), and their scripts are in the Dockerfile's COPY
+  list — which is the complete set of conditions for a job to be
+  recreatable from the repo alone. Verified by `mise run render`:
+  `build/default/cron.json` carries all three.
 - **The self-pull jobs are `no_agent` scripts, deliberately.** A
   `no_agent` job delivers its script's stdout verbatim and **empty stdout
   is silent** — no message, no agent turn, no tokens. That is what makes a
   5-minute poll affordable: the poll is free and the agent wakes only when
-  there is work. `deliver = "bot-chat"` injects into the job's OWN
-  profile's Bot Chat as a message the agent responds to; delivering to the
-  profile's Discord channel would NOT work, because the Discord adapter
-  drops the bot's own messages. Incidents are printed **once and then
-  deduped** via a state file, so a persistent fault wakes the team a single
-  time instead of every tick.
+  there is work. Incidents are printed **once and then deduped** via a
+  state file, so a persistent fault wakes the team a single time instead of
+  every tick.
 - **`deliver` must NAME the profile (`bot-chat:<name>`).** Bare `bot-chat`
   is documented as "the job's own profile", but on this stack the delivery
   spawns `hermes chat` with no profile argument, the child inherits the

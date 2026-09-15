@@ -46,9 +46,32 @@
 #   schedule  cron expression or interval ("30m", "every 2h")
 #   script    file seeded into <profile>/scripts/
 #   no_agent  true = script stdout delivered verbatim (see above)
-#   deliver   "bot-chat:<profile>" (ALWAYS name it — see below) |
-#             "local" (save, no delivery)
+#   deliver   one of the targets below
 #   prompt    optional; only meaningful for agent jobs (no_agent = false)
+#
+# ## Choosing a delivery target
+#
+#   bot-chat:<profile>   WAKE that profile's agent with the output as a
+#                        message it responds to. For jobs that hand over
+#                        work. ALWAYS name the profile — see below.
+#   discord:<chat_id>    Post into a Discord channel as the owning
+#                        profile's bot. This is an OUTBOUND send: the
+#                        "the adapter drops the bot's own messages" rule
+#                        that blocks bot-chat-by-Discord is about INBOUND
+#                        delivery, so it does not apply here. Used for
+#                        stack plumbing — no agent turn is wanted.
+#                        #hermes-home is 1548351069707567144.
+#   local                Save the output, deliver nothing.
+#   origin               The chat the job was created from — NOT
+#                        meaningful for a job declared here (there was no
+#                        originating chat), so do not use it.
+#
+# A job that FAILS (non-zero exit) is delivered too, via the scheduler's
+# own one-line failure notice — deduped per failure signature, so a
+# persistent fault alerts once rather than every tick. That is why a
+# script should exit non-zero when it genuinely failed, and why it must
+# print its diagnostics on STDOUT: stderr is discarded on the happy path
+# and never reaches the channel at all.
 #
 # ## deliver must NAME the profile
 #
@@ -70,6 +93,32 @@
 # Managed names are prefixed "team: " — that prefix is what `--prune`
 # treats as stack-owned, so a job the AGENT created for itself is never
 # removed by the reconciler.
+#
+# ## Two kinds of job, deliberately
+#
+# THIS FILE is for jobs the stack wants to exist permanently: the schedule
+# is reviewed in a PR, rendered, and reconciled at every boot. That
+# reviewed-permanence is the property to preserve — a standing watchdog
+# belongs here, not in an agent's turn.
+#
+# The `cronjob` toolset is nonetheless enabled for every profile (it was
+# removed from the team profiles' agent.disabled_toolsets on 2026-09-15, so
+# an agent can watch something over time without waiting on a human. The
+# rules that keep that from becoming unattended spend live in
+# config/SOUL_OPERATING.md and the hermes-stack-ops skill:
+#
+#   * SELF-CLEANING ONLY — a job an agent creates removes itself once its
+#     condition resolves (cronjob_manage action="remove" on its own id,
+#     then answer; upstream explicitly supports a job removing itself and
+#     still delivering its final response). No standing recurring jobs.
+#   * A persistent watchdog goes through THIS file, via a PR.
+#   * Prefer no_agent script jobs — they cost zero tokens (see below).
+#
+# `cron.allow_agent_scheduling` stays at its upstream default (false), so
+# an agent RUNNING INSIDE a cron job cannot schedule further jobs. That is
+# loop prevention only: it is not what gates the toolset in a normal
+# gateway session (tools/cronjob_tools.py check_cronjob_requirements), so
+# `agent.disabled_toolsets` remains the reliable stack-side fence.
 
 # Developer self-pull: poll the `status/ready` label every 5 minutes.
 # When planner routes an issue, the next tick prints it, the developer's
@@ -93,3 +142,52 @@ schedule = "*/5 * * * *"
 script = "review-queue.sh"
 no_agent = true
 deliver = "bot-chat:reviewer"
+
+# ---------------------------------------------------------------------------
+# Housekeeping. These three are the stack's own plumbing — they report to
+# #hermes-home, NOT to a profile's bot chat: there is no decision for an
+# agent to make, so waking one would be a wasted turn. `deliver =
+# "discord:<chat_id>"` is an OUTBOUND post (the adapter's "drop the bot's
+# own messages" rule is about INBOUND, so it does not apply here).
+#
+# All three were previously hand-seeded into the default profile's cron
+# store and were NOT declared here, which meant a volume rebuild silently
+# lost them (and claude-update.sh was not even in the image's
+# /usr/local/bin seed set, so the boot reconciler could never recreate
+# it). See AGENTS.md §"Scheduled jobs are GitOps-declared" for the
+# one-time migration that removed the un-prefixed originals.
+# ---------------------------------------------------------------------------
+
+# Keep Claude Code current. Silent when already current — the script's
+# stdout IS the delivery, so an up-to-date run says nothing. A FAILED
+# install prints its reason on STDOUT and exits non-zero (it used to
+# print to stderr and exit 0, which is how a totally broken install
+# reported `ok` every day for weeks while claude-real sat frozen).
+[[jobs]]
+profile = "default"
+name = "team: claude code update"
+schedule = "37 4 * * *"
+script = "claude-update.sh"
+no_agent = true
+deliver = "discord:1548351069707567144"  # #hermes-home
+
+# Weekly prune of per-session git worktrees. Silent unless it removed
+# something.
+[[jobs]]
+profile = "default"
+name = "team: weekly worktree prune"
+schedule = "0 5 * * 1"
+script = "prune-repos.sh"
+no_agent = true
+deliver = "discord:1548351069707567144"  # #hermes-home
+
+# Daily refresh of the central bare clones (local branch mirrors, which a
+# plain worktree cut would otherwise read stale). Silent when every repo
+# refreshed cleanly; prints and fails when any did not.
+[[jobs]]
+profile = "default"
+name = "team: daily repo refresh"
+schedule = "0 6 * * *"
+script = "refresh-repos.sh"
+no_agent = true
+deliver = "discord:1548351069707567144"  # #hermes-home

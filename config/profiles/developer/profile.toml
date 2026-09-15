@@ -21,13 +21,17 @@ platforms = ["discord"]
 # coding surface (file/terminal/search/web/memory/skills/discord) — its
 # only hard fences are identity + branch protection (no merges, no
 # direct main pushes) and the no-direct-contact rule. It does NOT get
-# browser, media generation, delegation, agent-side cronjob, or
-# computer_use/homeassistant.
+# browser, media generation, or computer_use/homeassistant. `delegation`
+# and `cronjob` are ENABLED (full rationale in the planner profile).
+#
+# For THIS role the split matters: writing code is still `claude` (Claude
+# Code, see team-developer) — `delegate_task` is not a second way to write
+# the implementation, it is for reasoning whose intermediate output should
+# stay out of your context. Children get no `cronjob_manage` at all, so a
+# subagent can never schedule anything.
 [config_extra.agent]
 disabled_toolsets = [
     "browser",
-    "cronjob",
-    "delegation",
     "computer_use",
     "image_gen",
     "tts",

@@ -65,6 +65,48 @@ STACK_CRON_DEFAULTS = {
     # 600 (upstream) kills a real agent turn mid-flight; see render_profile.
     "bot_chat_delivery_timeout_seconds": 3600,
 }
+# Merged into every rendered config (see render_profile) — a profile can
+# override any individual key via [config_extra.delegation]. Top-level
+# `delegation:` (a sibling of `cron:`/`agent:`), read by
+# tools/delegate_tool_config.py::_load_config as
+# load_config_readonly().get("delegation").
+#
+# Subagent delegation is ENABLED on every profile (the team profiles
+# dropped it from agent.disabled_toolsets on 2026-09-15), so these are the
+# stack's bounds on it. Upstream defaults differ from its own docs here —
+# the code is authoritative (hermes_cli/config_defaults.py
+# DEFAULT_CONFIG["delegation"]): max_concurrent_children defaults to **10**
+# (not the 3 some docs claim), and worktree_isolation is absent from
+# DEFAULT_CONFIG entirely. Verify against the code, not the prose, at a
+# HERMES_REF bump.
+STACK_DELEGATION_DEFAULTS = {
+    # Upstream 10. This host is deliberately right-sized small and a
+    # parallel batch is where a run's tokens concentrate, so fan-out is
+    # capped at 2 — an agent that wants more must be doing genuinely
+    # independent work that a pair cannot cover.
+    "max_concurrent_children": 2,
+    # Upstream 1 = flat (parent -> leaf children; a child never gets
+    # delegate_task back). Stated explicitly because it is the cheap shape
+    # and we want it to stay that way: an orchestrator child re-adds the
+    # delegation toolset for itself, deepening the tree and multiplying
+    # spend.
+    "max_spawn_depth": 1,
+    # Pinned OFF deliberately. It is NOT a default upstream key, so leaving
+    # it unset means inheriting whatever the base image does next; and on
+    # THIS stack it actively misbehaves, because agents already work inside
+    # a per-session git worktree (git-repo.sh), not a plain clone:
+    #   * subagent worktrees would nest at
+    #     <session-worktree>/.worktrees/subagent-<id>, and
+    #     _ensure_gitignore_entry() appends ".worktrees/" to the SESSION
+    #     worktree's own .gitignore — a working-tree modification in the
+    #     parent's tree, which the agent's next commit can sweep in;
+    #   * a child's branch is created off the session HEAD but lives in the
+    #     SHARED central object store, so it is visible to every profile
+    #     and session rather than staying session-scoped.
+    # Children share the parent's cwd instead, which is already the
+    # session's worktree — the isolation the stack needs it already has.
+    "worktree_isolation": False,
+}
 # `profile` is dropped: the rendered file is already per-profile.
 _JOB_FIELDS = ("name", "schedule", "script", "no_agent", "deliver", "prompt")
 
@@ -493,6 +535,13 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     cron_cfg = dict(STACK_CRON_DEFAULTS)
     cron_cfg.update(config.get("cron") or {})
     config["cron"] = cron_cfg
+
+    # Subagent delegation bounds for EVERY profile — see
+    # STACK_DELEGATION_DEFAULTS. Merged (not replaced) so a profile may
+    # still override an individual key via [config_extra.delegation].
+    delegation_cfg = dict(STACK_DELEGATION_DEFAULTS)
+    delegation_cfg.update(config.get("delegation") or {})
+    config["delegation"] = delegation_cfg
 
     # Memory: provider plugin + built-in store caps for EVERY profile.
     # The memory-provider plugin (plugins/memory/honcho, agent_init.py

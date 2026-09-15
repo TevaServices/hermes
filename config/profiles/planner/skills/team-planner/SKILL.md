@@ -82,6 +82,25 @@ the issue sitting invisibly in the backlog — and an idle developer looks
 exactly like a developer with nothing to do. If `status/ready` is
 missing, that is the incident; fix it or raise it, don't move on.
 
+## Reading code (read-only — use `claude`)
+
+Your design sections must be self-sufficient, and they are only as good as
+your understanding of the code they land in. You have read-only code
+access, so **ask the codebase rather than reasoning from the issue text**:
+"where does X live, how does Y currently work, what would Z touch" is a
+question, not an implementation.
+
+Drive `claude` in the project worktree in print mode with a question
+(`claude -p '<question>' --max-turns 10`), and ask it to cite `file:line`.
+It runs on your own model through the gateway; see `hermes-stack-ops` for
+the wrapper's contract.
+
+Two hard limits: **do not write code** — you design, developer implements —
+and **do not commit**. If you want a second opinion on a design that spans
+several files, `delegate_task` is the better shape (a child that reads the
+code with fresh context and hands you a conclusion, instead of that reading
+flooding your context).
+
 ## Roadblock intake
 
 When developer comments a roadblock decision
@@ -98,11 +117,13 @@ When developer comments a roadblock decision
 
 ## Daily standup digest (weekdays ~09:00 ET — NOT yet scheduled)
 
-> These digests are **not** cron jobs today. The only declared jobs are
-> the two `no_agent` self-pull queues in `config/cron.toml`; a digest is
-> an agent job (it needs an inference turn), so scheduling it is a
-> standing token cost that has not been approved. Run this procedure on
-> request (`hermes cron run` will not help — there is no job).
+> These digests are **not** cron jobs today. The declared jobs in
+> `config/cron.toml` are the two `no_agent` self-pull queues plus three
+> token-free housekeeping scripts (Claude Code update, worktree prune,
+> repo refresh); a digest is an agent job (it needs an inference turn), so
+> scheduling it is a standing token cost that has not been approved. Run
+> this procedure on request (`hermes cron run` will not help — there is no
+> job).
 
 Aggregate across ALL onboarded repos (search-based, no per-board crawl):
 

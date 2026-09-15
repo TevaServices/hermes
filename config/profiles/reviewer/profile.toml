@@ -19,13 +19,14 @@ platforms = ["discord"]
 # (agent.disabled_toolsets — applies after per-platform tool config and
 # always removes the listed toolsets). The reviewer reads and runs
 # (file/terminal/search/web/memory/skills/discord) but never writes to
-# git and gets no browser, media generation, delegation, agent-side
-# cronjob, or computer_use/homeassistant.
+# git and gets no browser, media generation, or computer_use/homeassistant.
+# `delegation` and `cronjob` are ENABLED (full rationale in the planner
+# profile). For this role a subagent is the natural shape for a gate that
+# must be checked WITHOUT inheriting the framing of the review you are
+# already carrying — but the verdict, and the read-back, stay yours.
 [config_extra.agent]
 disabled_toolsets = [
     "browser",
-    "cronjob",
-    "delegation",
     "computer_use",
     "image_gen",
     "tts",

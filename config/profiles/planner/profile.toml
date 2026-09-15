@@ -17,16 +17,25 @@ platforms = ["discord"]
 [config_extra]
 # Team-role toolset fence: the DOCUMENTED global-disable key
 # (agent.disabled_toolsets — applies after per-platform tool config and
-# always removes the listed toolsets). The team roles are deliberately
-# narrow: no browser (web reads ride the web toolset / Firecrawl MCP),
-# no media generation, no subagent delegation (teammates are dispatched
-# via GitHub self-pull queues), no agent-side cronjob (digests run as
-# scheduler jobs in the default profile), no computer_use/homeassistant.
+# always removes the listed toolsets). The team roles stay narrow: no
+# browser (web reads ride the web toolset / Firecrawl MCP), no media
+# generation, no computer_use/homeassistant.
+#
+# `delegation` and `cronjob` are deliberately ENABLED — removed from this
+# list on 2026-09-15. Subagents are fresh-context reasoning (a child that
+# cannot inherit the parent's wrong assumptions), and a scheduled job is
+# how a role watches something over time. Both are bounded, not open:
+#   * children — concurrency 2, flat (no orchestrators), and NO worktree
+#     isolation on this stack (see STACK_DELEGATION_DEFAULTS in render.py
+#     and AGENTS.md §Delegation);
+#   * jobs — self-cleaning only, never a standing watchdog; a permanent
+#     schedule belongs in config/cron.toml via a PR. See SOUL_OPERATING.md.
+# Leaving `delegation` in this list would be load-bearing the other way: a
+# child INHERITS the parent's disabled_toolsets, so it would remove
+# delegate_task from this profile and from every child it could spawn.
 [config_extra.agent]
 disabled_toolsets = [
     "browser",
-    "cronjob",
-    "delegation",
     "computer_use",
     "image_gen",
     "tts",
