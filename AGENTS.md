@@ -335,19 +335,32 @@ deliberately.
    `render.py` seeds `command_allowlist` with `tirith:<rule_id>` keys for
    every profile. `approval.py` loads that list at *module import*, and a
    Tirith finding's approval key is `tirith:<rule_id>`, so listing a key
-   permanently auto-approves that one rule. The six seeded rules are the
-   ones that actually fired on this stack's own legitimate work:
+   permanently auto-approves that one rule. The twelve seeded rules are the
+   ones that actually fired on this stack's own legitimate work (mined from
+   the live tirith audit log, Sep 2026):
    `analysis_incomplete` (the `$(...)` / dynamic-command shape),
    `plain_http_to_sink` (our internal HTTP services),
    `mass_file_deletion` (worktree/build churn), `curl_pipe_shell`,
-   `pipe_to_interpreter`, `blast_find_delete`. `tirith:mass_file_deletion`
-   is the most aggressive inclusion and the first to drop if the
-   ransomware-shaped burst check is wanted back — the unconditional
-   hardline floor still blocks `rm -rf /` either way. Extend by hand from
-   `tirith audit stats --format json` → `top_rules`. Note
+   `pipe_to_interpreter`, `blast_find_delete`, `trailing_dot_whitespace` +
+   `schemeless_to_sink` (cosmetic findings on benign compound commands like
+   `cd /opt/data/mach && go build ./...`), `data_exfiltration` (the
+   komodo-ops skill's internal-API POST shape),
+   `interpreter_suspicious_inline_exec` (`python -c`), `lookalike_tld`
+   (go.dev), `archive_extract`. `tirith:mass_file_deletion` is the most
+   aggressive inclusion and the first to drop if the ransomware-shaped burst
+   check is wanted back — the unconditional hardline floor still blocks
+   `rm -rf /` either way. Deliberately NOT seeded: `credential_file_sweep`
+   and `sensitive_env_export` (reading credentials / exporting secrets stays
+   gated), and hermes' own recursive-delete pattern (rm -rf prompts stay as
+   the safety net; a prompt with an "Always" option is click-once-per-host).
+   Extend by hand from `tirith audit stats --format json` → `top_rules`. Note
    `approvals.mode` is the default `smart`, so heredoc / `-e -c` patterns
    already auto-approve; only Tirith's HIGH/CRITICAL findings were
-   demanding a human.
+   demanding a human. Render.py also raises `auxiliary.approval.timeout`
+   to 60s stack-wide (upstream default 30s, retried once): smart approval's
+   aux call goes through litellm → Ollama Cloud, and when that call times
+   out twice the gate escalates to a human button even though the model
+   would have approved — the model's latency, not its verdict, was deciding.
 
 ### Steering profiles toward scripts
 

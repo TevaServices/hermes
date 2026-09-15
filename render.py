@@ -88,6 +88,29 @@ TIRITH_PREAPPROVED_RULES = [
     "tirith:curl_pipe_shell",
     "tirith:pipe_to_interpreter",
     "tirith:blast_find_delete",
+    # Second batch (Sep 2026), from the tirith audit log over the
+    # intervening week — the rules that kept demanding human buttons on
+    # routine work:
+    #   trailing_dot_whitespace / schemeless_to_sink (63 each) — fire on
+    #     benign compound commands like `export PATH=… && cd /opt/data/mach
+    #     && go build ./...` (a trailing-dot path plus a scheme-less URL).
+    #   data_exfiltration (12) — the komodo-ops skill's own call shape
+    #     (`curl -X POST http://komodo-core-1:9120/... -H @/etc/komodo-auth-header`);
+    #     "exfiltration" is our internal control-plane API, not the internet.
+    #   interpreter_suspicious_inline_exec (2) — `python -c`, the shape
+    #     SOUL_OPERATING.md steers toward via execute_code.
+    #   lookalike_tld (2) — go.dev in docs lookups. archive_extract (3) —
+    #     worktree/build tarballs.
+    # Deliberately NOT pre-approved: credential_file_sweep and
+    # sensitive_env_export (reading credentials and exporting secrets should
+    # stay gated), and hermes' own recursive-delete pattern (rm -rf prompts
+    # stay as the safety net; "Always" is offered there).
+    "tirith:trailing_dot_whitespace",
+    "tirith:schemeless_to_sink",
+    "tirith:data_exfiltration",
+    "tirith:interpreter_suspicious_inline_exec",
+    "tirith:lookalike_tld",
+    "tirith:archive_extract",
 ]
 
 
@@ -485,6 +508,26 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     }
     memory_cfg.update(mem_extra)
     config["memory"] = memory_cfg
+
+    # Smart-approval aux budget for EVERY profile.
+    #
+    # Phase 2.5 smart approval (tools/approval.py) asks the auxiliary LLM to
+    # judge a tirith/warning prompt before escalating to a human button, and
+    # `auxiliary.approval.timeout` (auxiliary_client.py _get_task_timeout)
+    # bounds that call at the upstream default of 30s. The call retries once,
+    # so a slow upstream burns ~90s and then the gate escalates anyway
+    # ("Smart approvals: LLM call failed after 93.3s ... escalating") — the
+    # latency of the aux model, not its verdict, decides whether a prompt
+    # reaches a human. 60s survives Ollama Cloud latency. Merged so a profile
+    # may override via [config_extra.auxiliary.approval].
+    aux_extra = profile.get("config_extra", {}).get("auxiliary", {}) or {}
+    approval_cfg = {"timeout": 60}
+    approval_cfg.update(aux_extra.get("approval") or {})
+    aux_cfg = {"approval": approval_cfg}
+    for key, value in aux_extra.items():
+        if key != "approval":
+            aux_cfg[key] = value
+    config["auxiliary"] = aux_cfg
 
     # Tirith pre-approvals (see TIRITH_PREAPPROVED_RULES). UNION with
     # anything the profile set via [config_extra.command_allowlist], so a

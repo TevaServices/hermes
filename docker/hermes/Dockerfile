@@ -38,7 +38,21 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # Each must be re-anchored at every HERMES_REF bump, and DELETED once
 # upstream adopts the fix (the build says so — see below).
 #
-# THREE patches currently.
+# FOUR patches currently.
+#
+# 4. plugins/platforms/discord/adapter.py — self-heal voice after Discord
+# externally terminates the session. Discord kicks voice sessions
+# server-side ("We were externally disconnected from voice" — discord.py
+# logs the reason at DEBUG only, so at INFO the only trace is "The voice
+# handshake is being terminated"): the receiver dies with the session, the
+# bot goes deaf AND mute while its voice-mode state still says on, and the
+# next auto voice reply silently degrades to a file attachment (observed
+# live 2026-09-14: a joined session was externally disconnected ~6 minutes
+# in, seconds before the reply landed). The patch (a) logs the external
+# disconnect at INFO, (b) rejoins when the binding is still active and an
+# allowed user is present in voice (on the disconnect event with teardown
+# grace, when a user (re)joins while we hold a dead binding, and on demand
+# from play_tts before falling back to an attachment).
 #
 # 3. gateway/platforms/base.py — build_auto_tts_output_path() must not
 # point /tmp when HERMES_WRITE_SAFE_ROOT is set. This stack sets
