@@ -22,6 +22,20 @@
 #                    v2026.8.31 hard-rejects any configured window under
 #                    64K (MINIMUM_CONTEXT_LENGTH), and compaction math
 #                    derives from the stated window.
+#                    render.py emits EVERY alias here into the rendered
+#                    config's `model_overrides` block (the upstream key for
+#                    per-provider+model windows, resolution step 0b), which
+#                    is what makes this file the ONE source of truth: the
+#                    profile's own model reads it as model.context_length,
+#                    the cheap lane / auxiliary models / any /model switch
+#                    read it from model_overrides, and the `claude` wrapper
+#                    reads it back for CLAUDE_CODE_MAX_CONTEXT_TOKENS —
+#                    Claude Code knows none of these ollama/* ids and would
+#                    otherwise assume a 200K window and auto-compact a 1M
+#                    session five times too early. A model the wrapper is
+#                    asked for with --model that is NOT declared here gets
+#                    no window at all (it compacts early rather than
+#                    overrunning the provider), so declare it before use.
 #   description    — free-form note shown by `mise run render`
 #
 # Routing policy (who runs what):

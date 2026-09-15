@@ -5,8 +5,12 @@
 # Resolution order, every invocation:
 #   1. /opt/data/config.yaml (rendered, baked at image build — source of
 #      truth) via claude-model-resolve: provider must be the gateway;
-#      primary model id + cheap-model id from smart_model_routing.
-#   2. Any explicit --model the caller passes always wins.
+#      primary model id + cheap-model id from smart_model_routing; and the
+#      running model's context window from model_overrides, which becomes
+#      CLAUDE_CODE_MAX_CONTEXT_TOKENS (Claude Code knows none of these
+#      ollama/* ids and would otherwise assume 200K).
+#   2. Any explicit --model the caller passes always wins — including for
+#      the window, so the two never disagree.
 #   3. No config / missing LITELLM_API_KEY → fall back to stock claude
 #      (which errors on its own if it has no Anthropic auth).
 #
@@ -71,15 +75,60 @@ fi
 
 export ANTHROPIC_BASE_URL="http://litellm:4000"
 export ANTHROPIC_AUTH_TOKEN="$LITELLM_API_KEY"
-# The routed model's true window is 1M on the gateway; without this Claude
-# Code assumes Anthropic's defaults and compacts far too early.
 export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
 export MAX_MCP_OUTPUT_TOKENS=50000
 # Claude Code's small/background-model slot.
 export ANTHROPIC_SMALL_FAST_MODEL="$cheap"
 
-# Pin the model explicitly unless the caller already chose one.
-if [ "${1:-}" != "mcp" ] && ! printf '%s\n' "$@" | grep -q -- '--model'; then
+# Which model actually runs: a --model the caller passed wins, otherwise we
+# pin this profile's own primary below. The window has to follow the model,
+# not the config default, so an override is read here and the pin skipped.
+arg_model=""
+if [ "${1:-}" != "mcp" ]; then
+    _want_value=""
+    for _arg in "$@"; do
+        case "$_arg" in
+            --model=*) arg_model=${_arg#--model=}; break ;;
+            --model)   _want_value=1; continue ;;
+        esac
+        if [ -n "$_want_value" ]; then arg_model=$_arg; break; fi
+    done
+fi
+model=${arg_model:-$primary}
+
+# Tell Claude Code this model's REAL context window.
+#
+# Without it Claude Code assumes 200K for anything its own model catalogue
+# doesn't describe — which is every ollama/* id here — and auto-compacts a
+# 1M-context session five times too early. The number comes from the same
+# rendered config as the model: render.py emits `model_overrides` out of
+# config/models.toml's per-model `context_length`, the window the provider
+# actually reports (see models.toml for how those were verified).
+#
+# A model id the config does not declare leaves the variable UNSET rather
+# than guessed: compacting earlier than necessary is merely wasteful,
+# claiming a window the provider does not have overruns it.
+window=$("$CLAUDE_HERMES_DIR/claude-model-resolve.py" --window "$model" "$CONFIG" 2>/dev/null) || window=""
+case "$window" in
+    ''|*[!0-9]*) window="" ;;
+esac
+if [ -n "$window" ]; then
+    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$window"
+elif [ -n "$arg_model" ]; then
+    err "config declares no context window for '$arg_model' — leaving CLAUDE_CODE_MAX_CONTEXT_TOKENS unset (declare the model in config/models.toml)"
+fi
+
+# What this session is actually running, for claude's own shell
+# (`claude_model` / `claude_window`, see claude-shell-functions.sh). The
+# resolver's own default path is /opt/data/config.yaml — the DEFAULT
+# profile — so a helper that re-resolves would report the wrong model in a
+# named profile's session.
+export CLAUDE_HERMES_CONFIG="$CONFIG"
+export CLAUDE_HERMES_MODEL="$model"
+export CLAUDE_HERMES_WINDOW="$window"
+
+# Pin the profile's model unless the caller already chose one.
+if [ "${1:-}" != "mcp" ] && [ -z "$arg_model" ]; then
     set -- "$@" --model "$primary"
 fi
 

@@ -53,7 +53,10 @@ route. New Ollama Cloud models need no gateway config; add an alias (with
 the TRUE context window) to models.toml to use one. Verify windows with
 `POST https://ollama.com/api/show` (`model_info.*.context_length`); Hermes
 hard-rejects windows below 64k, and a stated window larger than reality
-breaks compaction.
+breaks compaction. `render.py` turns every alias into the rendered config's
+`model_overrides` block, so that one line is what Hermes (the cheap lane,
+the aux models, any `/model` switch) and the `claude` wrapper both read —
+the window is never guessed.
 
 **Memory is Honcho via MCP** (`mcp_honcho_*` tools) — the built-in Honcho
 integration is deliberately disabled (overlay `honcho.json`). Web work goes
@@ -118,6 +121,18 @@ Anthropic directly, and never a hardcoded model id. The cheap-model slot
 An explicit `--model` flag always wins; without gateway creds it degrades
 to stock claude.
 
+It also sets **`CLAUDE_CODE_MAX_CONTEXT_TOKENS`** to the running model's
+real window, out of the config's `model_overrides` block (which
+`render.py` emits from every `context_length` in `config/models.toml`).
+Claude Code's own model catalogue describes none of the `ollama/*` ids, so
+without this it assumes **200k** and auto-compacts a 1M-context session
+five times too early. The window follows the model, `--model` included —
+never the profile default — and a model the config does not declare
+leaves the variable unset rather than guessed. So: **a new model needs an
+entry in `config/models.toml`** (id + true window) before you can run it
+here; that one line serves Hermes' own resolution, the cheap/auxiliary
+lanes, and `claude`.
+
 **Driving it**
 
 - One-shot (preferred): `claude -p '<task>' --max-turns 10`, run in the
@@ -128,7 +143,9 @@ to stock claude.
   (elevated) instead of the profile's default.
 - In claude's shell, `claude_model` prints the active model;
   `/opt/data/tools/claude-hermes/claude-model-resolve.py <config.yaml>`
-  prints provider + primary + cheap model for a given profile.
+  prints provider + primary + cheap model for a given profile, and
+  `… --window <model-id> <config.yaml>` prints the window the wrapper will
+  export for that model (exit 1 = not declared, so no window will be set).
 - **You stay accountable for what lands.** After it finishes, read
   `git diff`, run the repo's tests/lint yourself, and commit under your
   own identity. A `claude` run is a claim until you have verified it.
@@ -159,8 +176,12 @@ discards stderr, and a failure hidden on stderr is a failure that reports
 `ok` forever.
 
 **Expected noise**: `unrecognized_model` from Claude Code on any `ollama/*`
-model id — cosmetic; it is talking to the gateway, not Anthropic.
-`--max-turns` is print-mode-only (prevents runaways).
+model id — cosmetic; it is talking to the gateway, not Anthropic. (If you
+instead see its *auto-compact* notice — "keeps this session within 200k
+tokens (the context window it assumes)" — the window lookup did not apply:
+the model is missing from `config/models.toml`, or you bypassed the wrapper
+by calling `claude-real` directly.) `--max-turns` is print-mode-only
+(prevents runaways).
 
 ### Subagents (`delegate_task`) — fresh context, isolated
 

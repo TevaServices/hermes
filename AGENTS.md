@@ -199,7 +199,17 @@ checking the host's actual resources.
   actual model via `POST ollama.com/api/show` →
   `model_info.*.context_length`). Never set a window below the provider's:
   v2026.8.31 hard-rejects anything under 64K
-  (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`).
+  (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`). `render.py`
+  emits every alias into the rendered config's **`model_overrides`** block
+  — the upstream key for per-provider+model windows, which
+  `agent/model_metadata.get_model_context_length` consults at resolution
+  step 0b, ahead of every probe and the 256k fallback (verified live
+  against the running image). That makes `models.toml` the one source of
+  truth for all three consumers: the profile's own model
+  (`model.context_length`), the cheap lane / auxiliary models / any `/model`
+  switch (`model_overrides`), and the `claude` wrapper's
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (below). Declare a model there before
+  using it — an undeclared window is not guessed.
 - **Multiplexing boot noise is benign**: with `GATEWAY_MULTIPLEX_PROFILES`
   on, the tool registry's availability check_fns probe at gateway boot
   before any profile secret scope exists and fail closed with
@@ -455,6 +465,24 @@ over time.
   The role split is the part that matters: `claude` writes code,
   `delegate_task` reasons in fresh context, `execute_code` does mechanical
   bulk.
+- **The wrapper tells Claude Code the real context window (2026-09-15).**
+  It exported `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` and pinned the
+  model, but never `CLAUDE_CODE_MAX_CONTEXT_TOKENS` — and Claude Code's
+  own model catalogue describes none of the `ollama/*` ids, so it assumed
+  **200k** and would auto-compact a 1M-context session five times too
+  early (its own stderr said so: "auto-compact keeps this session within
+  200k tokens (the context window it assumes)"). The wrapper now resolves
+  the window for the model that actually runs — a caller's `--model` wins
+  over the profile's primary, for the window as well as the model, so the
+  two can never disagree — from `model_overrides`, which `claude-model-
+  resolve.py --window` reads out of the same rendered config that supplies
+  the model. A window the config does not declare is left **unset** rather
+  than guessed: compacting early is wasteful, claiming a window the
+  provider does not have overruns it. Verified live on the host: the
+  200k warning is present on a stock invocation and absent through the
+  wrapper, and `--model ollama/nemotron-3-ultra` correctly yields 262144
+  while the 1M GLMs yield 1048576. The `unrecognized_model` stderr line
+  survives (it is about the catalogue, not the window) — still cosmetic.
 - **The Claude Code installer had to be rewritten (2026-09-15).** Since
   the 2.1.x cutover `@anthropic-ai/claude-code` is no longer a CLI bundle:
   the wrapper package ships `install.cjs` + a `bin/claude.exe` stub, and

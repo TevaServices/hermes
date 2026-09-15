@@ -414,6 +414,41 @@ def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[d
     return model_block, custom_providers
 
 
+def build_model_overrides(models: dict) -> dict:
+    """Return the `model_overrides` config block for every declared alias.
+
+    `models.toml` states each model's TRUE provider window as
+    `context_length`; this is the same value in the shape Hermes reads:
+    `model_overrides.<provider>.<model_id>.context_window`. One source, two
+    consumers:
+
+      * Hermes' own context-length resolution
+        (agent/model_metadata.get_model_context_length) consults this block
+        at step 0b — before any probe, catalogue lookup, or the 256K
+        fallback. So the cheap lane, the auxiliary models, and any /model
+        switch get the real window instead of a guess (the catalogue probe
+        cannot resolve an ID through the litellm base_url, which is why
+        models.toml states the windows at all).
+      * The `claude` wrapper reads it back to export
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS. Claude Code's own model catalogue
+        does not know any of these `ollama/*` ids, so without it Claude
+        Code assumes 200K and auto-compacts a 1M-context session five
+        times too early.
+
+    Grouped by provider because that is the block's shape; every alias in
+    models.toml currently rides the litellm gateway.
+    """
+    overrides: dict[str, dict] = {}
+    for model in models.values():
+        window = model.get("context_length")
+        if not window:
+            continue
+        overrides.setdefault(model["provider"], {})[model["model"]] = {
+            "context_window": window
+        }
+    return overrides
+
+
 def build_mcp_servers(profile: dict, integrations: dict) -> dict:
     servers = {}
     for key in profile.get("integrations", []):
@@ -514,6 +549,17 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
+
+    # Per-model context windows for EVERY alias in config/models.toml, in
+    # the shape Hermes reads (see build_model_overrides). Merged per
+    # provider+model rather than replaced, so a profile may add or correct
+    # one entry via [config_extra.model_overrides] without dropping the
+    # rest of the catalogue.
+    model_overrides = build_model_overrides(models)
+    for provider, entries in (config.get("model_overrides") or {}).items():
+        if isinstance(entries, dict):
+            model_overrides.setdefault(provider, {}).update(entries)
+    config["model_overrides"] = model_overrides
 
     # Cron: raise the bot-chat delivery cap for EVERY profile.
     #
