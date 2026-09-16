@@ -56,6 +56,16 @@ enabled = "on"
 [config_extra.browser]
 cdp_url = "http://127.0.0.1:9333"
 
+# --- Voice (TTS) ---------------------------------------------------------------
+# Edge TTS (free, no key needed): Ava (expressive conversational voice —
+# replaces the flat default Aria) at +20% rate (tts.speed 1.2 → edge rate
+# "+20%"). Rendered verbatim into config.yaml by render.py.
+[config_extra.tts]
+provider = "edge"
+speed = 1.2
+[config_extra.tts.edge]
+voice = "en-US-AvaMultilingualNeural"
+
 # Least-costly-while-effective routing: short, single-line messages with
 # no code/tools/URLs go to the cheap model (the low-intelligence tier —
 # "nano"); everything else uses the primary. `provider` is the named
