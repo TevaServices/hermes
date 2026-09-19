@@ -180,9 +180,14 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
 # path; the supervised chromium-cdp service below serves CDP on
 # 127.0.0.1:9333 (enabled per-deploy via HERMES_CHROMIUM_CDP, like the
 # dashboard service).
-RUN SHELL_DIR="$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux 2>/dev/null | sort -V | tail -1)" \
- && test -x "$SHELL_DIR/headless_shell" \
- && ln -sf "$SHELL_DIR/headless_shell" /usr/local/bin/chromium-headless-shell
+# Playwright >= 1.62 (v2026.9.x base) changed the baked layout:
+#   old: chromium_headless_shell-1234/chrome-linux/headless_shell
+#   new: chromium_headless_shell-1243/chrome-headless-shell-linux-<arch>/chrome-headless-shell
+# Match both shapes; the newest wins.
+RUN SHELL="$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux/headless_shell 2>/dev/null | sort -V | tail -1)" \
+ || SHELL="$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-headless-shell-linux-*/chrome-headless-shell 2>/dev/null | sort -V | tail -1)" \
+ && test -x "$SHELL" \
+ && ln -sf "$SHELL" /usr/local/bin/chromium-headless-shell
 
 # Claude Code wrapper tooling (coding-agent delegation on the profile's
 # own model via the LiteLLM gateway). Staged under /opt/claude-hermes
