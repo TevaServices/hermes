@@ -103,17 +103,21 @@ and render.py compiles them into what the agent reads — at IMAGE BUILD time:
 
 - **`config/providers.toml`** — every endpoint Hermes can reach: base URL
   (empty = provider default), API mode, and *which env var name* holds its key.
-- **`config/models.toml`** — memorable aliases (`fast`, `smart`, `coder`, …)
-  mapped to provider-specific model IDs.
-- **`config/profiles/<name>/profile.toml`** — one agent: `model = "smart"`,
+- **`config/models.toml`** — memorable aliases mapped to provider-specific
+  model IDs, one per tier: `nano` (cheap, short/simple turns), `baseline`
+  (default work), `elevated` (hard reasoning), `ultra` (small-context
+  targeted work). Each entry also states the model's real provider context
+  window — render.py needs it to size the agent's context correctly.
+- **`config/profiles/<name>/profile.toml`** — one agent: `model = "baseline"`,
   `integrations = ["honcho", "firecrawl"]`, gateway platforms, and an optional
   `[config_extra]` passthrough for anything Hermes-specific. `SOUL.md` sits
   beside it.
 
-Switching an agent from Claude on OpenRouter to a local Ollama model is a
-one-line diff in one TOML file, then `git commit && git push` — the image
-rebuild renders the new overlay, the deploy recreates the container, and the
-entrypoint applies the overlay to the profile dir on start.
+Switching an agent's model — a different provider, a different tier, a
+local model instead of a hosted one — is a one-line diff in one TOML file,
+then `git commit && git push`: the image rebuild renders the new overlay,
+the deploy recreates the container, and the entrypoint applies the overlay
+to the profile dir on start.
 
 ## Before you deploy: the values you must set
 
