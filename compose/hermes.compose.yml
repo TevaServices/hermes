@@ -60,6 +60,15 @@ services:
       # docker/hermes/entrypoint.sh) because s6 services run as the
       # unprivileged `hermes` user.
       GITHUB_APP_PEM_MOUNT: /run/hermes-pem/github-app-main.pem
+      # Where the agent finds the Komodo control-plane auth header. Declared
+      # HERE, in the container environment, and not exported by the entrypoint:
+      # s6-overlay services start from the container's environment (via
+      # /run/s6/container_environment), NOT from the entrypoint process's
+      # exports — so an `export` in entrypoint.sh is invisible to the gateway
+      # and to its tool subprocesses. The entrypoint's job is the FILE (copy it
+      # off the unreadable read-only mount into the runtime-owned home on every
+      # boot); pointing at that file is configuration. See the komodo-ops skill.
+      KOMODO_AUTH_HEADER: /opt/data/home/komodo-auth-header
       # Headless Chromium CDP sidecar for the browser tools — see
       # docker/hermes/s6-rc.d/chromium-cdp/ (binds 127.0.0.1 only; the
       # rendered browser.cdp_url points the agent at it).

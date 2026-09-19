@@ -192,9 +192,15 @@ fi
 # the s6 services (UID 10000) get "curl: option -H: error encountered when
 # reading a file" — which reads to an agent as "the Komodo API key is not
 # working". Nothing is wrong with the key; the agent simply cannot open the
-# file. Copy it onto the data volume (which the runtime owns) and aim
-# KOMODO_AUTH_HEADER at the copy; the mount stays the source of truth and is
-# refreshed here on every boot.
+# file. Copy it onto the data volume (which the runtime owns); the mount
+# stays the source of truth and is refreshed here on every boot.
+#
+# This script's job is the FILE ONLY. The env var that points at it is
+# declared in compose (hermes-main `environment:`), because that is the only
+# place s6 services read their environment from — s6-overlay starts them
+# from /run/s6/container_environment, so an `export` here would never reach
+# the gateway or its tool subprocesses. (Learned the hard way: exporting it
+# looked right, logged right, and was invisible to every service.)
 #
 # DEFAULT PROFILE ONLY, deliberately. komodo-ops is a default-profile skill,
 # so the control-plane credential belongs to that profile alone — the team
@@ -207,17 +213,6 @@ if [ -r "$KOMODO_MOUNT" ]; then
   cp -f "$KOMODO_MOUNT" "$KOMODO_DEST"
   chown "$RUNTIME_UID:$RUNTIME_UID" "$KOMODO_DEST" "$HERMES_HOME/home"
   chmod 600 "$KOMODO_DEST"
-  export KOMODO_AUTH_HEADER="$KOMODO_DEST"
-  # Also land it in the default profile's .env: the gateway loads that with
-  # override=True, and a tool subprocess that re-execs through a fresh login
-  # shell otherwise loses an export made only in this process.
-  if [ -f "$HERMES_HOME/.env" ]; then
-    if grep -q '^KOMODO_AUTH_HEADER=' "$HERMES_HOME/.env"; then
-      sed -i "s#^KOMODO_AUTH_HEADER=.*#KOMODO_AUTH_HEADER=${KOMODO_DEST}#" "$HERMES_HOME/.env"
-    else
-      printf 'KOMODO_AUTH_HEADER=%s\n' "$KOMODO_DEST" >> "$HERMES_HOME/.env"
-    fi
-  fi
   echo "hermes-stack: komodo auth header -> $KOMODO_DEST"
 else
   echo "hermes-stack: warning: no readable komodo auth header at $KOMODO_MOUNT" >&2
