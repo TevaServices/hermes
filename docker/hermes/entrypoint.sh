@@ -75,7 +75,7 @@ fi
 
 # --- 2. Runtime .env: host env file -> persistent volume ------------------
 # s6 services run as the unprivileged `hermes` user; the env file is
-# bind-mounted read-only from /etc/hermes (root:ubuntu 640) and could
+# bind-mounted read-only from $HERMES_ENV_DIR (root:<host-group> 640) and could
 # never be read in place. Sync it into $HERMES_HOME/.env (which the
 # runtime owns) on every boot — the mounted file stays the source of
 # truth. Compose still injects the same file as container env so this
@@ -137,7 +137,7 @@ if [ -f "$ENV_MOUNT" ]; then
 fi
 
 # --- 3. GitHub App PEMs: host mounts -> persistent tool-homes -------------
-# PEMs are bind-mounted read-only from /etc/hermes (root:ubuntu 640 on
+# PEMs are bind-mounted read-only from $HERMES_ENV_DIR (root:<group> 640 on
 # the host); the s6 services run as UID 10000 and could never read them
 # there. Copy each onto the data volume (which the runtime owns) and
 # aim its env var at the copy. The mounted files stay the source of

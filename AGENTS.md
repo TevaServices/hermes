@@ -8,13 +8,13 @@ declarative files (`config/` → `render.py` → `/overlay/<profile>`), plus
 [Honcho](https://github.com/plastic-labs/honcho) (memory),
 [Firecrawl](https://docs.firecrawl.dev/contributing/self-host) (web), and a
 [LiteLLM](https://docs.litellm.ai/) proxy (the stack's single LLM gateway).
-Everything runs on the homelab host under **Komodo GitOps** — read
+Everything runs on the Docker host under **Komodo GitOps** — read
 [the komodo repo's AGENTS.md](https://github.com/<owner>/komodo) for the
 control plane, API cheatsheet, and deploy mechanics.
 
 ## Deployment model
 
-Deployed as the Komodo Stack **`hermes`** (server `homelab`): one compose
+Deployed as the Komodo Stack **`hermes`** (server `<your-komodo-server>`): one compose
 project merging all files under `compose/`, cloned from this repo at deploy
 time. **The compose project name is `hermes`** — all named volumes are
 prefixed `hermes_*` (agent state, honcho Postgres/Redis, firecrawl
@@ -31,7 +31,7 @@ declared external in komodo's compose).
   Config/compose-only pushes cost a Dockerfile cache-hit build (~1 min).
 - **Images are built by Komodo Builds — never compose build** (the stack
   runs `run_build = false`; images `hermes-agent:v2026.9.14`, `litellm:main`,
-  `honcho:main`, `honcho-mcp:main`, `builder = "homelab"`). The
+  `honcho:main`, `honcho-mcp:main`, `builder = "<your-builder>"`). The
   `hermes-agent` and `litellm` Builds use a **repo-root build context**
   (`build_path = "."`) — the Dockerfiles COPY `docker/hermes/*`, `config/` +
   `render.py` (rendered inside the build), and `config/litellm.yaml` (see
@@ -79,7 +79,7 @@ so the old `mcp<2` Dockerfile pin was dropped at that bump).
 ## Secrets
 
 Runtime secrets live in root-owned files on the host —
-`/etc/hermes/*.env` (mode 640, root:ubuntu), mounted read-only into
+`/etc/hermes/*.env` (mode 640, `root:<host-group>`), mounted read-only into
 Periphery, wired via the stack `environment` `HERMES_ENV_DIR=/etc/hermes`.
 Templates are in `secrets/*.env.example`; nothing secret is ever committed,
 echoed, or routed through a shell history or chat transcript.
@@ -265,8 +265,8 @@ next container restart.
   `allowed_channels = ["<its channel id>"]` + `require_mention = false`, so
   its bot answers every message in its own channel with no @mention — and
   nowhere else. The default profile sets the same pair for `#hermes` +
-  `#hermes-home` (the unrouted channels: `1510637179267973220`,
-  `1548351069707567144`). `allowed_channels` is load-bearing
+  `#hermes-home` (the unrouted channels; their ids come from
+  `DISCORD_CHANNEL_MAIN` and `DISCORD_HOME_CHANNEL`). `allowed_channels` is load-bearing
   (require_mention is profile-wide, so without the fence the bot would
   answer in every channel it can see) and does NOT widen authorization —
   `DISCORD_ALLOWED_USERS` stays the gate; `_is_allowed_user` falls back to
@@ -306,7 +306,7 @@ identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`.
 
 - **GitHub App (preferred)**: `GITHUB_APP_ID` +
   `GITHUB_APP_INSTALLATION_ID` are the only GitHub vars in the env file
-  (PEM at `/etc/hermes/github-app-<profile>.pem` — root:ubuntu 640,
+  (PEM at `/etc/hermes/github-app-<profile>.pem` — root:<host-group> 640,
   bind-mounted read-only at `/run/hermes-pem/`, the file must exist before
   deploy). **Every profile has its own app** (see below). The entrypoint
   copies the PEM into the runtime-owned tool-home (`$HERMES_HOME/home/`)
@@ -553,14 +553,20 @@ agent, and must never share or impersonate another's. Both halves need one
 manual step that no API can perform; the scripts in `scripts/` wrap
 everything around them.
 
-Inventory (all four provisioned and verified live):
+Inventory (one App and one Discord bot per profile):
 
-| Profile | GitHub App | App ID | Discord bot | Bot ID |
-|---|---|---|---|---|
-| default | `hermes-main` | 4860240 | Hermes Main | 1546241126980391063 |
-| planner | `hermes-planner` | 4921863 | Hermes Planner | 1548360503150248116 |
-| developer | `hermes-dev` | 4921866 | Hermes Developer | 1548361258653319338 |
-| reviewer | `hermes-reviewer` | 4921867 | Hermes Reviewer | 1548361448038866954 |
+| Profile | GitHub App (default name) | Discord bot |
+|---|---|---|
+| default | `hermes-main` | Hermes Main |
+| planner | `hermes-planner` | Hermes Planner |
+| developer | `hermes-dev` | Hermes Developer |
+| reviewer | `hermes-reviewer` | Hermes Reviewer |
+
+The App names above are the DEFAULT (`<prefix>-<role>`); override per profile
+with `PROFILE_<NAME>_GH_APP_NAME` — GitHub App names are globally unique, so a
+collision is fixed that way. App ids and installation ids do not exist until
+you create the Apps: `scripts/create-github-apps.py` prints the `PROFILE_*`
+lines to paste into the env file.
 
 Installation IDs, git identities, and bot tokens live in
 `/etc/hermes/hermes-main.env` as `PROFILE_<NAME>_*`. App and bot IDs are
@@ -581,7 +587,7 @@ or a chat transcript.
   is (default: the 3 team profiles). Artifacts land in gitignored
   `build/github-apps/` (PEM mode 600, `results.json`, `env-lines.txt`,
   `host-install.sh`); then on the host run `host-install.sh` (installs each
-  PEM as root:ubuntu 640 into `/etc/hermes/`) and append `env-lines.txt` to
+  PEM as root:<host-group> 640 into `$HERMES_ENV_DIR/`) and append `env-lines.txt` to
   `/etc/hermes/hermes-main.env`. Re-running is safe — an existing App name
   fails at GitHub's own name check before anything is created.
 - **Bot token for a new team profile**
@@ -681,7 +687,7 @@ it survives until the next boot, then the reconciler overwrites it.
     owning profile's bot. Used by the three housekeeping jobs
     (`team: claude code update` 04:37, `team: weekly worktree prune`
     Mon 05:00, `team: daily repo refresh` 06:00), which report to
-    **#hermes-home** (`1548351069707567144`): there is no decision for an
+    **#hermes-home** (`DISCORD_HOME_CHANNEL`): there is no decision for an
     agent to make, so waking one would be a wasted turn. This is an
     OUTBOUND send — the "the adapter drops the bot's own messages" rule
     that rules out bot-chat-by-Discord is about INBOUND delivery, so it
@@ -697,7 +703,7 @@ it survives until the next boot, then the reconciler overwrites it.
   `exit 0` on top of it makes the run record `ok`, which is how
   `claude-update.sh` reported success every day for weeks while
   `claude-real` sat frozen at 2.1.267 (see "Claude Code" below).
-- **`DISCORD_HOME_CHANNEL=1548351069707567144`** (in
+- **`DISCORD_HOME_CHANNEL`** — set to your `#hermes-home` channel id — (in
   `/etc/hermes/hermes-main.env`; template in
   `secrets/hermes-main.env.example`) points the *gateway's own* system
   messages at the same channel — restart/shutdown notices

@@ -115,6 +115,56 @@ one-line diff in one TOML file, then `git commit && git push` — the image
 rebuild renders the new overlay, the deploy recreates the container, and the
 entrypoint applies the overlay to the profile dir on start.
 
+## Before you deploy: the values you must set
+
+Nothing in this repo is pinned to one person's accounts. Everything that
+varies per deployment is either a documented placeholder (`<owner>`) or an
+environment variable. This is the complete list — work through it once.
+
+**In git (edit these, they are your fork's config):**
+
+| What | Where |
+|---|---|
+| `<owner>` — the GitHub account owning your fork | `komodo/resources.toml` (repo fields), `config/SOUL_OPERATING.md` |
+| Model aliases and providers you actually have | `config/models.toml`, `config/providers.toml` |
+| Profile model choices | `config/profiles/*/profile.toml` (`model = "..."`) |
+| Which profiles exist, and their skills | `config/profiles/*/` |
+
+**In the host env file (`$HERMES_ENV_DIR/hermes-main.env`, from
+`secrets/hermes-main.env.example`):**
+
+| Variable | What it is |
+|---|---|
+| `LITELLM_MASTER_KEY` | `openssl rand -hex 32`; mirrored into the apps' key vars |
+| `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` | the two upstream providers LiteLLM routes to |
+| `TEAM_OWNER` | the GitHub account whose repos the team works on — the queue scripts refuse to run without it |
+| `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` | the default agent's bot |
+| `DISCORD_HOME_CHANNEL` | where gateway system messages and the housekeeping jobs post |
+| `DISCORD_CHANNEL_MAIN` / `_PLANNER` / `_DEVELOPER` / `_REVIEWER` | one per channel; each team profile answers only in its own |
+| `PROFILE_<NAME>_DISCORD_BOT_TOKEN` | one bot per team profile (a profile left on the main token is refused) |
+| `PROFILE_<NAME>_GITHUB_APP_ID` / `_INSTALLATION_ID` | per-profile GitHub App (see below) |
+| `PROFILE_<NAME>_GH_APP_NAME` | only if the default App name `hermes-<role>` is taken on GitHub |
+| `HONCHO_API_KEY` | any non-empty value while honcho-api runs no-auth |
+| `FIRECRAWL_API_KEY` | must equal `TEST_API_KEY` in `firecrawl.env` |
+
+**Credentials that need a one-time browser step** (both scripts wrap
+everything around the manual click that no API can perform):
+
+```bash
+python3 scripts/create-github-apps.py --org <your-org>   # or omit --org for user-owned
+sudo sh build/github-apps/host-install.sh                # installs the PEMs on the host
+sudo python3 scripts/set-team-discord-tokens.py          # hidden input, validated against Discord
+```
+
+**Per-machine values:** `HERMES_ENV_DIR` (default `/etc/hermes`),
+`HERMES_HOST_GROUP` (default `ubuntu` — the group owning the env files),
+`TZ` (optional; the container runs UTC without it, which is what the cron
+schedules in `config/cron.toml` are written against), and the Komodo server
+name in `komodo/resources.toml`.
+
+`mise run validate` checks the config; `mise run render` shows exactly what
+the image will bake in.
+
 ## Quickstart (local)
 
 Requires: Docker and [mise](https://mise.jdx.dev/) (≥2025). Everything else —
@@ -166,7 +216,6 @@ files changed; agent memory, sessions, and skills live in volumes and survive.
 Per-machine overrides go in `mise.local.toml` (gitignored), e.g.:
 
 ```bash
-mise set TZ=UTC
 mise set HERMES_ENV_DIR=/etc/hermes
 mise set FIRECRAWL_PORT=3002
 ```
@@ -235,3 +284,12 @@ mise run check-updates   # pins vs upstream (hermes/honcho/firecrawl/litellm)
   [self-hosting](https://honcho.dev/docs/v3/contributing/self-hosting)
 - Firecrawl: [self-host](https://docs.firecrawl.dev/contributing/self-host) ·
   [MCP server](https://github.com/firecrawl/firecrawl-mcp-server)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+This repo contains configuration and scripts only. The images it deploys
+carry their own licenses: the Hermes agent is MIT, Honcho and Firecrawl are
+AGPL-3.0, Komodo is GPL-3.0, and LiteLLM is MIT with a separate enterprise
+directory. Nothing here links against or vendors them.

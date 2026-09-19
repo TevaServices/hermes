@@ -78,7 +78,9 @@
 #              and never dedupe incidents. Use this when you are running
 #              it by hand and want to see the state.
 #
-# Env: TEAM_OWNER (default the user), TEAM_QUEUE_LABEL, TEAM_TOPIC
+# Env: TEAM_OWNER (REQUIRED — the GitHub account whose repos carry the
+#      topic tag; the script refuses to run without it rather than
+#      searching all of GitHub), TEAM_QUEUE_LABEL, TEAM_TOPIC
 #      (default hermes-team), HERMES_HOME (for the dedupe state file).
 #      Run per installation/account with that account's token — see the
 #      team-github-token skill.
@@ -87,7 +89,7 @@ set -u
 
 KIND="issues"
 LABELS=""
-OWNER="${TEAM_OWNER:-<owner>}"
+OWNER="${TEAM_OWNER:-}"
 TOPIC="${TEAM_TOPIC:-hermes-team}"
 AUTHOR=""
 VERBOSE=0

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import tomllib
@@ -109,6 +110,26 @@ STACK_DELEGATION_DEFAULTS = {
 }
 # `profile` is dropped: the rendered file is already per-profile.
 _JOB_FIELDS = ("name", "schedule", "script", "no_agent", "deliver", "prompt")
+
+# Values that vary per deployment but are RUNTIME secrets, so they cannot be
+# resolved here: render.py runs at image build time, while these live in the
+# host env file ($HERMES_ENV_DIR/hermes-main.env). They are emitted as
+# @@VAR@@ placeholders and expanded at container boot by
+# docker/hermes/expand-placeholders.py. Keeping the set here means a typo
+# fails the build instead of shipping a literal @@VAR@@ into a config.
+# See secrets/hermes-main.env.example for the operator-facing descriptions.
+BOOT_PLACEHOLDERS = {
+    # #hermes-home — gateway system messages AND the housekeeping jobs'
+    # delivery target (config/cron.toml).
+    "DISCORD_HOME_CHANNEL",
+    # #hermes — the default agent's unrouted channel.
+    "DISCORD_CHANNEL_MAIN",
+    # The three team channels, one per profile.
+    "DISCORD_CHANNEL_PLANNER",
+    "DISCORD_CHANNEL_DEVELOPER",
+    "DISCORD_CHANNEL_REVIEWER",
+}
+_PLACEHOLDER_RE = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 
 # Tirith rules pre-approved for every profile. A Tirith finding raises an
 # approval gate keyed `tirith:<rule_id>`; tools/approval.py loads
@@ -706,6 +727,22 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
         env_lines.append(f"{key}=")
     if env_keys:
         (out_dir / ".env.example").write_text("\n".join(env_lines) + "\n")
+
+    # Fail the build on an @@VAR@@ placeholder the boot resolver does not
+    # know. render.py cannot resolve these itself — the values (Discord
+    # channel IDs) are runtime secrets in the host env file, not in git — so
+    # they are emitted verbatim for docker/hermes/expand-placeholders.py to
+    # fill in at container boot. An unknown name is a typo that would ship a
+    # config with a literal @@VAR@@ where a channel id belongs, so it is a
+    # build error rather than a boot-time surprise.
+    for fname in ("config.yaml", "cron.json"):
+        for var in _PLACEHOLDER_RE.findall((out_dir / fname).read_text()):
+            if var not in BOOT_PLACEHOLDERS:
+                raise ConfigError(
+                    f"profile '{name}': unknown placeholder @@{var}@@ in {fname}. "
+                    f"Known: {', '.join(sorted(BOOT_PLACEHOLDERS))} — resolved at "
+                    f"boot by docker/hermes/expand-placeholders.py."
+                )
 
     return {
         "profile": name,

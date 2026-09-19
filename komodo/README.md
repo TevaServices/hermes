@@ -45,7 +45,7 @@ and make sure Periphery runs as a user that can read them and use Docker.
 Replace, in all three `[[stack]]` blocks:
 
 - `<owner>/hermes` → your repo (and add `git_account` + a Komodo Git Account if private)
-- `server = "homelab"` → your Periphery's Server name in Komodo
+- `server = "<your-komodo-server>"` → your Periphery's Server name in Komodo
 - `environment` → keep the version pins in sync with [`mise.toml`](../mise.toml) `[env]`
   (Komodo doesn't run mise, so the pins are repeated there), and set `TZ`
 

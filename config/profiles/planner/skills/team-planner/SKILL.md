@@ -54,7 +54,7 @@ identities cannot be assigned issues or PRs at all — the API rejects it
 with 403 / `cannot be assigned to issues or pull requests`, and
 `GET /repos/{owner}/{repo}/assignees/{login}` returns 404 for every bot.
 That is a rule about the *assignee's* account type, so **no token
-change fixes it**: the user's own user token, on his own repo, fails
+change fixes it**: a user token on the owner's own repo, fails
 identically. `--add-assignee hermes-dev[bot]` will always fail —
 do not retry it, and do not report it as a credential problem.
 
@@ -109,7 +109,7 @@ When developer comments a roadblock decision
 1. Read the decision + context; validate the design impact.
 2. If user feedback is needed: post on Discord (`#planning`) with the
    issue link and a clear question, or comment on the issue tagging
-   `@the user` — the choice is yours; label the channel accordingly.
+   `@<owner>` — the choice is yours; label the channel accordingly.
    The decision stands (developer's unilateral call) unless the user
    overrides; record either way in the issue.
 3. If it changes the design: update the issue body (GitHub = system of

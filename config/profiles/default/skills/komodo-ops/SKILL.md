@@ -10,7 +10,7 @@ metadata:
 
 # Komodo control-plane operations
 
-Everything running on the homelab host is managed by the Komodo control
+Everything running on the Docker host is managed by the Komodo control
 plane (Core API + Periphery). You (the agent) can drive it directly — you
 are on the same docker network as Komodo Core.
 

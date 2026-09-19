@@ -10,7 +10,6 @@
 # the process environment, so no --env-file is needed.
 #
 # Per-machine overrides belong in mise.local.toml (gitignored), set via:
-#   mise set TZ=UTC
 #   mise set HERMES_ENV_DIR=/etc/hermes
 #
 # Runtime container secrets (API keys, bot tokens) are NOT build

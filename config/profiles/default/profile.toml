@@ -102,9 +102,9 @@ model = "ollama/nemotron-3-nano:30b"
 # see simply never matches. Channels with no route (#hermes,
 # #hermes-home) keep the default agent's behavior.
 [config_extra.gateway.profile_routes]
-planning_channel = { platform = "discord", chat_id = "1548362748516114482", profile = "planner" }
-dev_channel      = { platform = "discord", chat_id = "1548351307809689710", profile = "developer" }
-reviews_channel  = { platform = "discord", chat_id = "1548362773098922156", profile = "reviewer" }
+planning_channel = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_PLANNER@@", profile = "planner" }
+dev_channel      = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_DEVELOPER@@", profile = "developer" }
+reviews_channel  = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_REVIEWER@@", profile = "reviewer" }
 
 # --- Discord: the main bot's own channels (no @mention needed) -------------
 # #hermes + #hermes-home are the UNROUTED channels (the team channels are
@@ -128,7 +128,7 @@ reviews_channel  = { platform = "discord", chat_id = "1548362773098922156", prof
 # the gate (adapter _is_allowed_user only falls back to channel-scoped
 # access when no user/role allowlist exists).
 [config_extra.platforms.discord.extra]
-allowed_channels = ["1510637179267973220", "1548351069707567144"]  # #hermes, #hermes-home
+allowed_channels = ["@@DISCORD_CHANNEL_MAIN@@", "@@DISCORD_HOME_CHANNEL@@"]  # #hermes, #hermes-home
 require_mention = false
 
 # Extra env var placeholders render.py should list in .env.example.

@@ -77,7 +77,7 @@ disabled_toolsets = [
 # _is_allowed_user falls back to channel-scoped access only when no
 # user/role allowlist exists).
 [config_extra.platforms.discord.extra]
-allowed_channels = ["1548362748516114482"]
+allowed_channels = ["@@DISCORD_CHANNEL_PLANNER@@"]
 require_mention = false
 
 # Extra env placeholders rendered into .env.example (secrets arrive via

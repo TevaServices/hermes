@@ -129,19 +129,27 @@ RUN set -e; cd /opt/hermes; \
     done; \
     rm -rf /tmp/hermes-patches
 
-# gh CLI (pinned tarball for the build host's architecture — this image
-# is only ever built on the homelab host): the agent's github-* skills
-# (github-issues,
+# gh CLI (pinned tarball): the agent's github-* skills (github-issues,
 # github-pr-workflow, github-repo-management, github-code-review) work
 # through gh when present. Auth is the GitHub App (entrypoint) — gh
 # never needs `auth login` state persisted; a fresh installation token
 # is minted per git op by the credential helper.
+#
+# TARGETARCH is Docker's own build-arg (amd64 / arm64), so the image builds
+# on either architecture with no host assumptions. gh's release names use
+# the same two words. (The claude-* scripts do the equivalent at runtime
+# with `uname -m`.)
 ARG GH_VERSION=2.100.0
-RUN curl -fsSL --retry 3 \
-      https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_arm64.tar.gz \
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64|arm64) ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL --retry 3 \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" \
       -o /tmp/gh.tgz \
  && tar -xzf /tmp/gh.tgz -C /tmp \
- && install -m 0755 /tmp/gh_${GH_VERSION}_linux_arm64/bin/gh /usr/local/bin/gh \
+ && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /usr/local/bin/gh \
  && rm -rf /tmp/gh*
 
 # Stack helpers (each a separate layer so script-only pushes stay cheap).
@@ -156,6 +164,9 @@ COPY docker/hermes/review-queue.sh /usr/local/bin/review-queue.sh
 # source of truth for script CONTENT and config/cron.toml for its
 # schedule.
 COPY docker/hermes/cron-reconcile.py /usr/local/bin/cron-reconcile.py
+# Resolves @@VAR@@ in the rendered overlays at boot (render.py runs at
+# build time and cannot see runtime secrets — see bootstrap-profiles.sh).
+COPY docker/hermes/expand-placeholders.py /usr/local/bin/expand-placeholders.py
 COPY docker/hermes/team-thread.sh /usr/local/bin/team-thread.sh
 COPY docker/hermes/prune-repos.sh /usr/local/bin/prune-repos.sh
 COPY docker/hermes/refresh-repos.sh /usr/local/bin/refresh-repos.sh
@@ -169,6 +180,7 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/review-queue.sh \
                /usr/local/bin/team-thread.sh \
                /usr/local/bin/cron-reconcile.py \
+               /usr/local/bin/expand-placeholders.py \
                /usr/local/bin/prune-repos.sh \
                /usr/local/bin/refresh-repos.sh \
                /usr/local/bin/claude-update.sh

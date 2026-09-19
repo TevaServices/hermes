@@ -59,8 +59,9 @@
 #                        "the adapter drops the bot's own messages" rule
 #                        that blocks bot-chat-by-Discord is about INBOUND
 #                        delivery, so it does not apply here. Used for
-#                        stack plumbing — no agent turn is wanted.
-#                        #hermes-home is 1548351069707567144.
+#                        stack plumbing — no agent turn is wanted. The
+#                        channel id comes from @@DISCORD_HOME_CHANNEL@@
+#                        (see secrets/hermes-main.env.example).
 #   local                Save the output, deliver nothing.
 #   origin               The chat the job was created from — NOT
 #                        meaningful for a job declared here (there was no
@@ -169,7 +170,7 @@ name = "team: claude code update"
 schedule = "37 4 * * *"
 script = "claude-update.sh"
 no_agent = true
-deliver = "discord:1548351069707567144"  # #hermes-home
+deliver = "discord:@@DISCORD_HOME_CHANNEL@@"  # #hermes-home
 
 # Weekly prune of per-session git worktrees. Silent unless it removed
 # something.
@@ -179,7 +180,7 @@ name = "team: weekly worktree prune"
 schedule = "0 5 * * 1"
 script = "prune-repos.sh"
 no_agent = true
-deliver = "discord:1548351069707567144"  # #hermes-home
+deliver = "discord:@@DISCORD_HOME_CHANNEL@@"  # #hermes-home
 
 # Daily refresh of the central bare clones (local branch mirrors, which a
 # plain worktree cut would otherwise read stale). Silent when every repo
@@ -190,4 +191,4 @@ name = "team: daily repo refresh"
 schedule = "0 6 * * *"
 script = "refresh-repos.sh"
 no_agent = true
-deliver = "discord:1548351069707567144"  # #hermes-home
+deliver = "discord:@@DISCORD_HOME_CHANNEL@@"  # #hermes-home

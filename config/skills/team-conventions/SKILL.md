@@ -1,6 +1,6 @@
 ---
 name: team-conventions
-description: Shared conventions for the household agile SaaS team (GitHub-first workflow, identity, cross-referencing, repos)
+description: Shared conventions for the agile SaaS team (GitHub-first workflow, identity, cross-referencing, repos)
 version: 1.0.0
 metadata:
   hermes:

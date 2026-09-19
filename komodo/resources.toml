@@ -13,7 +13,7 @@
 #
 # You MUST adjust before first sync:
 #   - <owner>/hermes   -> your fork/clone of this repo (3 places)
-#   - "homelab"        -> the name of your Komodo Server (Periphery host)
+#   - "<your-komodo-server>" -> the name of your Komodo Server (Periphery host)
 #   - environment vars -> secrets live on the host (not in git); keep
 #     the version pins in sync with mise.toml [env], which is where
 #     local runs get them (Komodo does not run mise)
@@ -23,7 +23,7 @@
 [[stack]]
 name = "hermes-agents"
 [stack.config]
-server = "homelab"
+server = "<your-komodo-server>"
 repo = "<owner>/hermes"
 branch = "main"
 git_provider = "github"
@@ -33,12 +33,12 @@ deploy = true
 # HERMES_ENV_DIR points the env_file/mount paths at the host secrets
 # directory (created by scripts/bootstrap-host.sh). The version pins
 # mirror mise.toml [env] so the deployed tags stay git-managed.
-environment = { HERMES_ENV_DIR = "/etc/hermes", HERMES_REF = "v2026.9.14", TZ = "UTC" }
+environment = { HERMES_ENV_DIR = "/etc/hermes", HERMES_REF = "v2026.9.14" }
 
 [[stack]]
 name = "hermes-honcho"
 [stack.config]
-server = "homelab"
+server = "<your-komodo-server>"
 repo = "<owner>/hermes"
 branch = "main"
 git_provider = "github"
@@ -49,7 +49,7 @@ environment = { HERMES_ENV_DIR = "/etc/hermes", HONCHO_VERSION = "main" }
 [[stack]]
 name = "hermes-firecrawl"
 [stack.config]
-server = "homelab"
+server = "<your-komodo-server>"
 repo = "<owner>/hermes"
 branch = "main"
 git_provider = "github"

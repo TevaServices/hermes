@@ -97,8 +97,8 @@ label: it is either claimed (`review/in-progress`), already approved, or
 back with the developer.
 
 Re-reviews the developer did NOT re-hand-off, and anything the user
-flagged in comments that came back from his review, jump the queue.
-Priority: user-flagged > re-handoffs > new PRs.
+flagged in comments that came back from their review, jump the queue.
+Priority: owner-flagged > re-handoffs > new PRs.
 
 See `team-developer` for the developer's half of this handoff.
 
@@ -168,13 +168,13 @@ never author a fix.
   comment summarizes. Card → In Progress (or tell planner).
 - **Approve**: approve + `gh pr ready` + request the user's review
   (`gh pr edit --add-reviewer <owner>` where possible; otherwise
-  cc @the user in a comment). Comment gates-passed summary (one line per
+  cc @<owner> in a comment). Comment gates-passed summary (one line per
   gate). Card → In Review/human-gate. Post verdict to `#reviews`.
 
 ## Merge protocol (only after the user)
 
 Merge ONLY when the user's satisfaction is on record (GitHub approval or
-his comment — Discord approval must first be quoted into the issue by
+their comment — Discord approval must first be quoted into the issue by
 planner). Then:
 
 1. Final check: CI green (if repo has CI), no new commits since

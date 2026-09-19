@@ -77,7 +77,7 @@ check the sidecar: `s6-svstat /run/service/chromium-cdp` (or `curl -s
 `/opt/data/chromium-cdp` (safe to wipe while the service is down —
 it's just a profile cache).
 
-**GitHub is a GitHub App** (app 4860240, installed as
+**GitHub is a GitHub App** (installed as
 `hermes-main[bot]`): `gh` is already authed and git already routes
 credentials through gh (`gh auth git-credential`) — just use `gh` and
 `git` normally. The entrypoint's background refresher keeps gh's stored
@@ -264,7 +264,7 @@ worktree — the isolation this stack needs, it already has.
   `discord:<chat_id>` posts into a channel as an outbound message (the
   "adapter drops the bot's own messages" rule is about INBOUND, so it does
   not apply) — that is what the stack's own housekeeping jobs use to
-  report to **#hermes-home** (`1548351069707567144`). `local` saves
+  report to **#hermes-home** (`DISCORD_HOME_CHANNEL`). `local` saves
   without delivering. `DISCORD_HOME_CHANNEL` is the same channel, and is
   what the gateway's own system messages (restart/shutdown notices,
   connect-time warnings) route to.

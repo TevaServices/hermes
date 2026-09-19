@@ -37,12 +37,20 @@ import tempfile
 import urllib.error
 import urllib.request
 
-ENV_FILE = "/etc/hermes/hermes-main.env"
+ENV_DIR = os.environ.get("HERMES_ENV_DIR", "/etc/hermes")
+ENV_FILE = os.path.join(ENV_DIR, "hermes-main.env")
+# Group owning the env file on the host (640, root:<group>).
+HOST_GROUP = os.environ.get("HERMES_HOST_GROUP", "ubuntu")
 PROFILES = ["planner", "developer", "reviewer"]
-GUILD_NAME = "My Server"
-# Main bot's effective guild permission integer (verified via
-# GET /users/@me/guilds) — replicated so the team bots match.
-PERMISSIONS = "2248473465835073"
+# Your Discord server's name — only used in the printed instructions.
+GUILD_NAME = os.environ.get("DISCORD_GUILD_NAME", "your server")
+# The main bot's effective guild permission integer — read it from
+# GET /users/@me/guilds once the main bot is in your server, and pass it
+# here so the team bots get exactly the same powers (including the
+# CREATE_PUBLIC_THREADS + SEND_MESSAGES_IN_THREADS bits the thread-per-
+# item workflow needs). The baked default is a working superset for a
+# fresh server; override with DISCORD_BOT_PERMISSIONS if yours differs.
+PERMISSIONS = os.environ.get("DISCORD_BOT_PERMISSIONS", "2248473465835073")
 UA = "DiscordBot (https://github.com/<owner>/hermes, 1.0)"
 API = "https://discord.com/api/v10"
 
@@ -156,7 +164,7 @@ def main():
         fh.write(new_text)
         tmp = fh.name
     os.chmod(tmp, 0o600)
-    if sh("sudo", "install", "-o", "root", "-g", "ubuntu", "-m", "640", tmp, ENV_FILE).returncode:
+    if sh("sudo", "install", "-o", "root", "-g", HOST_GROUP, "-m", "640", tmp, ENV_FILE).returncode:
         sys.exit("failed to install the updated env file")
     os.unlink(tmp)
 

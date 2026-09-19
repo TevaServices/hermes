@@ -35,7 +35,12 @@ exists fails at click 1 with GitHub's own "name is already taken" error.
 Usage:
   python3 scripts/create-github-apps.py                 # the 3 team apps
   python3 scripts/create-github-apps.py planner         # just one
+  python3 scripts/create-github-apps.py --org my-org    # org-owned apps
   python3 scripts/create-github-apps.py --print-url     # don't open a browser
+
+App names default to "<prefix>-<suffix>" (hermes-planner, hermes-dev,
+hermes-reviewer). Override per profile with PROFILE_<NAME>_GH_APP_NAME —
+GitHub App names are globally unique, so a name collision is fixed that way.
 """
 
 import argparse
@@ -55,21 +60,27 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-REPO_URL = "https://github.com/<owner>/hermes"
 OUTPUT_DIR = os.path.join("build", "github-apps")
+
+# App names default to "<prefix>-<suffix>". GitHub App names are GLOBALLY
+# unique, so if the default is taken, set PROFILE_<NAME>_GH_APP_NAME per
+# profile (secrets/hermes-main.env.example) and re-run.
+#
+# The App name must match the App's slug on GitHub, because the bot identity
+# git commits carry is "<slug>[bot]" — that is PROFILE_<NAME>_GH_GIT_NAME,
+# which write_summary() emits alongside the app id so the two cannot drift.
+DEFAULT_APP_PREFIX = os.environ.get("HERMES_APP_PREFIX", "hermes")
 
 # One App per profile, least privilege per role (config/skills/
 # team-conventions/SKILL.md — planner reads code, developer drafts PRs,
 # reviewer merges). "metadata: read" is mandatory for every App.
 #
-# The profile name (config/profiles/<name>/) and the App name differ for
-# the developer — the profile is "developer" (so the PEM is
-# github-app-developer.pem) but the identity the team knows is
-# hermes-dev[bot] (secrets/hermes-main.env.example
-# PROFILE_DEVELOPER_GH_GIT_NAME). Keep app_name in sync with that.
+# `app_suffix` (not the profile name) is what goes into the App name: the
+# profile dir is "developer" so its PEM is github-app-developer.pem, but the
+# identity the team knows is "<prefix>-dev[bot]".
 APPS = {
     "planner": {
-        "app_name": "hermes-planner",
+        "app_suffix": "planner",
         "description": "Hermes planner — PM/design: issues, specs, boards (read-only code)",
         "permissions": {
             "metadata": "read",
@@ -79,7 +90,7 @@ APPS = {
         },
     },
     "developer": {
-        "app_name": "hermes-dev",
+        "app_suffix": "dev",
         "description": "Hermes developer — implementation: branches and draft pull requests",
         "permissions": {
             "metadata": "read",
@@ -89,7 +100,7 @@ APPS = {
         },
     },
     "reviewer": {
-        "app_name": "hermes-reviewer",
+        "app_suffix": "reviewer",
         "description": "Hermes reviewer — review gates and merges after the human gate",
         "permissions": {
             "metadata": "read",
@@ -99,6 +110,48 @@ APPS = {
         },
     },
 }
+
+
+def app_name(profile: str) -> str:
+    """The App name for a profile.
+
+    PROFILE_<NAME>_GH_APP_NAME wins; otherwise "<prefix>-<suffix>". Read at
+    call time rather than import so the env file can supply it.
+    """
+    override = os.environ.get(f"PROFILE_{profile.upper()}_GH_APP_NAME", "").strip()
+    if override:
+        return override
+    return f"{DEFAULT_APP_PREFIX}-{APPS[profile]['app_suffix']}"
+
+
+def bot_login(profile: str) -> str:
+    """The bot identity git commits carry — the App slug plus `[bot]`."""
+    return f"{app_name(profile)}[bot]"
+
+
+def gh_login():
+    """This machine's gh login, used to build the default homepage URL."""
+    exe = shutil.which("gh")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run(
+            [exe, "api", "user", "--jq", ".login"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def owner_for(org):
+    """The account the Apps belong to: --org, else the local gh login."""
+    if org:
+        return org
+    return gh_login() or "<owner>"
+
 
 DEFAULT_ORDER = ["planner", "developer", "reviewer"]
 
@@ -147,14 +200,24 @@ def redirect_page(title, body, url, delay=1.5):
 class Flow:
     """Shared state between the HTTP handler and the driving thread."""
 
-    def __init__(self, order, outdir, port):
+    def __init__(self, order, outdir, port, repo_url, org=None):
         self.order = order
         self.outdir = outdir
         self.port = port
+        self.repo_url = repo_url
+        # None = create USER-owned Apps; an org name = create org-owned Apps
+        # (the manifest must be POSTed to the org's settings URL for that).
+        self.org = org
         self.tokens = {}  # csrf state token -> profile
         self.pending_install = None  # profile whose install page we opened
         self.results = {}  # profile -> {app_id, slug, installation_id, ...}
         self.finished = threading.Event()
+
+    def manifest_url(self):
+        """Where the browser POSTs the manifest — org-owned or user-owned."""
+        if self.org:
+            return f"https://github.com/organizations/{self.org}/settings/apps/new"
+        return "https://github.com/settings/apps/new"
 
     def base(self):
         return f"http://127.0.0.1:{self.port}"
@@ -174,8 +237,8 @@ class Flow:
     def manifest(self, profile):
         app = APPS[profile]
         return {
-            "name": app["app_name"],
-            "url": REPO_URL,
+            "name": app_name(profile),
+            "url": self.repo_url,
             "description": app["description"],
             "redirect_url": f"{self.base()}/manifest/callback",
             # setup_url is what hands us the installation id: GitHub
@@ -317,7 +380,7 @@ class Handler(BaseHTTPRequestHandler):
         remaining = [p for p in flow.order if p != profile and not flow.results.get(p, {}).get("installation_id")]
         body = (
             f'<div class="step"><p>Creating the GitHub App '
-            f'<code>{html.escape(app["app_name"])}</code> for the '
+            f'<code>{html.escape(app_name(profile))}</code> for the '
             f'<strong>{html.escape(profile)}</strong> profile.</p>'
             "<p>On the GitHub page that opens, click "
             "<strong>Create GitHub App</strong>.</p>"
@@ -331,11 +394,11 @@ class Handler(BaseHTTPRequestHandler):
             + "</div>"
             "<p>Submitting to GitHub…</p>"
             f'<form id="m" method="post" '
-            f'action="https://github.com/settings/apps/new?state={html.escape(token)}">'
+            f'action="{html.escape(flow.manifest_url())}?state={html.escape(token)}">'
             f'<input type="hidden" name="manifest" value="{manifest}"></form>'
             "<script>document.getElementById('m').submit()</script>"
         )
-        self.send_html(page(f"Create {app['app_name']}", body))
+        self.send_html(page(f"Create {app_name(profile)}", body))
 
     def handle_callback(self, qs):
         flow = self.flow
@@ -445,6 +508,14 @@ def env_lines(order, results):
         lines.append(f"# {profile} (App: {r['app_name']})")
         lines.append(f"PROFILE_{var}_GITHUB_APP_ID={r['app_id']}")
         lines.append(f"PROFILE_{var}_GITHUB_APP_INSTALLATION_ID={r['installation_id']}")
+        # Derived, so the commit identity can never drift from the App the
+        # commits are actually minted from. The entrypoint uses these to set
+        # the profile's git author/committer.
+        lines.append(f"PROFILE_{var}_GH_APP_NAME={r['app_name']}")
+        lines.append(f"PROFILE_{var}_GH_GIT_NAME={bot_login(profile)}")
+        lines.append(
+            f"PROFILE_{var}_GH_GIT_EMAIL={bot_login(profile)}@users.noreply.github.com"
+        )
     return "\n".join(lines)
 
 
@@ -459,18 +530,22 @@ def write_summary(flow):
     with open(os.path.join(outdir, "env-lines.txt"), "w") as fh:
         fh.write(env_lines(flow.order, flow.results) + "\n")
 
+    env_dir = os.environ.get("HERMES_ENV_DIR", "/etc/hermes")
+    group = os.environ.get("HERMES_HOST_GROUP", "ubuntu")
     script = os.path.join(outdir, "host-install.sh")
     with open(script, "w") as fh:
         fh.write("#!/bin/sh\n")
-        fh.write("# Run ON THE HOMELAB HOST from the repo checkout.\n")
+        fh.write(f"# Run ON THE DOCKER HOST (the Komodo Periphery machine) from\n")
+        fh.write(f"# the repo checkout. Installs the App private keys into\n")
+        fh.write(f"# {env_dir} as root:{group} 640.\n")
         fh.write("set -eu\n")
         for profile in flow.order:
             if profile not in done:
                 continue
             fh.write(
-                f"sudo install -o root -g ubuntu -m 640 "
+                f"sudo install -o root -g {group} -m 640 "
                 f"{OUTPUT_DIR}/github-app-{profile}.pem "
-                f"/etc/hermes/github-app-{profile}.pem\n"
+                f"{env_dir}/github-app-{profile}.pem\n"
             )
     os.chmod(script, 0o755)
 
@@ -532,6 +607,18 @@ def main(argv=None):
         help="print the URL instead of opening a browser",
     )
     parser.add_argument("--timeout", type=int, default=1800, help="seconds")
+    parser.add_argument(
+        "--org",
+        metavar="NAME",
+        help="create the Apps OWNED BY this organization instead of your "
+        "user account (the browser must be logged in with admin rights on "
+        "it). Omit for user-owned Apps.",
+    )
+    parser.add_argument(
+        "--repo-url",
+        help="the App's homepage URL (default: https://github.com/<owner>/hermes, "
+        "where <owner> is --org if given, else your gh login)",
+    )
     args = parser.parse_args(argv)
 
     unknown = [p for p in args.profiles if p not in APPS]
@@ -539,11 +626,13 @@ def main(argv=None):
         raise SystemExit(f"unknown profile(s): {', '.join(unknown)} (have: {', '.join(APPS)})")
     order = list(dict.fromkeys(args.profiles))
 
+    repo_url = args.repo_url or f"https://github.com/{owner_for(args.org)}/hermes"
+
     outdir = OUTPUT_DIR
     os.makedirs(outdir, exist_ok=True)
 
     port = free_port(args.port)
-    flow = Flow(order, outdir, port)
+    flow = Flow(order, outdir, port, repo_url=repo_url, org=args.org)
     Handler.flow = flow
 
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
@@ -552,6 +641,10 @@ def main(argv=None):
     start = f"{flow.base()}/?app={order[0]}"
     print(f"Serving the manifest flow on {flow.base()}")
     print(f"  apps, in order: {', '.join(order)}")
+    print(f"  app owner:     {args.org or owner_for(None)}")
+    for profile in order:
+        print(f"    {profile:<10} -> {app_name(profile)}")
+    print(f"  homepage:      {repo_url}")
     print(f"  artifacts →    {outdir}/")
     print("\nTwo clicks per app: Create GitHub App, then Install (All repositories).")
     if args.print_url:

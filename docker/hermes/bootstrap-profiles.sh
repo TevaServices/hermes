@@ -24,6 +24,30 @@ OVERLAY_ROOT="${HERMES_OVERLAY_ROOT:-/overlay}"
 
 log() { echo "[bootstrap-profiles] $*"; }
 
+# Resolve @@VAR@@ placeholders in the rendered overlays from the container
+# environment, BEFORE anything reads them. render.py runs at image build time
+# and cannot see runtime secrets, so per-deployment values (Discord channel
+# IDs) are rendered as placeholders and resolved here, at boot, where the
+# env_file values are present. Runs on the overlay in place: both
+# copy_overlay (config.yaml) and reconcile_cron (cron.json) read from there.
+# Missing vars expand to empty and are reported — see expand-placeholders.py.
+expand_overlay() {
+  overlay_dir="$1"
+  files=""
+  for f in config.yaml cron.json; do
+    [ -f "$overlay_dir/$f" ] && files="$files $overlay_dir/$f"
+  done
+  [ -n "$files" ] || return 0
+  if [ ! -f /usr/local/bin/expand-placeholders.py ]; then
+    log "WARNING: expand-placeholders.py missing; @@VAR@@ left in $overlay_dir"
+    return 0
+  fi
+  # shellcheck disable=SC2086  # deliberate word-splitting of the file list
+  python3 /usr/local/bin/expand-placeholders.py $files 2>&1 | while read -r line; do
+    log "$line"
+  done
+}
+
 copy_overlay() {
   overlay="$1"
   target="$2"
@@ -80,6 +104,7 @@ reconcile_cron() {
 
 # Default profile lives at the root of HERMES_HOME.
 if [ -d "$OVERLAY_ROOT/default" ]; then
+  expand_overlay "$OVERLAY_ROOT/default"
   copy_overlay "$OVERLAY_ROOT/default" "$HERMES_HOME"
   log "applied overlay: default"
   reconcile_cron "$OVERLAY_ROOT/default" "$HERMES_HOME"
@@ -103,6 +128,7 @@ if [ -d "$OVERLAY_ROOT/profiles" ]; then
       printf '{"gateway_state": "running", "desired_state": "running", "timestamp": %s, "seeded_by": "bootstrap-profiles"}\n' \
         "$(date +%s)" > "$target/gateway_state.json"
     fi
+    expand_overlay "$overlay"
     copy_overlay "$overlay" "$target"
     log "applied overlay: $name"
     reconcile_cron "$overlay" "$target"
