@@ -184,9 +184,10 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
 #   old: chromium_headless_shell-1234/chrome-linux/headless_shell
 #   new: chromium_headless_shell-1243/chrome-headless-shell-linux-<arch>/chrome-headless-shell
 # Match both shapes; the newest wins.
-RUN SHELL="$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux/headless_shell 2>/dev/null | sort -V | tail -1)" \
- || SHELL="$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-headless-shell-linux-*/chrome-headless-shell 2>/dev/null | sort -V | tail -1)" \
- && test -x "$SHELL" \
+RUN SHELL="$( { ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux/headless_shell 2>/dev/null; \
+                 ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-headless-shell-linux-*/chrome-headless-shell 2>/dev/null; \
+               } | sort -V | tail -1)" \
+ && test -n "$SHELL" && test -x "$SHELL" \
  && ln -sf "$SHELL" /usr/local/bin/chromium-headless-shell
 
 # Claude Code wrapper tooling (coding-agent delegation on the profile's
