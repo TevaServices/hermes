@@ -14,11 +14,10 @@
 # config/models.toml; which backend sits behind each one is
 # config/litellm.yaml's business.
 model = "smartest"
-# The tier a failing primary should move to. NOTE: render.py validates this
-# and uses it to collect env keys, but does NOT emit it into the rendered
-# config.yaml — nothing in config.yaml expresses a fallback today, so treat
-# this as documented intent rather than an active safety net. Escalate by
-# hand with `/model smarter`. (See AGENTS.md §"Agent runtime invariants".)
+# The tier a failing primary moves to. render.py emits this as the
+# `fallback_providers` chain Hermes walks, in order, when the primary fails
+# with rate-limit, overload or connection errors (hermes_cli/fallback_config).
+# The entry is built FROM the tier, so it follows a backend swap automatically.
 fallback_model = "smarter"
 integrations = ["honcho", "firecrawl"]
 platforms = ["discord"]

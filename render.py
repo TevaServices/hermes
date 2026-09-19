@@ -513,6 +513,26 @@ def cheap_model_block(profile: str, alias: str, models: dict) -> dict:
     return {"provider": model["provider"], "model": model["model"]}
 
 
+def fallback_entry(alias: str, models: dict, providers: dict) -> dict:
+    """One `fallback_providers` entry for a tier, in the shape Hermes reads.
+
+    Keys are exactly the ones `hermes_cli/fallback_config.py` resolves:
+    `provider` + `model` required, `base_url` pinning the route, and
+    `key_env` naming the env var that holds the credential — that last one is
+    read through the active profile's secret scope (agent.secret_scope
+    .get_secret), and is why this stack names a var rather than inlining an
+    `api_key` into a config file.
+    """
+    model = models[alias]
+    provider = providers[model["provider"]]
+    entry = {"provider": model["provider"], "model": model["model"]}
+    if provider.get("base_url"):
+        entry["base_url"] = provider["base_url"]
+    if provider.get("api_key_env"):
+        entry["key_env"] = provider["api_key_env"]
+    return entry
+
+
 def build_model_overrides(models: dict) -> dict:
     """Return the `model_overrides` config block for every declared tier.
 
@@ -662,6 +682,24 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
         routing["cheap_model"] = cheap_model_block(
             name, routing["cheap_model"], models
         )
+
+    # The fallback chain: the tier a failing primary moves to. Hermes reads
+    # `fallback_providers` (hermes_cli/fallback_config.get_fallback_chain),
+    # consumed by the agent's provider init AND the cron setup, and tries each
+    # entry in order when the primary fails with rate-limit, overload or
+    # connection errors.
+    #
+    # Until this was emitted, a profile's `fallback_model` was validated here
+    # and then silently dropped — nothing in the rendered config expressed it,
+    # so every "a dead primary degrades up to X" comment described intent
+    # rather than behaviour. A profile may still contribute entries of its own
+    # via [config_extra] `fallback_providers`; those are tried FIRST, then the
+    # declared `fallback_model` tier.
+    chain = list(config.get("fallback_providers") or [])
+    if fallback:
+        chain.append(fallback_entry(fallback, models, providers))
+    if chain:
+        config["fallback_providers"] = chain
 
     # Per-model context windows for EVERY tier in config/models.toml, in
     # the shape Hermes reads (see build_model_overrides). Merged per

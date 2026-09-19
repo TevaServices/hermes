@@ -190,6 +190,21 @@ checking the host's actual resources.
   the multi-arch `ghcr.io/berriai/litellm:main-latest` — the versioned
   `main-v1.x.y` tags are amd64-only; pre-pull the base on the host before
   the first build and re-pull on gateway upgrades).
+- **Nothing may start before litellm is SERVING, not merely alive.** The
+  gateway binds its port only after app startup completes, and startup
+  fetches the provider catalogue (`check_provider_endpoint`) — observed ~1–2
+  minutes on this host, during which `curl http://litellm:4000/...` is
+  connection-refused. So `compose/litellm.compose.yml` declares a
+  healthcheck on `/health/liveliness` (the one health endpoint that needs no
+  auth; the image has no curl, so the probe is python), and every service
+  that calls the gateway — `hermes-main`, `honcho-api`, `honcho-deriver`,
+  `firecrawl-api` — depends on it with `condition: service_healthy`. Two
+  consequences worth knowing: a container started right after a deploy may
+  sit in `created` for the length of that boot, which is correct rather than
+  stuck; and if litellm never becomes healthy, none of those services start
+  at all — the ordering is the point, and the probe's `start_period` (180s)
+  covers the boot that is actually needed. `docker inspect <c> --format
+  '{{.State.Health.Status}}'` is how to check the gateway's own state.
 - **firecrawl**: the real concurrency knobs are `NUQ_WORKER_COUNT=1`
   (`NUM_WORKERS_PER_QUEUE` only affects the legacy worker),
   `MAX_CONCURRENT_JOBS=2`, `CRAWL_CONCURRENT_REQUESTS=2`,
@@ -214,16 +229,20 @@ checking the host's actual resources.
 
 ### Agent runtime invariants
 
-- **`fallback_model` is declared but NOT wired.** `render.py` validates a
-  profile's `fallback_model` and uses it to collect env keys, but nothing
-  emits it into the rendered `config.yaml` — the config has no fallback key
-  at all — so a failing primary does not automatically degrade to the tier
-  the profile names. The per-profile comments say so where they set it, and
-  the value is the documented INTENT; escalating is still manual
-  (`/model smartest`, or `claude --model smartest`). Wiring it needs the
-  upstream key name confirmed inside the image
-  (`grep fallback /opt/hermes/hermes_cli/config_defaults.py`) — a separate
-  change, deliberately not done blind.
+- **`fallback_model` IS wired — as `fallback_providers`.** `render.py`
+  renders a profile's `fallback_model` tier into the `fallback_providers`
+  chain that `hermes_cli/fallback_config.get_fallback_chain` reads, which the
+  agent's provider init and the cron setup both consume: Hermes walks the
+  chain, in order, when the primary fails with rate-limit, overload or
+  connection errors. The entry carries only what the resolver reads —
+  `provider`, `model`, `base_url`, and `key_env` (the credential is named by
+  env var and read through the active profile's secret scope; an inline
+  `api_key` would put a key in a config file, which this stack never does).
+  A profile can contribute entries of its OWN via `[config_extra]`
+  `fallback_providers`; those are tried first, then the declared tier.
+  Note what this does NOT cover: a model that answers but answers badly.
+  Failover is for transport/rate-limit failures, so escalating for quality is
+  still manual (`/model smartest`, or `claude --model smartest`).
 - **The agent's BUILT-IN Honcho integration must stay off**: it
   auto-enables from the mere presence of `HONCHO_API_KEY` in the
   environment, then fails against the *hosted* Honcho API ("Invalid API
@@ -574,9 +593,21 @@ small-host constraints; cron/kanban availability), and `komodo-ops`,
 per-profile in the default profile — it drives the Komodo API from inside
 the container at `http://komodo-core-1:9120` (komodo-core joins the
 external `hermes_net` network, per the komodo repo's compose) with the auth
-header mounted read-only at `/etc/komodo-auth-header` (host path
-`/home/ubuntu/.komodo-auth-header`, overridable via the stack
-`environment` var `KOMODO_AUTH_HEADER`). It can deploy stacks, run builds,
+header bind-mounted read-only at `/etc/komodo-auth-header` (host path
+`/home/ubuntu/.komodo-auth-header`, overridable via the stack `environment`
+var `KOMODO_AUTH_HEADER_MOUNT`). **That mount is not readable by the agent**
+— it is 600 and owned by the host user while the s6 services run as UID
+10000, so `-H @/etc/komodo-auth-header` dies with `curl: option -H: error
+encountered when reading a file` and reads to an agent as "the API key is
+broken" (it is not; check with `sudo` on the host before touching the key).
+The entrypoint does for this what it does for the App PEMs — copies it into
+the runtime-owned home on every boot (`$HERMES_HOME/home/komodo-auth-header`,
+600, plus a `KOMODO_AUTH_HEADER=` line in the profile's `.env`) — and
+`KOMODO_AUTH_HEADER` is the var to use: `-H @$KOMODO_AUTH_HEADER`. Default
+profile only, deliberately: `komodo-ops` is its skill and the control-plane
+credential is not copied into the team profiles' homes. The Komodo API key
+itself is created in the UI and, as of this writing, does not expire
+(`expires: 0` — verify with `read/ListApiKeys`). It can deploy stacks, run builds,
 and re-apply the resource sync — but NOT change control-plane resources
 (that's the komodo repo, human-reviewed via push).
 

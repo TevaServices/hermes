@@ -33,8 +33,16 @@ services:
       CACHE_URL: redis://honcho-redis:6379
       CACHE_ENABLED: "true"
     depends_on:
-      - honcho-db
-      - honcho-redis
+      honcho-db:
+        condition: service_started
+      honcho-redis:
+        condition: service_started
+      # Every deriver/summary/dialectic step is an LLM call to the gateway,
+      # and litellm binds its port only after its startup catalogue fetch.
+      # Starting first means those calls fail — and a deriver that fails is
+      # the quietest failure in this stack (memory simply stops accumulating).
+      litellm:
+        condition: service_healthy
     networks:
       hermes-net:
         aliases: [honcho-api]
@@ -57,8 +65,14 @@ services:
       CACHE_URL: redis://honcho-redis:6379
       CACHE_ENABLED: "true"
     depends_on:
-      - honcho-db
-      - honcho-redis
+      honcho-db:
+        condition: service_started
+      honcho-redis:
+        condition: service_started
+      # See honcho-api: the deriver's whole job is LLM calls, and a deriver
+      # that runs before the gateway is listening fails silently.
+      litellm:
+        condition: service_healthy
     networks:
       - hermes-net
 

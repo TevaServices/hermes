@@ -36,6 +36,23 @@ services:
     command: ["--config", "/app/config.yaml"]
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/litellm.env
+    healthcheck:
+      # The image ships python and nothing else — no curl, no wget — so the
+      # probe is python. /health/liveliness is the one health endpoint that
+      # needs no auth (/health is 401 without the master key); more to the
+      # point, uvicorn does not accept connections until app startup has
+      # finished, and startup fetches the provider's model catalogue
+      # (check_provider_endpoint). A 200 here therefore means "actually
+      # serving", not merely "process alive" — which is the distinction the
+      # dependent services need.
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      # Covers the catalogue fetch before it binds. Observed ~1-2 minutes on
+      # this host; a probe that gives up sooner would fail every dependent
+      # service's start on a healthy gateway.
+      start_period: 180s
     networks:
       hermes-net:
         aliases: [litellm]

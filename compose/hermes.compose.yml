@@ -66,6 +66,20 @@ services:
       HERMES_CHROMIUM_CDP: "1"
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/hermes-main.env
+    depends_on:
+      # Every turn goes through the gateway, and litellm binds its port only
+      # AFTER it has fetched the provider catalogue (observed ~1-2 minutes on
+      # this host). Without this, compose starts the agent alongside the
+      # gateway and the first turn can race a port that is not open yet.
+      # `service_healthy` is litellm's own /health/liveliness probe
+      # (compose/litellm.compose.yml): uvicorn only accepts connections once
+      # app startup has completed, so a passing probe really does mean
+      # "serving".
+      # NOTE the trade-off, deliberate: if litellm never becomes healthy, this
+      # service does not start either — the ordering is the point, and the
+      # probe's start_period covers the boot litellm actually needs.
+      litellm:
+        condition: service_healthy
     volumes:
       - hermes-main-data:/opt/data
       # The env file is bind-mounted read-only and synced to
@@ -89,10 +103,17 @@ services:
       - ${HERMES_ENV_DIR:?}/:/run/hermes-pem:ro
       # Komodo control-plane API auth header (X-API-KEY). komodo-core joins
       # hermes-net, so the agent manages the control plane itself at
-      # http://komodo-core-1:9120 — see config/profiles/main/skills/komodo-ops.
-      # Host path default kept in this file; overrides go in the stack
-      # environment (resources.toml) as KOMODO_AUTH_HEADER.
-      - ${KOMODO_AUTH_HEADER:-/home/ubuntu/.komodo-auth-header}:/etc/komodo-auth-header:ro
+      # http://komodo-core-1:9120 — see config/profiles/default/skills/komodo-ops.
+      # Host path default kept in this file; the MOUNT path is overridable via
+      # the stack environment (resources.toml) as KOMODO_AUTH_HEADER_MOUNT.
+      #
+      # The mount itself is NOT readable by the agent: it is 600 and owned by
+      # the host user, while the s6 services run as UID 10000. The entrypoint
+      # copies it onto the data volume and exports KOMODO_AUTH_HEADER at the
+      # copy — the same treatment the App PEMs get, and for the same reason.
+      # Use `-H @$KOMODO_AUTH_HEADER` (see the komodo-ops skill), never the
+      # mount path directly.
+      - ${KOMODO_AUTH_HEADER_MOUNT:-/home/ubuntu/.komodo-auth-header}:/etc/komodo-auth-header:ro
       # Uncomment to enable Hermes' "docker" terminal backend, letting
       # the agent run sibling containers on the host docker daemon.
       # This is a wide grant of host privilege — only do it for
