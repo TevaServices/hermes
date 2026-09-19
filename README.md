@@ -25,7 +25,7 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
    │         firecrawl-playwright / redis / rabbitmq / db    │
    │                                                        │
    │  hermes-main / honcho / firecrawl ──► litellm ──►       │
-   │        Ollama Cloud + OpenRouter free (auto-routed)     │
+   │    Ollama Cloud / OpenRouter free, one group per tier   │
    └────────────────────────────────────────────────────────┘
 ```
 
@@ -38,17 +38,20 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
 | Overlay config / profiles | `config/` + `render.py` are compiled INTO the image at build time (`/overlay/<profile>`), applied to profile dirs on every container start |
 | Keep install + config up to date | the pin in `mise.toml` `[env]` is both the FROM tag and the config baseline; merge to `main` → webhook → rebuild/redeploy. `scripts/check-updates.sh` reports drift |
 | GitOps on the Linux host | Komodo Resource Sync applies `komodo/resources.toml`; Stacks deploy the compose files from this repo ([komodo/README.md](komodo/README.md)) |
-| Easy model/provider config | providers and models are two small TOML files; profiles pick models by alias — no hand-editing Hermes' config.yaml |
+| Easy model/provider config | the agent names one of four gateway tiers (`cheap`/`smart`/`smarter`/`smartest`); which provider serves a tier is `config/litellm.yaml` alone, so swapping backends never touches a profile or an env file |
 | Honcho + Firecrawl in containers | `compose/honcho.compose.yml`, `compose/firecrawl.compose.yml`, wired into each agent as MCP servers via `config/integrations.toml` |
-| One LLM gateway for every app | `compose/litellm.compose.yml` + `config/litellm.yaml` — LiteLLM routes each model name among Ollama Cloud + OpenRouter free members (latency-based, with fallbacks) |
+| One LLM gateway for every app | `compose/litellm.compose.yml` + `config/litellm.yaml` — LiteLLM serves the four tiers (routing each among its members, latency-based) and passes the rest of the Ollama Cloud catalogue through a wildcard |
 
 ## Repo layout
 
 ```
 mise.toml               tools (python, uv), build variables ([env]), all tasks
 config/
+  litellm.yaml          the gateway's config — the four model tiers
+                        (cheap/smart/smarter/smartest) and the backend each
+                        one points at: the file you swap for YOUR provider
   providers.toml        LLM endpoints + API-key env names (no keys here)
-  models.toml           short aliases -> provider/model IDs
+  models.toml           the tier names + each one's TRUE context window
   integrations.toml     Honcho / Firecrawl (and any other MCP) wiring
   skills/               stack-wide skills (merged into EVERY profile)
   profiles/default/     the ROOT profile (one agent): model choice, platforms,
@@ -98,26 +101,36 @@ link comes back in that thread — see the `team-conventions` skill.
 
 ## How configuration works (the abstraction)
 
-You never touch a Hermes config file. Three small files describe everything,
+You never touch a Hermes config file. A few small files describe everything,
 and render.py compiles them into what the agent reads — at IMAGE BUILD time:
 
+- **`config/litellm.yaml`** — the gateway's own config, and the ONE place a
+  model backend is chosen. It serves four tier names — `cheap`, `smart`,
+  `smarter`, `smartest` — and everything under each group's `litellm_params`
+  is yours to point anywhere: provider, upstream model id, base URL, key,
+  extra params, or several members per tier for load-balancing and failover.
+  Swapping Ollama Cloud for OpenAI, Anthropic or a local vLLM is an edit to
+  this file alone.
+- **`config/models.toml`** — the same tiers, as the AGENT side sees them: the
+  gateway name plus the model's TRUE context window. render.py emits the
+  window into the agent's `model_overrides` so context is sized correctly
+  (too small compacts early, too large overruns the provider), and it FAILS
+  THE BUILD if a tier here has no group on the gateway. Repointing a tier at
+  a differently-windowed model means moving this value with it;
+  `mise run check-model-windows` verifies the pair against the provider's
+  own API.
 - **`config/providers.toml`** — every endpoint Hermes can reach: base URL
   (empty = provider default), API mode, and *which env var name* holds its key.
-- **`config/models.toml`** — memorable aliases mapped to provider-specific
-  model IDs, one per tier: `nano` (cheap, short/simple turns), `baseline`
-  (default work), `elevated` (hard reasoning), `ultra` (small-context
-  targeted work). Each entry also states the model's real provider context
-  window — render.py needs it to size the agent's context correctly.
-- **`config/profiles/<name>/profile.toml`** — one agent: `model = "baseline"`,
+- **`config/profiles/<name>/profile.toml`** — one agent: `model = "smarter"`,
   `integrations = ["honcho", "firecrawl"]`, gateway platforms, and an optional
   `[config_extra]` passthrough for anything Hermes-specific. `SOUL.md` sits
   beside it.
 
-Switching an agent's model — a different provider, a different tier, a
-local model instead of a hosted one — is a one-line diff in one TOML file,
-then a PR: the image rebuild renders the new overlay, the deploy recreates
-the container, and the entrypoint applies the overlay to the profile dir
-on start.
+Switching an agent's model is a one-line diff — to a different tier, or to a
+different backend behind that tier with no profile change at all — then a PR:
+the image rebuild renders the new overlay, the deploy recreates the
+container, and the entrypoint applies the overlay to the profile dir on
+start.
 
 ## Before you deploy: the values you must set
 
@@ -130,8 +143,10 @@ environment variable. This is the complete list — work through it once.
 | What | Where |
 |---|---|
 | `<owner>` — the GitHub account owning your fork | `komodo/resources.toml` (repo fields), `config/SOUL_OPERATING.md` |
-| Model aliases and providers you actually have | `config/models.toml`, `config/providers.toml` |
-| Profile model choices | `config/profiles/*/profile.toml` (`model = "..."`) |
+| **Your LLM backend: which provider serves each model tier** | `config/litellm.yaml` (the four groups; the keys they need live in `litellm.env`) |
+| The tiers' context windows — keep in step with `litellm.yaml` | `config/models.toml` |
+| Any other LLM endpoint Hermes could reach | `config/providers.toml` |
+| Profile model choices (tier names) | `config/profiles/*/profile.toml` (`model = "..."`) |
 | Which profiles exist, and their skills | `config/profiles/*/` |
 
 **In the host env file (`$HERMES_ENV_DIR/hermes-main.env`, from
@@ -140,7 +155,7 @@ environment variable. This is the complete list — work through it once.
 | Variable | What it is |
 |---|---|
 | `LITELLM_MASTER_KEY` | `openssl rand -hex 32`; mirrored into the apps' key vars |
-| `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` | the two upstream providers LiteLLM routes to |
+| `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` | keys for the backends `config/litellm.yaml` declares (Ollama Cloud for the four tiers, OpenRouter free for Firecrawl) |
 | `TEAM_OWNER` | the GitHub account whose repos the team works on — the queue scripts refuse to run without it |
 | `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` | the default agent's bot |
 | `DISCORD_HOME_CHANNEL` | where gateway system messages and the housekeeping jobs post |
@@ -217,8 +232,8 @@ and skills live in volumes and survive.
   `{{config_root}}` template) pointing at the secrets directory. mise exports
   these to all tasks; compose reads them from the process environment.
 - **`[tasks]`** — `render`, `validate`, `up`, `down`, `ps`, `logs`, `chat`,
-  `pull`, `net`, `check-updates`, `clean`. `mise tasks` lists them; `mise run
-  up` runs render + net first via task dependencies.
+  `pull`, `net`, `check-updates`, `check-model-windows`, `clean`. `mise tasks`
+  lists them; `mise run up` runs render + net first via task dependencies.
 
 Per-machine overrides go in `mise.local.toml` (gitignored), e.g.:
 
@@ -238,7 +253,8 @@ from the Stack `environment` in `komodo/resources.toml` instead.
 ## Keeping up to date
 
 ```bash
-mise run check-updates   # pins vs upstream (hermes/honcho/firecrawl/litellm)
+mise run check-updates         # pins vs upstream (hermes/honcho/firecrawl/litellm)
+mise run check-model-windows   # each tier's declared window vs the provider's API
 ```
 
 - **Hermes / Honcho / Firecrawl**: bump the pin in `mise.toml` `[env]` (and the

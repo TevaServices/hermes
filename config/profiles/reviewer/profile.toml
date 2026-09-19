@@ -7,10 +7,19 @@
 # started: do NOT run `hermes -p reviewer gateway start` while
 # multiplexing).
 
-# Review demands judgment over context size — run on the "elevated"
-# tier (glm-5.3) with baseline as the (downward) failure fallback.
-model = "elevated"
-fallback_model = "baseline"
+# Review demands judgment, and it is the lowest-volume work on the stack —
+# which is what puts this profile on the top tier ("smartest"). It is also
+# the one role that never needs vision: a diff review contains no images,
+# which is what lets the top tier be a text-only model. Tier names come from
+# config/models.toml; which backend sits behind each one is
+# config/litellm.yaml's business.
+model = "smartest"
+# The tier a failing primary should move to. NOTE: render.py validates this
+# and uses it to collect env keys, but does NOT emit it into the rendered
+# config.yaml — nothing in config.yaml expresses a fallback today, so treat
+# this as documented intent rather than an active safety net. Escalate by
+# hand with `/model smarter`. (See AGENTS.md §"Agent runtime invariants".)
+fallback_model = "smarter"
 integrations = ["honcho", "firecrawl"]
 platforms = ["discord"]
 

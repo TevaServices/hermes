@@ -3,7 +3,9 @@
 
 Reads:
   config/providers.toml      provider registry (endpoints, key vars)
-  config/models.toml        model aliases -> provider/model IDs
+  config/models.toml        model tiers -> gateway model names + windows
+  config/litellm.yaml       the gateway's own config — read only to verify
+                            that every tier has a group (see validate)
   config/integrations.toml  Honcho / Firecrawl / other MCP wiring
   config/profiles/<name>/   profile.toml + SOUL.md (+ optional skills/)
 
@@ -206,6 +208,37 @@ class ConfigError(Exception):
     pass
 
 
+# The gateway's own config. The model NAMES the apps send are LiteLLM
+# `model_name` groups declared here, while the AGENT side (models.toml) only
+# knows the tier name and its window — so this file is read at build time to
+# fail loudly on the one failure that split makes possible: a profile says
+# "smart" and the gateway has no "smart" group, which would 404 every turn at
+# runtime. Absent file = the fork supplies its gateway elsewhere; that skips
+# the check (with a warning) rather than failing it.
+GATEWAY_SPEC = CONFIG / "litellm.yaml"
+# A deployment's group name. The list-item form with optional quotes
+# (`- model_name: smart`, `- model_name: "ollama/*"`) is the shape
+# config/litellm.yaml's header documents as the contract, so a config that
+# keeps to it is always understood here.
+_MODEL_NAME_RE = re.compile(r"^\s*-\s*model_name:\s*['\"]?([^'\"\s]+)['\"]?\s*$")
+# Hermes hard-rejects a configured window below this (MINIMUM_CONTEXT_LENGTH
+# in agent/agent_init.py), so a typo would ship a config that dies at
+# container start. Catch it here instead.
+MIN_CONTEXT_LENGTH = 65536
+
+
+def gateway_model_names() -> set[str] | None:
+    """The model names the LiteLLM gateway serves, or None if it isn't here."""
+    if not GATEWAY_SPEC.is_file():
+        return None
+    names: set[str] = set()
+    for line in GATEWAY_SPEC.read_text(encoding="utf-8").splitlines():
+        match = _MODEL_NAME_RE.match(line.split("#", 1)[0])
+        if match:
+            names.add(match.group(1))
+    return names
+
+
 # Config schema version used when the base image's own value can't be read
 # (local preview runs, where hermes_cli isn't installed). Keep in sync with
 # the HERMES_REF pin — the authoritative stamp is derived at build time.
@@ -327,7 +360,8 @@ def load_toml(path: Path) -> dict:
         return tomllib.load(fh)
 
 
-def validate(models: dict, providers: dict, integrations: dict) -> None:
+def validate(models: dict, providers: dict, integrations: dict,
+             gateway_names: set[str] | None = None) -> None:
     for alias, model in models.items():
         prov = model.get("provider")
         if prov not in providers:
@@ -336,6 +370,31 @@ def validate(models: dict, providers: dict, integrations: dict) -> None:
             )
         if not model.get("model"):
             raise ConfigError(f"model '{alias}' has no model id")
+        window = model.get("context_length")
+        if window and window < MIN_CONTEXT_LENGTH:
+            raise ConfigError(
+                f"model '{alias}' declares context_length {window}, below "
+                f"Hermes' {MIN_CONTEXT_LENGTH} floor (MINIMUM_CONTEXT_LENGTH): "
+                f"the container refuses to start on a window that small"
+            )
+        # Every tier must exist as a group on the gateway — that is the whole
+        # contract between the two files, and the only way this indirection
+        # fails is silently, at request time. A tier served by a native
+        # provider instead opts out with `via_gateway = false`.
+        if gateway_names is None or model.get("via_gateway") is False:
+            continue
+        name = model["model"]
+        if name in gateway_names:
+            continue
+        if any(n.endswith("/*") and name.startswith(n[:-1]) for n in gateway_names):
+            continue
+        raise ConfigError(
+            f"model '{alias}' is served as '{name}', but "
+            f"{GATEWAY_SPEC.name} declares no such group. Add a "
+            f"`- model_name: {name}` entry there, or set via_gateway = false "
+            f"on the entry in models.toml if it is served natively instead. "
+            f"Declared on the gateway: {', '.join(sorted(gateway_names))}"
+        )
     for key in integrations:
         if not key.strip():
             raise ConfigError("integration names must be non-empty")
@@ -435,10 +494,29 @@ def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[d
     return model_block, custom_providers
 
 
-def build_model_overrides(models: dict) -> dict:
-    """Return the `model_overrides` config block for every declared alias.
+def cheap_model_block(profile: str, alias: str, models: dict) -> dict:
+    """The smart_model_routing cheap-lane block Hermes reads, from a tier name.
 
-    `models.toml` states each model's TRUE provider window as
+    Same shape an explicit `[config_extra.smart_model_routing.cheap_model]`
+    table renders as: the named provider plus the gateway's model name. The
+    provider's base_url and key ride the `custom_providers` entry render.py
+    emits for that provider name, so nothing is repeated here — which is the
+    point: a profile names a TIER, and the backend stays in one file.
+    """
+    if alias not in models:
+        raise ConfigError(
+            f"profile '{profile}': smart_model_routing.cheap_model is "
+            f"'{alias}', which is not a tier in config/models.toml. Known: "
+            f"{', '.join(sorted(models))}"
+        )
+    model = models[alias]
+    return {"provider": model["provider"], "model": model["model"]}
+
+
+def build_model_overrides(models: dict) -> dict:
+    """Return the `model_overrides` config block for every declared tier.
+
+    `models.toml` states each tier's TRUE provider window as
     `context_length`; this is the same value in the shape Hermes reads:
     `model_overrides.<provider>.<model_id>.context_window`. One source, two
     consumers:
@@ -452,12 +530,13 @@ def build_model_overrides(models: dict) -> dict:
         models.toml states the windows at all).
       * The `claude` wrapper reads it back to export
         CLAUDE_CODE_MAX_CONTEXT_TOKENS. Claude Code's own model catalogue
-        does not know any of these `ollama/*` ids, so without it Claude
-        Code assumes 200K and auto-compacts a 1M-context session five
-        times too early.
+        knows none of these tier names, so without it Claude Code assumes
+        200K and auto-compacts a 1M-context session five times too early.
 
-    Grouped by provider because that is the block's shape; every alias in
-    models.toml currently rides the litellm gateway.
+    Grouped by provider because that is the block's shape; every tier in
+    models.toml currently rides the litellm gateway. The window belongs to
+    the TIER, so it must be updated whenever litellm.yaml points that tier
+    at a differently-windowed model.
     """
     overrides: dict[str, dict] = {}
     for model in models.values():
@@ -571,7 +650,20 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
 
-    # Per-model context windows for EVERY alias in config/models.toml, in
+    # smart_model_routing.cheap_model may be a TIER NAME (a plain string —
+    # the shape the default profile writes) rather than the {provider, model}
+    # table Hermes reads. Expanding it here means a profile never repeats an
+    # upstream model id, and an unknown tier is a build error rather than a
+    # cheap lane that 404s on every short turn. An explicit table passes
+    # through unchanged, so a profile can still point the lane at a model
+    # that is not a tier.
+    routing = config.get("smart_model_routing")
+    if isinstance(routing, dict) and isinstance(routing.get("cheap_model"), str):
+        routing["cheap_model"] = cheap_model_block(
+            name, routing["cheap_model"], models
+        )
+
+    # Per-model context windows for EVERY tier in config/models.toml, in
     # the shape Hermes reads (see build_model_overrides). Merged per
     # provider+model rather than replaced, so a profile may add or correct
     # one entry via [config_extra.model_overrides] without dropping the
@@ -768,7 +860,11 @@ def main() -> int:
         providers = load_toml(CONFIG / "providers.toml")["providers"]
         models = load_toml(CONFIG / "models.toml")["models"]
         integrations = load_toml(CONFIG / "integrations.toml")["integrations"]
-        validate(models, providers, integrations)
+        gateway_names = gateway_model_names()
+        if gateway_names is None:
+            print(f"  warning: {GATEWAY_SPEC} not found — every model tier "
+                  f"goes unverified against the gateway", file=sys.stderr)
+        validate(models, providers, integrations, gateway_names)
 
         profile_root = CONFIG / "profiles"
         all_profile_dirs = sorted(

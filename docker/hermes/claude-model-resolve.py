@@ -3,18 +3,19 @@
 
 Reads the RENDERED Hermes config (source of truth baked from the git repo):
   field 1: model provider (e.g. litellm)
-  field 2: primary model id as the gateway expects it (e.g. ollama/glm-5.3-flash)
+  field 2: primary model id as the gateway expects it — a TIER name
+           (e.g. smarter); upstream model ids live in config/litellm.yaml
   field 3: cheap/secondary model id (smart_model_routing.cheap_model)
 
 With --window <model-id> it instead prints that model's declared context
 window as a bare integer (exit 1 if the config declares none). The window
 comes from the `model_overrides` block render.py emits out of
-config/models.toml's `context_length` — the provider's TRUE window, which
-models.toml states explicitly because Hermes' own catalogue probe cannot
-resolve an ID through the litellm base_url. The `claude` wrapper uses it
-for CLAUDE_CODE_MAX_CONTEXT_TOKENS: Claude Code knows none of these
-`ollama/*` ids, so it assumes a 200K window and auto-compacts far too
-early without it.
+config/models.toml's `context_length` — the TRUE window of whatever backend
+serves that tier, which models.toml states explicitly because Hermes' own
+catalogue probe cannot resolve an ID through the litellm base_url. The
+`claude` wrapper uses it for CLAUDE_CODE_MAX_CONTEXT_TOKENS: Claude Code
+knows none of these tier names, so it assumes a 200K window and auto-compacts
+far too early without it.
 
 Pure stdlib — no PyYAML dependency. Path: $CLAUDE_HERMES_CONFIG or
 /opt/data/config.yaml.
@@ -30,9 +31,9 @@ MODEL_kv_RE = re.compile(
 CHEAP_BLOCK_RE = re.compile(r"^\s{2}cheap_model:\s*$")
 CHEAP_MODEL_RE = re.compile(r"^\s{4}model:\s*['\"]?([^'\"]+?)['\"]?\s*$")
 # model_overrides: <provider> / <model id> / context_window — two levels
-# deeper than anything else we parse. Model ids carry "/" and ":" (e.g.
-# ollama/nemotron-3-nano:30b); plain unquoted keys are valid YAML for both,
-# but strip quotes anyway so a quoted emit can never break the lookup.
+# deeper than anything else we parse. Ids are the gateway's tier names, but a
+# caller's --model can be any id (a raw upstream one through the gateway's
+# wildcard, say), so strip quotes and tolerate "/" and ":" either way.
 OVR_PROVIDER_RE = re.compile(r"^\s{2}([A-Za-z0-9_.:@/-]+):\s*$")
 OVR_MODEL_RE = re.compile(r"^\s{4}(\S+):\s*$")
 OVR_WINDOW_RE = re.compile(r"^\s{6}context_window:\s*(\d+)\s*$")

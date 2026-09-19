@@ -7,17 +7,26 @@
 # container start). Instead of editing a long Hermes config.yaml, change
 # a line here and push — the image rebuild carries the config.
 
-# Model aliases from config/models.toml. Everyday chat and agent turns
-# run on "baseline" (glm-5.3-flash — 1M window); a failing baseline falls
-# back UP to "elevated" (glm-5.3), which is also the opt-in tier for hard
-# reasoning (/model elevated mid-session). smart_model_routing below sends
-# short/simple turns to the "nano" model (nemotron-3-nano:30b), so
-# chit-chat costs the minimum. Targeted side tasks route per task:
-# compression (needs intelligence + big window) rides the aux env pin on
-# glm-5.3-flash = baseline; light side tasks (web extract, skills hub) are
-# pinned to nano. Honcho's consumers run on "ultra" (see honcho.env).
-model = "baseline"
-fallback_model = "elevated"
+# Model tiers from config/models.toml — the names the GATEWAY serves, not
+# upstream model ids. Which provider and model sit behind each tier is
+# config/litellm.yaml's business; swapping backends never touches this file.
+#
+# Everyday chat and agent turns run on "smarter" (1M window, vision — these
+# channels carry images, and this profile has the longest-lived sessions and
+# the heaviest agentic chains). "smartest" is the opt-in escalation for hard
+# reasoning: `/model smartest` mid-session. smart_model_routing below sends
+# short/simple turns to "cheap", so chit-chat costs the minimum, and the
+# targeted side tasks route per task: compression (needs intelligence AND
+# the 1M window) rides the aux env pin on "smarter"; light side tasks (web
+# extract, skills hub) are pinned to "cheap". Honcho's consumers run on
+# "cheap" too (see honcho.env).
+model = "smarter"
+# The tier a failing primary should move to. NOTE: render.py validates this
+# and uses it to collect env keys, but does NOT emit it into the rendered
+# config.yaml — nothing in config.yaml expresses a fallback today, so treat
+# this as documented intent rather than an active safety net. Escalate by
+# hand with `/model smartest`. (See AGENTS.md §"Agent runtime invariants".)
+fallback_model = "smartest"
 
 # Enabled integrations from config/integrations.toml
 integrations = ["honcho", "firecrawl"]
@@ -67,16 +76,15 @@ speed = 1.2
 voice = "en-US-AvaMultilingualNeural"
 
 # Least-costly-while-effective routing: short, single-line messages with
-# no code/tools/URLs go to the cheap model (the low-intelligence tier —
-# "nano"); everything else uses the primary. `provider` is the named
-# custom provider from providers.toml (rendered into config.yaml
-# `custom_providers:`), so it shares the same LITELLM_API_KEY. The
-# "ollama/" prefix matches the gateway's ollama/* wildcard route.
+# no code/tools/URLs go to the "cheap" tier; everything else uses the
+# primary. The cheap lane is a TIER NAME from config/models.toml — render.py
+# expands it into the provider + model block Hermes reads (and validates the
+# name against the catalogue), so this file never repeats an upstream model
+# id. An explicit table form ([config_extra.smart_model_routing.cheap_model]
+# provider/model) is still accepted and passed through unchanged.
 [config_extra.smart_model_routing]
 enabled = true
-[config_extra.smart_model_routing.cheap_model]
-provider = "litellm"
-model = "ollama/nemotron-3-nano:30b"
+cheap_model = "cheap"
 
 # --- Agile SaaS team routing -----------------------------------------------
 # The team profiles (planner / developer / reviewer) live under
