@@ -602,12 +602,18 @@ encountered when reading a file` and reads to an agent as "the API key is
 broken" (it is not; check with `sudo` on the host before touching the key).
 The entrypoint does for this what it does for the App PEMs — copies it into
 the runtime-owned home on every boot (`$HERMES_HOME/home/komodo-auth-header`,
-600, plus a `KOMODO_AUTH_HEADER=` line in the profile's `.env`) — and
-`KOMODO_AUTH_HEADER` is the var to use: `-H @$KOMODO_AUTH_HEADER`. Default
-profile only, deliberately: `komodo-ops` is its skill and the control-plane
-credential is not copied into the team profiles' homes. The Komodo API key
-itself is created in the UI and, as of this writing, does not expire
-(`expires: 0` — verify with `read/ListApiKeys`). It can deploy stacks, run builds,
+600) — and `KOMODO_AUTH_HEADER` is the var to use: `-H @$KOMODO_AUTH_HEADER`.
+Default profile only, deliberately: `komodo-ops` is its skill and the
+control-plane credential is not copied into the team profiles' homes. The
+Komodo API key itself is created in the UI and, as of this writing, does not
+expire (`expires: 0` — verify with `read/ListApiKeys`).
+**The var is declared in compose, not exported by the entrypoint**, and that
+distinction is load-bearing: s6-overlay starts services from
+`/run/s6/container_environment`, so an `export` in the entrypoint is invisible
+to the gateway and to every tool subprocess (it looked correct, logged
+correctly, and reached nothing — verified by reading the gateway process's
+environment). Config belongs in the container `environment:`, files belong in
+the entrypoint. It can deploy stacks, run builds,
 and re-apply the resource sync — but NOT change control-plane resources
 (that's the komodo repo, human-reviewed via push).
 
