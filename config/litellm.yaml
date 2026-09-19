@@ -1,31 +1,88 @@
-# LiteLLM proxy config — the stack's single LLM gateway.
+# LiteLLM proxy config — the stack's single LLM gateway, and the ONE file
+# that decides which upstream provider actually answers.
 #
-# Every app (Hermes, Honcho, Firecrawl) points at http://litellm:4000
-# with the LITELLM_MASTER_KEY and sends a model name from the list
-# below. LiteLLM routes each request to a member of that model's group
-# (latency-based) and falls back to another member on failure.
+# ── The contract: four tier names ─────────────────────────────────────────
+# Hermes, Honcho and Firecrawl never name a provider or an upstream model
+# id. They send one of four names, and everything to the right of
+# `litellm_params:` is yours to point anywhere:
 #
-# Upstreams:
-#   - Ollama Cloud (https://ollama.com/v1) — the chat LLM provider the
-#     stack already used; key from OLLAMA_API_KEY in litellm.env.
-#   - OpenRouter free models — json_schema-capable (Ollama Cloud strips
-#     response_format json_schema, which broke Firecrawl's SmartScrape
-#     extraction); key from OPENROUTER_API_KEY in litellm.env.
-#   - Local ollama (http://ollama:11434) — nomic-embed-text embeddings
-#     only (Ollama Cloud has no embeddings endpoint).
+#   cheap    — cheapest competent work: the short/simple-turn lane
+#              (smart_model_routing), the light auxiliary side tasks
+#              (session search, web extract, skills hub) and every Honcho
+#              consumer (deriver, summaries, dream, dialectic).
+#   smart    — the everyday tier. The planner profile runs here.
+#   smarter  — the workhorse (1M window at flash economics): the default and
+#              developer profiles, and context compression, run here.
+#   smartest — the top of the ladder: judgment work (the reviewer profile)
+#              and the opt-in escalation an agent reaches for with
+#              `/model smartest`.
+#
+# Swapping provider = editing this file. Tier names are stable; the backends
+# behind them are not. Everything else in the repo knows only the tier name
+# and its context window (config/models.toml), so a tier repointed at a
+# model with a different window needs that entry updated in the same change;
+# scripts/check-model-windows.py verifies the pair against the provider's
+# own API.
+#
+# A tier may have SEVERAL deployments: repeat the same `model_name` and the
+# router spreads across them and fails over between them. Give every member
+# of a tier the same capability class — a fallback with a smaller context
+# window silently breaks long-context work.
+#
+# render.py reads this file at image build time and FAILS THE BUILD when a
+# tier declared in config/models.toml has no group here (or is not covered by
+# a "*" wildcard name). It accepts `model_name:` as a list item, quoted or
+# unquoted — keep that shape when adding groups.
 #
 # Model names are what the apps send. Groups (multiple entries sharing a
-# model_name) are routed among by the router_settings strategy.
+# model_name) are spread across by the router_settings strategy.
 #
-# The "ollama/*" wildcard serves every OTHER Ollama Cloud model with no
+# The "ollama/*" wildcard serves every other Ollama Cloud model with no
 # config change: LiteLLM replaces the "*" with the requested model ID and
-# passes it through to ollama.com verbatim. Explicit entries always win
-# over the wildcard (exact match before pattern).
+# passes it through to ollama.com verbatim. Explicit entries always win over
+# the wildcard (exact match before pattern). It is the one Ollama-specific
+# block here, kept as the "try a model before promoting it to a tier"
+# affordance; an implementer on another provider deletes it.
 
 model_list:
-  # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). OpenRouter
-  #    ONLY: schema-bound extraction needs response_format json_schema,
-  #    which Ollama Cloud strips. Both members are json_schema-capable.
+  # ── The four tiers ────────────────────────────────────────────────────
+  # Ollama Cloud today, through its OpenAI-compatible endpoint. Each entry
+  # is exactly what the "ollama/*" wildcard below expands to per request —
+  # the tiers are spelled out so that pointing one at another provider is a
+  # local edit rather than a new route.
+  #
+  # Windows (config/models.toml, verified via POST ollama.com/api/show):
+  # cheap/smart 262144, smarter/smartest 1048576. `smartest` has NO vision —
+  # fine for its only consumer (a diff review contains no images), but
+  # kimi-k3 (1M, vision+tools+thinking) is the drop-in swap if the
+  # escalation tier ever needs to accept images.
+  - model_name: cheap
+    litellm_params:
+      model: openai/nemotron-3-nano:30b
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: smart
+    litellm_params:
+      model: openai/gemma4:cloud
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: smarter
+    litellm_params:
+      model: openai/glm-5.3-flash
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: smartest
+    litellm_params:
+      model: openai/glm-5.3
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+
+  # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). NOT a tier: it
+  #    serves one app that only ever ingests PUBLIC web pages, and is
+  #    OpenRouter ONLY because schema-bound extraction needs
+  #    response_format json_schema, which Ollama Cloud strips. Both members
+  #    are json_schema-capable. This group is also what a "never sees
+  #    private data" lane looks like — copy the shape if another one appears.
   - model_name: firecrawl
     litellm_params:
       model: openrouter/google/gemma-4-31b-it:free
@@ -50,11 +107,28 @@ model_list:
   #    "ollama/" prefix keeps those listed names callable as-shown.
   #    No load balancing or fallbacks on this route — it is one
   #    passthrough deployment, like every other Ollama Cloud entry.
+  #
+  #    NOTE the window caveat: a model reached through the wildcard has no
+  #    declared context window (config/models.toml declares windows per
+  #    TIER), so Hermes and the `claude` wrapper fall back to their own
+  #    guesses for it. Promote a model to a tier before relying on it.
   - model_name: "ollama/*"
     litellm_params:
       model: openai/*
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
+
+router_settings:
+  # Pick the fastest healthy member of a group per request, and retry the
+  # others on failure. Inert for the single-member tiers; it matters for the
+  # firecrawl group (the only 2-member one) and for any tier an implementer
+  # gives more than one deployment.
+  #
+  # Caveat for firecrawl: latency-based routing CONCENTRATES traffic on the
+  # faster member where simple-shuffle would split it 50/50, so free-tier
+  # rate-limit pressure lands differently. If extraction starts returning
+  # errors, delete this block (the default is simple-shuffle).
+  routing_strategy: latency-based-routing
 
 litellm_settings:
   # Expand the "ollama/*" wildcard in /v1/models by querying the
