@@ -7,7 +7,7 @@ and each Stack clones this repo and runs its compose file on the host via the
 Periphery agent.
 
 ```
- git push ──webhook──▶ Komodo Core
+ PR merge ──webhook──▶ Komodo Core
                         │ 1. Resource Sync: apply komodo/resources.toml
                         │ 2. Procedure "deploy-changed-stacks":
                         │      Pull Repo → Batch Deploy Stack If Changed ("*")
@@ -58,7 +58,7 @@ resource, and (on first deploy) all three containers come up.
 > Cross-check the TOML field names against your Komodo version's docs
 > (<https://komo.do/docs/automate/sync-resources>) — the schema evolves.
 
-## 4. Wire the webhook (push → deploy)
+## 4. Wire the webhook (merge to `main` → deploy)
 
 Create a Procedure in the UI, **"deploy-changed-stacks"**:
 
@@ -66,10 +66,11 @@ Create a Procedure in the UI, **"deploy-changed-stacks"**:
 2. **Batch Deploy Stack If Changed** — target stacks `*` (pattern).
 
 Then add a webhook from your git provider (GitHub: content type `application/json`,
-push events on `main`) to the Procedure's webhook URL, with the shared secret from
-your Core's `KOMODO_WEBHOOK_SECRET`. Also enable the webhook on the **Resource Sync**
-so definition changes (new stacks, edited pins in `resources.toml`) are applied on
-push.
+push events on `main` — a squash-merged PR produces one, and `main` is protected, so
+it is the only way a commit reaches the branch) to the Procedure's webhook URL, with
+the shared secret from your Core's `KOMODO_WEBHOOK_SECRET`. Also enable the webhook on
+the **Resource Sync** so definition changes (new stacks, edited pins in
+`resources.toml`) are applied on push.
 
 Why a Procedure instead of per-Stack webhooks: git-repo Stacks clone the whole repo
 per deploy, which is wasteful in a monorepo — the pull-once, diff, deploy-changed
@@ -83,9 +84,9 @@ Two update paths — pick one per component (defaults below are the GitOps path)
 
 | What | GitOps rebuild (default) | In-place |
 |---|---|---|
-| Hermes agent | bump `HERMES_REF` in `mise.toml` `[env]` **and** `resources.toml` → push → image rebuilds; agent state survives in `hermes-main-data` | `HERMES_UPDATE_ON_START=true` + code volume (see notes in [`compose/hermes.compose.yml`](../compose/hermes.compose.yml)) |
-| Honcho | bump `HONCHO_VERSION` → push | — |
-| Firecrawl | bump `FIRECRAWL_VERSION` → push | enable `auto_update` + `poll_for_updates` on the Stack to track newer image digests |
+| Hermes agent | bump `HERMES_REF` in `mise.toml` `[env]` **and** `resources.toml` → merge → image rebuilds; agent state survives in `hermes-main-data` | `HERMES_UPDATE_ON_START=true` + code volume (see notes in [`compose/hermes.compose.yml`](../compose/hermes.compose.yml)) |
+| Honcho | bump `HONCHO_VERSION` → merge | — |
+| Firecrawl | bump `FIRECRAWL_VERSION` → merge | enable `auto_update` + `poll_for_updates` on the Stack to track newer image digests |
 
 Run `mise run check-updates` locally (or `./scripts/check-updates.sh` from a
 scheduled Komodo Action) to see how far your pins have drifted from upstream.
@@ -98,9 +99,9 @@ releases are the main source of breakage (see the note at the top of
 ## Day-2 operations
 
 - **Logs/status**: Komodo UI → Stacks → service logs, or `docker logs hermes-main`.
-- **Config change**: edit `config/` or a `SOUL.md` → `mise run render` → commit → push →
-  the compose files in the repo changed, so the Procedure redeploys; the entrypoint
-  reapplies the overlay on container start.
+- **Config change**: edit `config/` or a `SOUL.md` → `mise run render` → commit on a
+  branch → PR → squash-merge → the compose files in the repo changed, so the Procedure
+  redeploys; the entrypoint reapplies the overlay on container start.
 - **Secrets change**: edit `/etc/hermes/<name>.env` on the host, then redeploy the
   stack (Procedure run, or `docker compose ... up -d --force-recreate` on the host).
 - **Diagnostics**: `docker exec -it hermes-main hermes doctor`.
