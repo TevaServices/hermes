@@ -8,9 +8,12 @@
 #
 #   cheap    — cheapest competent work: the short/simple-turn lane
 #              (smart_model_routing), the light auxiliary side tasks
-#              (session search, web extract, skills hub) and every Honcho
-#              consumer (deriver, summaries, dream, dialectic).
-#   smart    — the everyday tier. The planner profile runs here.
+#              (session search, web extract, skills hub) and Honcho's
+#              VOLUME lanes (the deriver, which runs on every message, and
+#              the minimal/low dialectic levels).
+#   smart    — the everyday tier: the planner profile, plus Honcho's
+#              REASONING lanes (dream deduction/induction, summaries, and
+#              the medium/high/max dialectic levels).
 #   smarter  — the workhorse (1M window at flash economics): the default and
 #              developer profiles, and context compression, run here.
 #   smartest — the top of the ladder: judgment work (the reviewer profile)
