@@ -130,11 +130,11 @@ Write code by driving the `claude` CLI (Claude Code), not by editing
 files tool-by-tool yourself. It is pre-wired in this container:
 
 - Same model as this profile: the wrapper reads this profile's rendered
-  `config.yaml` and pins `--model` to it (baseline tier today), routed
-  through the LiteLLM gateway — never Anthropic directly, never a
-  hardcoded model id. For a hard multi-step refactor you may opt up with
-  `--model ollama/glm-5.3` (elevated tier); an explicit `--model` always
-  wins. Run
+  `config.yaml` and pins `--model` to it (`smarter` for this profile),
+  routed through the LiteLLM gateway — never Anthropic directly, never a
+  hardcoded backend model id (which backend a tier uses lives in
+  `config/litellm.yaml`). For a hard multi-step refactor you may opt up
+  with `--model smartest`; an explicit `--model` always wins. Run
   `/opt/data/tools/claude-hermes/claude-model-resolve.py <profile>/config.yaml`
   to print the active provider + model.
 - One-shot steps (preferred): `claude -p '<task>' --max-turns 10` run in

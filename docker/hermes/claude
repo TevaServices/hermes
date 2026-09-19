@@ -7,8 +7,17 @@
 #      truth) via claude-model-resolve: provider must be the gateway;
 #      primary model id + cheap-model id from smart_model_routing; and the
 #      running model's context window from model_overrides, which becomes
-#      CLAUDE_CODE_MAX_CONTEXT_TOKENS (Claude Code knows none of these
-#      ollama/* ids and would otherwise assume 200K).
+#      CLAUDE_CODE_MAX_CONTEXT_TOKENS (Claude Code knows none of these tier
+#      names and would otherwise assume 200K).
+#
+# The model ids here are the gateway's TIER names (cheap / smart / smarter /
+# smartest), not upstream model ids — see config/models.toml. Which backend
+# answers for a tier is config/litellm.yaml's business and needs no change
+# here. What DOES matter to this wrapper is the gateway itself: it refuses to
+# run unless model.provider is "litellm" and posts to http://litellm:4000, so
+# renaming the gateway provider in providers.toml, or moving its base_url, is
+# also an edit to this file — otherwise it silently degrades to stock claude
+# (which then fails on missing Anthropic auth).
 #   2. Any explicit --model the caller passes always wins — including for
 #      the window, so the two never disagree.
 #   3. No config / missing LITELLM_API_KEY → fall back to stock claude
@@ -99,11 +108,12 @@ model=${arg_model:-$primary}
 # Tell Claude Code this model's REAL context window.
 #
 # Without it Claude Code assumes 200K for anything its own model catalogue
-# doesn't describe — which is every ollama/* id here — and auto-compacts a
+# doesn't describe — which is every tier name here — and auto-compacts a
 # 1M-context session five times too early. The number comes from the same
 # rendered config as the model: render.py emits `model_overrides` out of
-# config/models.toml's per-model `context_length`, the window the provider
-# actually reports (see models.toml for how those were verified).
+# config/models.toml's per-tier `context_length`, the window the tier's
+# current backend actually reports (see models.toml for how those were
+# verified, and `mise run check-model-windows` to re-verify).
 #
 # A model id the config does not declare leaves the variable UNSET rather
 # than guessed: compacting earlier than necessary is merely wasteful,

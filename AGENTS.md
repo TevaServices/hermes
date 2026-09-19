@@ -96,33 +96,54 @@ echoed, or routed through a shell history or chat transcript.
   (`http://litellm:4000` + `config/litellm.yaml`). The proxy holds the real
   upstream keys (`OLLAMA_API_KEY` for Ollama Cloud — the key Open WebUI
   uses — and `OPENROUTER_API_KEY` for free models, both in `litellm.env`)
-  and routes each model name among group members
-  (`routing_strategy: latency-based-routing`, with fallbacks; Ollama Cloud
-  is typically fastest, so it wins mixed groups and OpenRouter free is the
-  resilience fallback). An `ollama/*` wildcard serves every other Ollama
-  Cloud model (callable as `ollama/<model-id>`, expanded in `/v1/models`
-  from the provider's own list via `litellm_settings.check_provider_endpoint`),
-  so new Ollama Cloud releases need no config change. Apps authenticate
-  with the master key (`LITELLM_MASTER_KEY`, generate with
-  `openssl rand -hex 32`), mirrored into each app's env as
-  `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` / `OPENAI_API_KEY` — same value
-  everywhere.
-- Model selection follows a four-tier policy defined as aliases in
-  `config/models.toml` (windows are the values Ollama Cloud reports,
-  verified via `POST ollama.com/api/show`): **baseline** = `glm-5.3-flash`
-  (1M window; agent primary/hermes chat, and targeted tasks needing
-  intelligence AND a big window, e.g. aux compression), **elevated** =
-  `glm-5.3` (1M; hard reasoning/multi-step work, opt in via `/model
-  elevated` or a profile's model, and the baseline's failure fallback),
-  **nano** = `nemotron-3-nano:30b` (256k; `smart_model_routing`'s cheap
-  lane for short/simple turns + light aux side tasks: session search, web
-  extract, skills hub), **ultra** = `nemotron-3-ultra` (256k;
-  small-context targeted work; Honcho's LLM consumers run here). Exception:
-  the `firecrawl` group is **OpenRouter free models ONLY**
-  (`google/gemma-4-31b-it:free`, `nvidia/nemotron-3-super-120b-a12b:free`) —
-  Ollama Cloud strips `response_format: json_schema` (so /v1/extract and v2
-  json-format scrapes returned `json: null`), while OpenRouter passes
-  json_schema through and SmartScrape extraction works.
+  and routes each model name among that group's members
+  (`router_settings.routing_strategy: latency-based-routing` — inert for the
+  single-member tiers, meaningful the moment one has two deployments, which
+  is also when "same capability class" starts to matter: a fallback with a
+  smaller window silently breaks long-context work). An `ollama/*` wildcard
+  serves every other Ollama Cloud model (callable as `ollama/<model-id>`,
+  expanded in `/v1/models` from the provider's own list via
+  `litellm_settings.check_provider_endpoint`), so a model can be tried
+  before it is promoted to a tier — but a wildcard id has NO declared
+  window (models.toml declares windows per TIER), so it is not something an
+  agent should rely on. Apps authenticate with the master key
+  (`LITELLM_MASTER_KEY`, generate with `openssl rand -hex 32`), mirrored
+  into each app's env as `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` /
+  `OPENAI_API_KEY` — same value everywhere.
+- **`config/litellm.yaml` is the backend file; the apps only ever send one
+  of four TIER NAMES.** `cheap` / `smart` / `smarter` / `smartest` are
+  LiteLLM `model_name` groups, and everything under a group's
+  `litellm_params` — provider, upstream model id, `api_base`, key, extra
+  params, extra members — is the implementer's to point anywhere. That is
+  the abstraction: moving a tier to another provider, or swapping the
+  backend behind it, is an edit to this file and NOTHING else. Current
+  backends (windows are the values Ollama Cloud reports, verified via
+  `POST ollama.com/api/show` and re-checkable with
+  `mise run check-model-windows`):
+  **cheap** = `nemotron-3-nano:30b` (256k; `smart_model_routing`'s cheap
+  lane for short/simple turns, the light aux side tasks — session search,
+  web extract, skills hub — and Honcho's VOLUME lanes: the deriver, which
+  runs on every message, plus the minimal/low dialectic levels),
+  **smart** = `gemma4:cloud` (256k, vision; the planner profile, and
+  Honcho's REASONING lanes: dream deduction/induction, summaries, and the
+  medium/high/max dialectic levels),
+  **smarter** = `glm-5.3-flash` (1M, vision; the default and developer
+  profiles, and aux compression — the one lane that needs intelligence AND
+  a big window),
+  **smartest** = `glm-5.3` (1M, **no vision**; the reviewer, plus the
+  opt-in `/model smartest` escalation — kimi-k3 is the drop-in swap if the
+  top tier ever needs to accept images).
+  Because the tier names ARE the gateway's model names, `/model cheap`,
+  `/model smart`, `/model smarter` and `/model smartest` all genuinely
+  resolve mid-session — the old alias names could not (they lived only in
+  this repo and never reached the gateway).
+  Exception: the `firecrawl` group is NOT a tier and is **OpenRouter free
+  models ONLY** (`google/gemma-4-31b-it:free`,
+  `nvidia/nemotron-3-super-120b-a12b:free`) — Ollama Cloud strips
+  `response_format: json_schema` (so /v1/extract and v2 json-format scrapes
+  returned `json: null`), while OpenRouter passes json_schema through and
+  SmartScrape extraction works. It is also the shape to copy for any other
+  lane that can never see private data.
 - `litellm.env`: `LITELLM_MASTER_KEY`, `OLLAMA_API_KEY`,
   `OPENROUTER_API_KEY` (free tier — create at https://openrouter.ai/keys).
 - `hermes-main.env`: `LITELLM_API_KEY` (the master key), the `AUXILIARY_*`
@@ -143,11 +164,18 @@ echoed, or routed through a shell history or chat transcript.
   bare `OPENAI_API_KEY` is NOT read; Honcho uses `LLM_`-prefixed settings
   and every default model config reuses the client built from these two),
   per-section `*_MODEL_CONFIG__MODEL` overrides (deriver, summaries, dream,
-  dialectic levels — defaults point at OpenAI models Ollama Cloud doesn't
-  serve), and the embedding block: `EMBEDDING_MODEL_CONFIG__*` → LiteLLM's
+  dialectic levels — defaults point at OpenAI models this stack's gateway
+  does not serve, so all of them are pinned to TIER NAMES), and the
+  embedding block: `EMBEDDING_MODEL_CONFIG__*` → LiteLLM's
   `nomic-embed-text` entry, which proxies to the stack-local `ollama`
   service (768 dims; Ollama Cloud has **no embeddings endpoint**) +
   `EMBEDDING_VECTOR_DIMENSIONS=768`. Optional `HONCHO_POSTGRES_PASSWORD`.
+  The section split follows the work: **volume lanes on `cheap`** (the
+  deriver runs on every message, and minimal/low dialectic is light by
+  construction), **reasoning lanes on `smart`** (dream deduction/induction,
+  summaries, and the medium/high/max dialectic levels). Raising the DERIVER
+  is the single biggest spend lever here — and the biggest quality lever;
+  it is the one line to change if memory extraction looks thin.
 
 ## Stack particulars (hard-won)
 
@@ -186,6 +214,16 @@ checking the host's actual resources.
 
 ### Agent runtime invariants
 
+- **`fallback_model` is declared but NOT wired.** `render.py` validates a
+  profile's `fallback_model` and uses it to collect env keys, but nothing
+  emits it into the rendered `config.yaml` — the config has no fallback key
+  at all — so a failing primary does not automatically degrade to the tier
+  the profile names. The per-profile comments say so where they set it, and
+  the value is the documented INTENT; escalating is still manual
+  (`/model smartest`, or `claude --model smartest`). Wiring it needs the
+  upstream key name confirmed inside the image
+  (`grep fallback /opt/hermes/hermes_cli/config_defaults.py`) — a separate
+  change, deliberately not done blind.
 - **The agent's BUILT-IN Honcho integration must stay off**: it
   auto-enables from the mere presence of `HONCHO_API_KEY` in the
   environment, then fails against the *hosted* Honcho API ("Invalid API
@@ -201,22 +239,28 @@ checking the host's actual resources.
   past the 50% compaction threshold before any history exists. tool_search
   (progressive disclosure) defers MCP schemas behind
   `tool_search`/`tool_describe`/`tool_call` bridges; core built-in tools
-  never defer. `config/models.toml` must state each model's TRUE provider
-  window explicitly (Hermes' catalogue probe can't resolve IDs through the
-  litellm base_url and falls back to 256k for everything — verify the
-  actual model via `POST ollama.com/api/show` →
-  `model_info.*.context_length`). Never set a window below the provider's:
-  v2026.9.14 hard-rejects anything under 64K
-  (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`). `render.py`
-  emits every alias into the rendered config's **`model_overrides`** block
-  — the upstream key for per-provider+model windows, which
-  `agent/model_metadata.get_model_context_length` consults at resolution
-  step 0b, ahead of every probe and the 256k fallback (verified live
-  against the running image). That makes `models.toml` the one source of
-  truth for all three consumers: the profile's own model
+  never defer. `config/models.toml` states each TIER's TRUE provider window
+  explicitly (Hermes' catalogue probe can't resolve IDs through the litellm
+  base_url and falls back to 256k for everything — verify the actual model
+  via `POST ollama.com/api/show` → `model_info.*.context_length`, or
+  `mise run check-model-windows`). It is the window of whatever backend
+  currently serves that tier, so **it is in lockstep with
+  `config/litellm.yaml`**: repoint a tier at a differently-windowed model
+  there and this value moves in the same change. Never set it below the
+  provider's: v2026.9.14 hard-rejects anything under 64K
+  (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py` — render.py now
+  fails the build on it, so that lands at build time, not container start).
+  `render.py` also fails the build when a tier has no matching `model_name`
+  group on the gateway, which is the one way this indirection fails
+  silently otherwise. It emits every tier into the rendered config's
+  **`model_overrides`** block — the upstream key for per-provider+model
+  windows, which `agent/model_metadata.get_model_context_length` consults
+  at resolution step 0b, ahead of every probe and the 256k fallback
+  (verified live against the running image). That makes `models.toml` the
+  one source of truth for all three consumers: the profile's own model
   (`model.context_length`), the cheap lane / auxiliary models / any `/model`
   switch (`model_overrides`), and the `claude` wrapper's
-  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (below). Declare a model there before
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (below). Declare a TIER there before
   using it — an undeclared window is not guessed.
 - **Multiplexing boot noise is benign**: with `GATEWAY_MULTIPLEX_PROFILES`
   on, the tool registry's availability check_fns probe at gateway boot
@@ -478,7 +522,7 @@ over time.
 - **The wrapper tells Claude Code the real context window (2026-09-15).**
   It exported `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` and pinned the
   model, but never `CLAUDE_CODE_MAX_CONTEXT_TOKENS` — and Claude Code's
-  own model catalogue describes none of the `ollama/*` ids, so it assumed
+  own model catalogue describes none of the tier names, so it assumed
   **200k** and would auto-compact a 1M-context session five times too
   early (its own stderr said so: "auto-compact keeps this session within
   200k tokens (the context window it assumes)"). The wrapper now resolves
@@ -490,9 +534,15 @@ over time.
   than guessed: compacting early is wasteful, claiming a window the
   provider does not have overruns it. Verified live on the host: the
   200k warning is present on a stock invocation and absent through the
-  wrapper, and `--model ollama/nemotron-3-ultra` correctly yields 262144
-  while the 1M GLMs yield 1048576. The `unrecognized_model` stderr line
+  wrapper, and `--model smartest` correctly yields 1048576 while `smart`
+  yields 262144. The `unrecognized_model` stderr line
   survives (it is about the catalogue, not the window) — still cosmetic.
+  What the wrapper DOES hardcode is the gateway itself: it refuses to run
+  unless `model.provider` is `litellm` and posts to `http://litellm:4000`.
+  Backends change behind the gateway and need nothing here, but renaming
+  that provider in `providers.toml` or moving its base_url is also an edit
+  to `docker/hermes/claude` — otherwise it degrades to stock claude, which
+  then fails on missing Anthropic auth.
 - **The Claude Code installer had to be rewritten (2026-09-15).** Since
   the 2.1.x cutover `@anthropic-ai/claude-code` is no longer a CLI bundle:
   the wrapper package ships `install.cjs` + a `bin/claude.exe` stub, and
@@ -810,13 +860,36 @@ docker exec hermes-main hermes mcp test firecrawl   # tools discovered
 # --probe to create + archive a real thread). Named problems say whether
 # the bit is missing at guild level or denied by a channel overwrite.
 python3 scripts/discord-thread-doctor.py            # all ✓, exit 0
-# Gateway: /v1/models should list the explicit entries PLUS the live
-# Ollama Cloud catalogue (as ollama/<id>) — if it instead returns a
-# swarm of openai/… names, check_provider_endpoint isn't taking effect.
+# Gateway: /v1/models should list the four tier names (cheap, smart,
+# smarter, smartest) PLUS the live Ollama Cloud catalogue (as ollama/<id>) —
+# if it instead returns a swarm of openai/… names, check_provider_endpoint
+# isn't taking effect.
 curl -s http://127.0.0.1:4000/v1/models \
   -H "Authorization: Bearer $(sudo cat /etc/hermes/litellm.env | grep ^LITELLM_MASTER_KEY= | cut -d= -f2)" \
   | python3 -c 'import json,sys; print(*(m["id"] for m in json.load(sys.stdin)["data"]), sep="\n")'
+# One real request per tier name — 200 each, and litellm's log names the
+# upstream model that actually served it.
+for m in cheap smart smarter smartest; do printf '%-9s ' "$m"; \
+  curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/v1/chat/completions \
+    -H "Authorization: Bearer $(sudo cat /etc/hermes/litellm.env | grep ^LITELLM_MASTER_KEY= | cut -d= -f2)" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}"; done
+# Tiers' declared windows vs the provider's own API (host-side, needs the
+# internet but no key) — the ONLY check that can catch litellm.yaml and
+# models.toml drifting apart.
+mise run check-model-windows                        # all ok, exit 0
 ```
+
+Mid-session, `/model cheap`, `/model smart`, `/model smarter` and
+`/model smartest` all resolve — the tier names ARE the gateway's model
+names, which the old alias names never were.
+
+A gateway-config change and the env edit it implies are two separate acts
+(`/etc/hermes/*.env` is operator-owned and outside the repo's atomicity): a
+value left on a raw `ollama/<id>` still ROUTES through the wildcard but
+loses its declared window, which shows up as compression sizing wrong and
+`claude` leaving `CLAUDE_CODE_MAX_CONTEXT_TOKENS` unset. Update the env file
+in the same change that deploys the gateway config.
 
 `hermes doctor` inside the container reports warnings for Hermes'
 *built-in* honcho/vision integrations — expected and benign; this stack

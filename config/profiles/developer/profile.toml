@@ -7,10 +7,20 @@
 # started: do NOT run `hermes -p developer gateway start` while
 # multiplexing).
 
-# Implementation work: large diffs, test runs — "baseline" tier
-# (glm-5.3-flash, 1M window) with "elevated" as failure fallback.
-model = "baseline"
-fallback_model = "elevated"
+# Implementation work: large diffs, test runs, repo-scale reads. This
+# profile also drives Claude Code ON THE SAME MODEL (the `claude` wrapper
+# pins model.default), so it needs a strong coder AND the 1M window —
+# "smarter" is the tier that has both. Escalate a hard multi-step refactor
+# with `claude --model smartest`. Tier names come from config/models.toml;
+# which backend sits behind each one is config/litellm.yaml's business.
+model = "smarter"
+# The tier a failing primary should move to. NOTE: render.py validates this
+# and uses it to collect env keys, but does NOT emit it into the rendered
+# config.yaml — nothing in config.yaml expresses a fallback today, so treat
+# this as documented intent rather than an active safety net. Escalate by
+# hand with `claude --model smartest`. (See AGENTS.md §"Agent runtime
+# invariants".)
+fallback_model = "smartest"
 integrations = ["honcho", "firecrawl"]
 platforms = ["discord"]
 

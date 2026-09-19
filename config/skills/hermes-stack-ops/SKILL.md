@@ -43,20 +43,33 @@ manual restart needed.
 **Every LLM call goes through LiteLLM** (`http://litellm:4000`) — never
 call provider APIs directly; you don't have their keys. The gateway's
 config (`config/litellm.yaml`) is baked into the `litellm:main` image;
-config changes recreate the litellm container on deploy. Model aliases
-live in the repo's `config/models.toml`: `baseline` (glm-5.3-flash, 1M
-window — primary/simple work), `elevated` (glm-5.3, hard tasks + failure
-fallback), `nano` (nemotron-3-nano:30b, cheap-turn router + light side
-tasks), `ultra` (nemotron-3-ultra, Honcho's consumers). Ollama Cloud
-models are addressed as `ollama/<id>` — the gateway's `ollama/*` wildcard
-route. New Ollama Cloud models need no gateway config; add an alias (with
-the TRUE context window) to models.toml to use one. Verify windows with
-`POST https://ollama.com/api/show` (`model_info.*.context_length`); Hermes
-hard-rejects windows below 64k, and a stated window larger than reality
-breaks compaction. `render.py` turns every alias into the rendered config's
-`model_overrides` block, so that one line is what Hermes (the cheap lane,
-the aux models, any `/model` switch) and the `claude` wrapper both read —
-the window is never guessed.
+config changes recreate the litellm container on deploy.
+
+**The models are four TIER NAMES, and they are what you send**: `cheap`
+(nemotron-3-nano:30b, 256k — the cheap-turn router, the light side tasks,
+and every Honcho consumer), `smart` (gemma4:cloud, 256k — the planner's
+everyday tier), `smarter` (glm-5.3-flash, 1M — the default and developer
+profiles, and compression), `smartest` (glm-5.3, 1M — judgment work and the
+opt-in escalation; no vision). The tiers are defined in
+`config/models.toml` (name + TRUE context window); WHICH BACKEND SERVES
+EACH ONE is `config/litellm.yaml` alone, so pointing a tier at another
+provider is an edit to that file and nothing else. Because the tier names
+are the names the gateway actually serves, they are also what works on the
+command line: `/model smarter`, `/model cheap`, `/model smartest` mid-session
+all resolve (the old alias names never did — they existed only in the repo).
+
+`render.py` FAILS THE BUILD when a tier has no group on the gateway, and
+turns each tier into the rendered config's `model_overrides` block — the one
+line Hermes (the cheap lane, the aux models, any `/model` switch) and the
+`claude` wrapper both read, so the window is never guessed. Repoint a tier
+at a differently-windowed model and its `context_length` must move in the
+same change; `mise run check-model-windows` verifies the pair against the
+provider's own API (`POST https://ollama.com/api/show` ->
+`model_info.*.context_length` — third-party catalogues get these wrong).
+Hermes hard-rejects windows below 64k, and a stated window larger than
+reality breaks compaction. Raw `ollama/<id>` ids still resolve through the
+gateway's wildcard passthrough, but they have NO declared window: promote a
+model to a tier before relying on it.
 
 **Memory is Honcho via MCP** (`mcp_honcho_*` tools) — the built-in Honcho
 integration is deliberately disabled (overlay `honcho.json`). Web work goes
@@ -113,7 +126,7 @@ boot) around a volume-installed `claude-real` native binary (the
 
 Every invocation re-reads the rendered `config.yaml` for `$HERMES_HOME` —
 so each profile gets its own model — and pins Claude Code to exactly the
-model Hermes is running (`model.default`, e.g. `ollama/glm-5.3-flash`),
+model Hermes is running (`model.default`, a tier name like `smarter`),
 routed through the LiteLLM gateway via
 `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` (`$LITELLM_API_KEY`) — never
 Anthropic directly, and never a hardcoded model id. The cheap-model slot
@@ -124,7 +137,7 @@ to stock claude.
 It also sets **`CLAUDE_CODE_MAX_CONTEXT_TOKENS`** to the running model's
 real window, out of the config's `model_overrides` block (which
 `render.py` emits from every `context_length` in `config/models.toml`).
-Claude Code's own model catalogue describes none of the `ollama/*` ids, so
+Claude Code's own model catalogue describes none of these tier names, so
 without this it assumes **200k** and auto-compacts a 1M-context session
 five times too early. The window follows the model, `--model` included —
 never the profile default — and a model the config does not declare
@@ -139,8 +152,9 @@ lanes, and `claude`.
   project worktree. Put the acceptance criteria in the task text.
 - Multi-turn / iterative: `tmux new-session -d -s cc …`, driven with
   send-keys / capture-pane.
-- A hard multi-step refactor may opt up a tier: `--model ollama/glm-5.3`
-  (elevated) instead of the profile's default.
+- A hard multi-step refactor may opt up a tier: `--model smartest` instead
+  of the profile's default (`smarter` for the default and developer
+  profiles).
 - In claude's shell, `claude_model` prints the active model;
   `/opt/data/tools/claude-hermes/claude-model-resolve.py <config.yaml>`
   prints provider + primary + cheap model for a given profile, and
@@ -175,8 +189,8 @@ reason on **stdout** and exits non-zero, deliberately — a `no_agent` job
 discards stderr, and a failure hidden on stderr is a failure that reports
 `ok` forever.
 
-**Expected noise**: `unrecognized_model` from Claude Code on any `ollama/*`
-model id — cosmetic; it is talking to the gateway, not Anthropic. (If you
+**Expected noise**: `unrecognized_model` from Claude Code on any tier name
+or `ollama/*` id — cosmetic; it is talking to the gateway, not Anthropic. (If you
 instead see its *auto-compact* notice — "keeps this session within 200k
 tokens (the context window it assumes)" — the window lookup did not apply:
 the model is missing from `config/models.toml`, or you bypassed the wrapper

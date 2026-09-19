@@ -1,77 +1,98 @@
-# Model catalog — short, memorable aliases for models.
+# Model tiers — the four names this stack's apps send to the gateway.
 #
-# Profiles reference models BY ALIAS (see profiles/<name>/profile.toml),
-# so switching an agent from one model to another is a one-line change.
+# cheap / smart / smarter / smartest are LITELLM MODEL NAMES: the gateway
+# serves each one as a group (config/litellm.yaml), and which upstream
+# provider and model id sit behind a tier is decided THERE, not here. That
+# split is the point — swapping Ollama Cloud for OpenAI, Anthropic, a local
+# vLLM or anything else is an edit to litellm.yaml alone, and no profile,
+# env file or skill names a backend.
 #
-# All of these ride the "ollama/*" wildcard route at the LiteLLM gateway
-# (config/litellm.yaml has no explicit per-model entries), so each model
-# ID carries the "ollama/" prefix the wildcard matches on — LiteLLM
-# strips it and sends the bare ID to Ollama Cloud.
+# This file states only what the AGENT side needs to know about a tier:
 #
-# Keys:
-#   provider       — must match a key in providers.toml
-#   model          — the provider's model ID exactly as the provider
-#                    expects it (LiteLLM gateway, so "ollama/<id>")
-#   context_length — the model's TRUE window, stated explicitly. Hermes'
-#                    catalogue probe can't resolve model IDs through the
-#                    litellm base_url and falls back to 256k regardless of
-#                    the model (wrong for the 1M GLMs), so each alias
-#                    carries the value Ollama Cloud reports (verified via
-#                    POST ollama.com/api/show, model_info.*.context_length).
-#                    NEVER set this below the provider's window:
-#                    v2026.9.14 hard-rejects any configured window under
-#                    64K (MINIMUM_CONTEXT_LENGTH), and compaction math
-#                    derives from the stated window.
-#                    render.py emits EVERY alias here into the rendered
+#   provider       — must match a key in providers.toml. Every tier rides
+#                    the stack's LiteLLM gateway.
+#   model          — the gateway's model name, exactly as config/litellm.yaml
+#                    declares it. render.py FAILS THE BUILD when a tier here
+#                    has no matching group there (and no covering "*"
+#                    wildcard), so a renamed tier cannot ship as a runtime
+#                    404.
+#   context_length — the TRUE window of whatever backend currently serves
+#                    this tier. THE TWO FILES ARE IN LOCKSTEP: repointing a
+#                    tier at a model with a different window in
+#                    litellm.yaml means moving this value in the same
+#                    change. Verify with the provider's own API — for
+#                    Ollama Cloud, POST ollama.com/api/show ->
+#                    model_info.*.context_length. Third-party catalogues get
+#                    these wrong (models.dev currently reports a 1M window
+#                    for nemotron-3-nano:30b, which the provider says is
+#                    262144). `mise run check-model-windows` compares this
+#                    file against the provider for every Ollama-backed tier.
+#                    NEVER set this below the provider's window: Hermes
+#                    hard-rejects anything under 64K (MINIMUM_CONTEXT_LENGTH
+#                    in agent/agent_init.py, enforced here by render.py), and
+#                    compaction math derives from the stated window — too
+#                    large overruns the provider, too small compacts early.
+#                    render.py emits EVERY tier here into the rendered
 #                    config's `model_overrides` block (the upstream key for
 #                    per-provider+model windows, resolution step 0b), which
-#                    is what makes this file the ONE source of truth: the
-#                    profile's own model reads it as model.context_length,
-#                    the cheap lane / auxiliary models / any /model switch
-#                    read it from model_overrides, and the `claude` wrapper
-#                    reads it back for CLAUDE_CODE_MAX_CONTEXT_TOKENS —
-#                    Claude Code knows none of these ollama/* ids and would
-#                    otherwise assume a 200K window and auto-compact a 1M
-#                    session five times too early. A model the wrapper is
-#                    asked for with --model that is NOT declared here gets
-#                    no window at all (it compacts early rather than
-#                    overrunning the provider), so declare it before use.
+#                    is what makes this file the ONE source of truth on the
+#                    agent side: the profile's own model reads it as
+#                    model.context_length, the cheap lane / auxiliary models
+#                    / any /model switch read it from model_overrides, and
+#                    the `claude` wrapper reads it back for
+#                    CLAUDE_CODE_MAX_CONTEXT_TOKENS — Claude Code knows none
+#                    of these ids and would otherwise assume a 200K window
+#                    and auto-compact a 1M session five times too early. A
+#                    model the wrapper is asked for that is NOT declared
+#                    here gets no window at all (it compacts early rather
+#                    than overrunning the provider), so declare it before
+#                    use.
 #   description    — free-form note shown by `mise run render`
 #
+# An alias served by a NATIVE provider instead of the gateway sets
+# `via_gateway = false` to opt out of the group check above. (Named that way
+# deliberately: Hermes' own top-level `gateway:` block is the MESSAGING
+# gateway, and a bare `gateway` key here would read as a collision.)
+#
 # Routing policy (who runs what):
-#   baseline  — hermes chat / main agent turns. ALSO the tier for
-#               targeted tasks that need intelligence AND a big window
-#               (e.g. aux compression over a ~1M context) — same model.
-#   elevated  — elevated tasks (hard reasoning/multi-step work). No
-#               automatic lane; switch via `/model elevated` or use as a
-#               profile's model. Wired as the failure fallback so a dead
-#               baseline degrades up, not down.
-#   nano      — targeted tasks that need little intelligence but a large
-#               context window. Wired as smart_model_routing's cheap lane
-#               (short/simple turns) and the light aux side tasks.
-#   ultra     — targeted tasks that need some intelligence with no big
-#               context window. Honcho's LLM consumers run here.
+#   cheap    — the low-cost lane. Short/simple turns (smart_model_routing in
+#              the default profile), the light auxiliary side tasks (session
+#              search, web extract, skills hub), and Honcho's VOLUME lanes
+#              (the deriver, which runs on every message, and the minimal/low
+#              dialectic levels).
+#   smart    — everyday work: the planner profile, and Honcho's REASONING
+#              lanes (dream deduction/induction, summaries, and the
+#              medium/high/max dialectic levels).
+#   smarter  — the workhorse: a 1M window at flash economics. The default
+#              and developer profiles, and context compression — which
+#              summarizes a potentially ~1M context, so it needs BOTH
+#              intelligence and the window.
+#   smartest — judgment, and the top of the ladder. The reviewer profile,
+#              plus the opt-in escalation anyone reaches for with
+#              `/model smartest`. No vision: fine for diff review, but
+#              kimi-k3 (1M, vision+tools+thinking) is the drop-in swap if
+#              that ever needs to change.
 
-[models.nano]
+[models.cheap]
 provider = "litellm"
-model = "ollama/nemotron-3-nano:30b"
+model = "cheap"
 context_length = 262144
-description = "Nemotron 30B nano (via LiteLLM wildcard) — low-intelligence tier with a large window; cheap-turn router + light aux side tasks"
+description = "Nemotron 3 nano 30B (MoE, 3B active) via the gateway — the low-cost lane: the cheap-turn router, light aux side tasks, and Honcho's volume lanes (deriver, light dialectic)"
 
-[models.baseline]
+[models.smart]
 provider = "litellm"
-model = "ollama/glm-5.3-flash"
-context_length = 1048576
-description = "1M-window GLM flash (via LiteLLM wildcard) — agent primary/hermes chat baseline; also the targeted tier needing both intelligence and context (aux compression)"
-
-[models.elevated]
-provider = "litellm"
-model = "ollama/glm-5.3"
-context_length = 1048576
-description = "Full GLM 5.3 (via LiteLLM wildcard) — elevated tasks: hard reasoning/multi-step work; opt in via /model or a profile's model; failure fallback for baseline"
-
-[models.ultra]
-provider = "litellm"
-model = "ollama/nemotron-3-ultra"
+model = "smart"
 context_length = 262144
-description = "Nemotron 3 ultra (via LiteLLM wildcard) — some-intelligence tier for small-context targeted work; Honcho's LLM consumers run here"
+description = "Gemma 4 via the gateway (256K, vision) — the everyday tier: the planner, plus Honcho's reasoning lanes (dream, summaries, deep dialectic). Cheapest published price, so bulk work lives here"
+
+[models.smarter]
+provider = "litellm"
+model = "smarter"
+context_length = 1048576
+description = "GLM 5.3 flash via the gateway (1M, vision, 18B active) — the workhorse: the default and developer profiles, and context compression"
+
+[models.smartest]
+provider = "litellm"
+model = "smartest"
+context_length = 1048576
+description = "GLM 5.3 via the gateway (1M) — judgment work (the reviewer) and the opt-in /model escalation; no vision, so it is never a profile's primary where images arrive"

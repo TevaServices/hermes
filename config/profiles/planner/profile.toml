@@ -6,11 +6,19 @@
 # gateway.profile_routes — named gateways are NOT started: do NOT run
 # `hermes -p planner gateway start` while multiplexing).
 
-# PM/design work: issue writing, backlog grooming, design specs. Runs on
-# the "baseline" tier (glm-5.3-flash, 1M window) with "elevated" as
-# failure fallback.
-model = "baseline"
-fallback_model = "elevated"
+# PM/design work: issue writing, backlog grooming, design specs — the
+# highest-volume writing on the stack, and rarely more than 256K of context
+# at once, so the planner is the profile on the "smart" tier (256K, vision,
+# cheapest published price). Escalate a hard design job mid-session with
+# `/model smarter`. Tier names come from config/models.toml; which backend
+# sits behind each one is config/litellm.yaml's business.
+model = "smart"
+# The tier a failing primary should move to. NOTE: render.py validates this
+# and uses it to collect env keys, but does NOT emit it into the rendered
+# config.yaml — nothing in config.yaml expresses a fallback today, so treat
+# this as documented intent rather than an active safety net. Escalate by
+# hand with `/model smarter`. (See AGENTS.md §"Agent runtime invariants".)
+fallback_model = "smarter"
 integrations = ["honcho", "firecrawl"]
 platforms = ["discord"]
 

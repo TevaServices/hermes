@@ -83,6 +83,10 @@ run = "docker compose -f compose/hermes.compose.yml run --rm hermes-main chat"
 description = "Report drift between pins (mise.toml [env]) and upstream"
 run = "./scripts/check-updates.sh"
 
+[tasks.check-model-windows]
+description = "Verify each model tier's declared context window against the provider's API (host-side, online)"
+run = "python scripts/check-model-windows.py"
+
 [tasks.clean]
 description = "Remove generated build output"
 run = "rm -rf build"
