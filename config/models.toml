@@ -19,7 +19,7 @@
 #                    carries the value Ollama Cloud reports (verified via
 #                    POST ollama.com/api/show, model_info.*.context_length).
 #                    NEVER set this below the provider's window:
-#                    v2026.8.31 hard-rejects any configured window under
+#                    v2026.9.14 hard-rejects any configured window under
 #                    64K (MINIMUM_CONTEXT_LENGTH), and compaction math
 #                    derives from the stated window.
 #                    render.py emits EVERY alias here into the rendered

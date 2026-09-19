@@ -30,7 +30,7 @@ declared external in komodo's compose).
   — no webhook; sequential stages keep the builds off the host concurrently).
   Config/compose-only pushes cost a Dockerfile cache-hit build (~1 min).
 - **Images are built by Komodo Builds — never compose build** (the stack
-  runs `run_build = false`; images `hermes-agent:v2026.8.31`, `litellm:main`,
+  runs `run_build = false`; images `hermes-agent:v2026.9.14`, `litellm:main`,
   `honcho:main`, `honcho-mcp:main`, `builder = "homelab"`). The
   `hermes-agent` and `litellm` Builds use a **repo-root build context**
   (`build_path = "."`) — the Dockerfiles COPY `docker/hermes/*`, `config/` +
@@ -198,7 +198,7 @@ checking the host's actual resources.
   litellm base_url and falls back to 256k for everything — verify the
   actual model via `POST ollama.com/api/show` →
   `model_info.*.context_length`). Never set a window below the provider's:
-  v2026.8.31 hard-rejects anything under 64K
+  v2026.9.14 hard-rejects anything under 64K
   (`MINIMUM_CONTEXT_LENGTH` raise in `agent/agent_init.py`). `render.py`
   emits every alias into the rendered config's **`model_overrides`** block
   — the upstream key for per-provider+model windows, which
@@ -327,7 +327,9 @@ This stack's agents live in `terminal`, and two guard behaviours blocked
 the script-shaped work we *want* them to do, so both were loosened
 deliberately.
 
-1. **`tools/approval.py` source patch** — `docker/hermes/patches/`, applied
+1. **`tools/approval_detection.py` source patch** (was
+   `tools/approval.py` before v2026.9.14) — `docker/hermes/patches/`,
+   applied
    in the Dockerfile with `git apply` (the base image has no `patch`
    binary; `git apply` works outside a repo, which matters because
    `.dockerignore` drops `.git`). Upstream hardline-blocks any command
@@ -343,7 +345,7 @@ deliberately.
    is signalled by the build** (see the HERMES_REF checklist).
 2. **Tirith pre-approvals, config only — Tirith itself stays ON.**
    `render.py` seeds `command_allowlist` with `tirith:<rule_id>` keys for
-   every profile. `approval.py` loads that list at *module import*, and a
+   every profile. `approval_detection.py` loads that list at *module import*, and a
    Tirith finding's approval key is `tirith:<rule_id>`, so listing a key
    permanently auto-approves that one rule. The twelve seeded rules are the
    ones that actually fired on this stack's own legitimate work (mined from

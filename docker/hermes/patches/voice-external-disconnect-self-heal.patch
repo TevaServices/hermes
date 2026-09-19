@@ -1,15 +1,14 @@
---- a/plugins/platforms/discord/adapter.py	2026-09-15 11:43:59
-+++ b/plugins/platforms/discord/adapter.py	2026-09-15 11:44:42
-@@ -1433,10 +1433,45 @@
+--- a/plugins/platforms/discord/adapter.py
++++ b/plugins/platforms/discord/adapter.py
+@@ -1285,8 +1285,45 @@
                  guild_id = member.guild.id
                  if guild_id not in bot_guild_ids:
                      return
--                # Ignore the bot itself
 +                # The bot's own voice state. Discord can terminate a voice
 +                # session server-side while the binding is still active
 +                # (discord.py's "We were externally disconnected from voice"
 +                # path logs the reason at DEBUG only, so at INFO the only
-+                # trace is "The voice handshake is being terminated" —
++                # trace is "The voice handshake is being terminated" --
 +                # observed live 2026-09-14: a joined session was externally
 +                # disconnected ~6 minutes in, the receiver died with it, and
 +                # the next auto voice reply silently degraded to a file
@@ -32,10 +31,10 @@
 +                                adapter_self._voice_self_heal(gid)
 +                            )
                      return
- 
++
 +                # A user (re)joining voice while we hold a binding but no
 +                # live session means we were kicked earlier and missed the
-+                # conversation — heal on their arrival too.
++                # conversation -- heal on their arrival too.
 +                if (
 +                    before.channel is None
 +                    and after.channel is not None
@@ -47,9 +46,9 @@
                  joined = before.channel is None and after.channel is not None
                  left = before.channel is not None and after.channel is None
                  switched = (
-@@ -4175,10 +4210,21 @@
-         directly in the VC instead of sending as a file attachment.
-         """
+@@ -3160,10 +3197,21 @@
+     async def play_tts(self, chat_id: str, audio_path: str, **kwargs) -> SendResult:
+         """Play auto-TTS audio: in the guild's VC if joined, else as a file attachment."""
          for gid, text_ch_id in self._voice_text_channels.items():
 -            if str(text_ch_id) == str(chat_id) and self.is_in_voice_channel(gid):
 +            if str(text_ch_id) != str(chat_id):
@@ -58,7 +57,7 @@
                  logger.info("[%s] Playing TTS in voice channel (guild=%d)", self.name, gid)
                  success = await self.play_in_voice_channel(gid, audio_path)
                  return SendResult(success=success)
-+            # Binding matches but the voice session is gone — Discord
++            # Binding matches but the voice session is gone -- Discord
 +            # terminates voice sessions server-side (see _rejoin_voice_channel).
 +            # Attempt an on-demand rejoin before degrading to a file
 +            # attachment; if no allowed user is in voice, the fallback is
@@ -69,8 +68,8 @@
 +                return SendResult(success=success)
          return await self.send_voice(chat_id=chat_id, audio_path=audio_path, **kwargs)
  
-     async def send_voice(
-@@ -4646,6 +4692,59 @@
+ 
+@@ -3441,6 +3489,59 @@
              self._voice_text_channels.pop(guild_id, None)
              self._voice_sources.pop(guild_id, None)
  
@@ -78,7 +77,7 @@
 +        """Rejoin voice after an external disconnect, with teardown grace."""
 +        try:
 +            # Discord's own handler for this event is still tearing the old
-+            # VoiceClient down (it waits for the leave confirmation) — give
++            # VoiceClient down (it waits for the leave confirmation) -- give
 +            # it a moment so our join does not race its voice-state update.
 +            await asyncio.sleep(3.0)
 +            if await self._rejoin_voice_channel(guild_id):
@@ -96,7 +95,7 @@
 +        """Rejoin a voice channel after an external session drop.
 +
 +        Discord terminates voice sessions server-side, which kills the
-+        receiver with it — without a rejoin the bot goes deaf AND mute
++        receiver with it -- without a rejoin the bot goes deaf AND mute
 +        while its voice-mode state still says "on". Rejoin only when an
 +        allowed user is actually present in a voice channel: playing into
 +        an empty room is worse than the attachment fallback.
@@ -128,5 +127,5 @@
 +            return False
 +
      async def play_in_voice_channel(self, guild_id: int, audio_path: str) -> bool:
-         """Play an audio file in the connected voice channel.
- 
+         """Play audio in the VC: via the mixer (layered over the ambient bed, ducking it)
+         when installed, else the legacy one-shot FFmpegPCMAudio path."""

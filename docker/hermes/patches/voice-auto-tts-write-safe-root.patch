@@ -1,16 +1,11 @@
-diff --git a/gateway/platforms/base.py b/gateway/platforms/base.py
-index 3ad1ea1..e7942b3 100644
 --- a/gateway/platforms/base.py
 +++ b/gateway/platforms/base.py
-@@ -252,12 +252,32 @@ def build_auto_tts_output_path(platform) -> str:
+@@ -206,9 +206,32 @@
+     """
      from tools.tts_tool import OPUS_VOICE_PLATFORMS
- 
      ext = "ogg" if _platform_name(platform) in OPUS_VOICE_PLATFORMS else "mp3"
 -    audio_path = os.path.join(
--        tempfile.gettempdir(),
--        "hermes_voice",
--        f"tts_reply_{uuid.uuid4().hex[:12]}.{ext}",
--    )
+-        tempfile.gettempdir(), "hermes_voice", f"tts_reply_{uuid.uuid4().hex[:12]}.{ext}")
 -    os.makedirs(os.path.dirname(audio_path), exist_ok=True)
 +    stem = f"tts_reply_{uuid.uuid4().hex[:12]}.{ext}"
 +    # HERMES_WRITE_SAFE_ROOT (Docker/sealed images) hard-denies writes

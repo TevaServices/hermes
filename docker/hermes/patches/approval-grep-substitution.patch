@@ -1,8 +1,6 @@
---- a/tools/approval.py
-+++ b/tools/approval.py
-@@ -1683,9 +1683,20 @@
-                 "grep", "egrep",
-             }:
+--- a/tools/approval_detection.py
++++ b/tools/approval_detection.py
+@@ -714,7 +714,18 @@
                  continue
              tokens = _shell_tokens_with_spans(segment, start)
              if tokens is None:
@@ -19,6 +17,6 @@
 +                # block, including on sub-500-byte commands it reported as
 +                # "oversized". See AGENTS.md.
 +                continue
-             args = tokens[1:]
-             pcre = False
-             explicit_patterns = False
+             args, pattern_indexes = tokens[1:], []
+             pcre = explicit_patterns = False
+             operand_index, i, options = None, 0, True

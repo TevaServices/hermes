@@ -11,7 +11,7 @@
 #
 # What we add on top (kept minimal — each COPY/RUN is a separate final
 # layer so config-only pushes invalidate only the last one):
-#   0. A source patch to upstream tools/approval.py — see
+#   0. A source patch to upstream tools/approval_detection.py — see
 #      docker/hermes/patches/ and AGENTS.md §"Security tuning (guard
 #      friction)". Placed FIRST so a config-only push still cache-hits
 #      it, and so a rebase of the patch invalidates everything after.
@@ -30,7 +30,7 @@
 #      wiring upstream doesn't know about, then execs the upstream
 #      dispatcher so s6 takes over.
 #
-ARG HERMES_REF=v2026.8.31
+ARG HERMES_REF=v2026.9.14
 FROM nousresearch/hermes-agent:${HERMES_REF}
 
 # ── Source patches over upstream ──────────────────────────────────────
@@ -68,9 +68,12 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # under the safe root) only when /tmp is outside the configured safe
 # roots; stock behavior (no HERMES_WRITE_SAFE_ROOT) is byte-identical.
 #
-# 2. cron/scheduler.py — bot-chat delivery must POINT HERMES_HOME at the
-# target profile before spawning `hermes -p <name> chat`. Upstream drops
-# it. Dropping is right when HERMES_HOME points AT a profile (it would
+# 2. cron/scheduler_delivery.py — bot-chat delivery must POINT
+# HERMES_HOME at the target profile before spawning
+# `hermes -p <name> chat`. Upstream drops it (the code moved here from
+# cron/scheduler.py at v2026.9.14; upstream fixed the no-profile
+# multiplex branch in the same move but kept the drop for -p). Dropping
+# is right when HERMES_HOME points AT a profile (it would
 # shadow -p) but wrong when it is the ROOT holding profiles/, as here
 # (/opt/data holds profiles/<name>): the child falls back to the native
 # ~/.hermes, so every delivery died with "Profile '<name>' does not
@@ -83,7 +86,8 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # profile's GITHUB_APP_ID. The patch sets it to get_profile_dir(profile),
 # so -p and the home agree and every .env lookup is profile-scoped.
 #
-# 1. tools/approval.py: `grep` inside a quoted
+# 1. tools/approval_detection.py (the grep-operand scanner lived in
+#    tools/approval.py until v2026.9.14 moved it): `grep` inside a quoted
 # `$(...)` command substitution makes the
 # grep-operand scanner surface an inner word it then can't tokenize
 # (unbalanced quote) -> hardline-blocks the entire command, even though
