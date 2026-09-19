@@ -7,7 +7,7 @@ the agent in Docker, its configuration rendered from small declarative files, an
 all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
 
 ```
-                    git push (this repo)
+           merge a PR to main (this repo)
                           │ webhook
                           ▼
                    Komodo Core (Resource Sync + Procedure)
@@ -36,7 +36,7 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
 | Install Hermes agent via Docker | `docker/hermes/Dockerfile` is a thin build over the official `nousresearch/hermes-agent:<ref>` image (pinned ref; s6 supervision included); agent state persists in a volume |
 | One container, all profiles | the official image's s6 supervision hosts every profile as a supervised gateway service — the docs' recommended deployment model |
 | Overlay config / profiles | `config/` + `render.py` are compiled INTO the image at build time (`/overlay/<profile>`), applied to profile dirs on every container start |
-| Keep install + config up to date | the pin in `mise.toml` `[env]` is both the FROM tag and the config baseline; push → webhook → rebuild/redeploy. `scripts/check-updates.sh` reports drift |
+| Keep install + config up to date | the pin in `mise.toml` `[env]` is both the FROM tag and the config baseline; merge to `main` → webhook → rebuild/redeploy. `scripts/check-updates.sh` reports drift |
 | GitOps on the Linux host | Komodo Resource Sync applies `komodo/resources.toml`; Stacks deploy the compose files from this repo ([komodo/README.md](komodo/README.md)) |
 | Easy model/provider config | providers and models are two small TOML files; profiles pick models by alias — no hand-editing Hermes' config.yaml |
 | Honcho + Firecrawl in containers | `compose/honcho.compose.yml`, `compose/firecrawl.compose.yml`, wired into each agent as MCP servers via `config/integrations.toml` |
@@ -115,9 +115,9 @@ and render.py compiles them into what the agent reads — at IMAGE BUILD time:
 
 Switching an agent's model — a different provider, a different tier, a
 local model instead of a hosted one — is a one-line diff in one TOML file,
-then `git commit && git push`: the image rebuild renders the new overlay,
-the deploy recreates the container, and the entrypoint applies the overlay
-to the profile dir on start.
+then a PR: the image rebuild renders the new overlay, the deploy recreates
+the container, and the entrypoint applies the overlay to the profile dir
+on start.
 
 ## Before you deploy: the values you must set
 
@@ -199,8 +199,11 @@ Full walkthrough in [komodo/README.md](komodo/README.md). Short version:
 3. Create a Resource Sync against this repo, run it once.
 4. Add the git webhook (Resource Sync + the `deploy-changed-stacks` Procedure).
 
-From then on: **push to `main` = deploy**. Komodo redeploys only the stacks whose
-files changed; agent memory, sessions, and skills live in volumes and survive.
+From then on: **merging a PR to `main` = deploy**. `main` is protected, so a
+direct push is rejected and every change lands as a squash-merged PR; the
+webhook fires on the push that merge produces, so the deploy path is unchanged.
+Komodo redeploys only the stacks whose files changed; agent memory, sessions,
+and skills live in volumes and survive.
 
 ## mise: tools, build variables, and tasks
 
@@ -239,8 +242,8 @@ mise run check-updates   # pins vs upstream (hermes/honcho/firecrawl/litellm)
 ```
 
 - **Hermes / Honcho / Firecrawl**: bump the pin in `mise.toml` `[env]` (and the
-  matching `environment` value in `komodo/resources.toml`), commit, push. The
-  webhook triggers rebuild/redeploy with all state preserved.
+  matching `environment` value in `komodo/resources.toml`), then squash-merge the
+  PR. The webhook triggers rebuild/redeploy with all state preserved.
 - **LiteLLM**: public image, no Build resource — pull
   `ghcr.io/berriai/litellm:main-latest` on the host (the multi-arch tag;
   versioned tags are amd64-only — match the tag to the host's

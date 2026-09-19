@@ -22,26 +22,34 @@ db/redis/rabbitmq) and hold live data; do not rename the stack. The stack
 must be deployed before komodo-core can start with it (`hermes_net` is
 declared external in komodo's compose).
 
-- **Push to `main` = build + deploy** (GitHub webhook → the Komodo
+- **Merging a PR to `main` = build + deploy** (GitHub webhook → the Komodo
   `rebuild-hermes-agent` procedure: build `hermes-agent` → build `litellm`
   → deploy `hermes`, sequentially, defined in the komodo repo's
   `resources.toml`). Honcho images are built upstream-first via the
   `rebuild-honcho` procedure (`execute/RunProcedure {"procedure":"rebuild-honcho"}`
   — no webhook; sequential stages keep the builds off the host concurrently).
-  Config/compose-only pushes cost a Dockerfile cache-hit build (~1 min).
+  Config/compose-only changes cost a Dockerfile cache-hit build (~1 min).
+- **`main` is protected — land every change through a squash-merged PR.**
+  The `Main` ruleset rejects direct pushes, force-pushes and branch
+  deletion, requires the commits that land to carry verified signatures, and
+  permits only squash merges; a `Release tags` ruleset blocks moving or
+  deleting a `v*` tag. The webhook fires on the *push* a squash merge
+  produces, so "merge = deploy" is literally the same event — but a
+  `git push origin main` from a working copy fails with `GH013` ("Changes
+  must be made through a pull request"). Push your branch and open a PR.
 - **Images are built by Komodo Builds — never compose build** (the stack
   runs `run_build = false`; images `hermes-agent:v2026.9.14`, `litellm:main`,
   `honcho:main`, `honcho-mcp:main`, `builder = "<your-builder>"`). The
   `hermes-agent` and `litellm` Builds use a **repo-root build context**
   (`build_path = "."`) — the Dockerfiles COPY `docker/hermes/*`, `config/` +
   `render.py` (rendered inside the build), and `config/litellm.yaml` (see
-  `.dockerignore`). Manual equivalent when the webhook was missed: push,
+  `.dockerignore`). Manual equivalent when the webhook was missed: merge,
   then `execute/RunBuild` per build, then
   `execute/DeployStack {"stack":"hermes"}` — and check
   `GetStack` → `info.deployed_hash`; a webhook delivery can 200 but skip if
   Komodo is mid-operation or restarting.
 - **Config is baked into images, so deploys restart intelligently.** A
-  config-only push invalidates just the final COPY layer → new image →
+  config-only change invalidates just the final COPY layer → new image →
   the deploy's `compose up` recreates only the affected service. No
   bind-mounted config files (whose content changes compose can't see), no
   reloader sidecar, no manual restarts. Never hand-edit a container's
@@ -782,9 +790,10 @@ Local runs use **mise** (not Makefile): `mise run up`, `mise run logs`,
 `mise.toml [env]` holds the version pins and `HERMES_ENV_DIR`; per-machine
 overrides go in gitignored `mise.local.toml`.
 
-After editing anything in `config/`, just `git commit && git push` — the
-Docker build runs render.py itself, so there is NO committed `build/` output
-to keep in sync (the old "commit the build/ output" step is gone). To
+After editing anything in `config/`, push a branch and open a PR (see the
+deployment model above — `main` is protected) — the Docker build runs
+render.py itself, so there is NO committed `build/` output to keep in sync
+(the old "commit the build/ output" step is gone). To
 preview a render without building: `mise run render` (writes ./build/,
 gitignored, never committed). Note: local compose runs get a project named
 after the parent dir, not `hermes` — the Komodo deployment on the host is
