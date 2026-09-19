@@ -23,14 +23,24 @@ are on the same docker network as Komodo Core.
 
 ## Procedure
 
-Core API is at `http://komodo-core-1:9120`. Auth is a header file mounted
-read-only at `/etc/komodo-auth-header` (contains `X-API-KEY: ...` — never
-print its value). All calls are POST with JSON bodies:
+Core API is at `http://komodo-core-1:9120`. Auth is a header file containing
+`X-API-KEY: ...` — never print its value. All calls are POST with JSON bodies:
 
 ```bash
 curl -s -X POST http://komodo-core-1:9120/<read|write|execute>/<Variant> \
-  -H @/etc/komodo-auth-header -H "Content-Type: application/json" -d '<json>'
+  -H @"${KOMODO_AUTH_HEADER:-/etc/komodo-auth-header}" \
+  -H "Content-Type: application/json" -d '<json>'
 ```
+
+**Use `$KOMODO_AUTH_HEADER`, not the literal mount path.** The file
+bind-mounted at `/etc/komodo-auth-header` is 600 and owned by the host user,
+so YOU cannot open it: `-H @/etc/komodo-auth-header` fails with `curl: option
+-H: error encountered when reading a file`, which looks exactly like a broken
+API key. The entrypoint copies it into your own home
+(`$HERMES_HOME/home/komodo-auth-header`, runtime-owned) on every container
+start and exports `KOMODO_AUTH_HEADER` at that copy. If a call fails with no
+auth and the var is empty, the copy did not happen — check the boot log for
+`komodo auth header ->` and report it rather than guessing at the key.
 
 `<Variant>` is case-sensitive. The most useful ones:
 

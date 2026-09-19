@@ -60,9 +60,17 @@ services:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/firecrawl.env
     <<: *firecrawl-common
     depends_on:
-      - firecrawl-db
-      - firecrawl-redis
-      - firecrawl-rabbitmq
+      firecrawl-db:
+        condition: service_started
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-rabbitmq:
+        condition: service_started
+      # Firecrawl's LLM features (MODEL_NAME -> the `firecrawl` group) go
+      # through the gateway, and litellm binds its port only after its
+      # startup catalogue fetch.
+      litellm:
+        condition: service_healthy
     networks:
       hermes-net:
         aliases: [firecrawl-api]

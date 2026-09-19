@@ -186,6 +186,43 @@ if [ -d "$HERMES_HOME/profiles" ]; then
   done
 fi
 
+# --- 3b. Komodo auth header: host mount -> runtime-owned home -------------
+# Same trap as the PEMs, and it bit the same way: the header is mounted
+# read-only from the host, where it is 600 and owned by the host user, so
+# the s6 services (UID 10000) get "curl: option -H: error encountered when
+# reading a file" — which reads to an agent as "the Komodo API key is not
+# working". Nothing is wrong with the key; the agent simply cannot open the
+# file. Copy it onto the data volume (which the runtime owns) and aim
+# KOMODO_AUTH_HEADER at the copy; the mount stays the source of truth and is
+# refreshed here on every boot.
+#
+# DEFAULT PROFILE ONLY, deliberately. komodo-ops is a default-profile skill,
+# so the control-plane credential belongs to that profile alone — the team
+# profiles have no reason to drive Komodo, and each extra copy is another
+# place a credential can be read from.
+KOMODO_MOUNT="${KOMODO_AUTH_HEADER_MOUNT:-/etc/komodo-auth-header}"
+if [ -r "$KOMODO_MOUNT" ]; then
+  mkdir -p "$HERMES_HOME/home"
+  KOMODO_DEST="$HERMES_HOME/home/komodo-auth-header"
+  cp -f "$KOMODO_MOUNT" "$KOMODO_DEST"
+  chown "$RUNTIME_UID:$RUNTIME_UID" "$KOMODO_DEST" "$HERMES_HOME/home"
+  chmod 600 "$KOMODO_DEST"
+  export KOMODO_AUTH_HEADER="$KOMODO_DEST"
+  # Also land it in the default profile's .env: the gateway loads that with
+  # override=True, and a tool subprocess that re-execs through a fresh login
+  # shell otherwise loses an export made only in this process.
+  if [ -f "$HERMES_HOME/.env" ]; then
+    if grep -q '^KOMODO_AUTH_HEADER=' "$HERMES_HOME/.env"; then
+      sed -i "s#^KOMODO_AUTH_HEADER=.*#KOMODO_AUTH_HEADER=${KOMODO_DEST}#" "$HERMES_HOME/.env"
+    else
+      printf 'KOMODO_AUTH_HEADER=%s\n' "$KOMODO_DEST" >> "$HERMES_HOME/.env"
+    fi
+  fi
+  echo "hermes-stack: komodo auth header -> $KOMODO_DEST"
+else
+  echo "hermes-stack: warning: no readable komodo auth header at $KOMODO_MOUNT" >&2
+fi
+
 # --- 4. git + gh for the runtime user, per tool-home -----------------------
 # Tool subprocesses (git, gh, ...) run with HOME=$HERMES_HOME/home for
 # the default profile (hermes_constants.get_subprocess_home, container
