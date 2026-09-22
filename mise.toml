@@ -41,6 +41,16 @@ LAVINMQ_VERSION = "2.4.4"     # tag on the docker.io/cloudamqp/lavinmq image
 # Optional — override locally with `mise set FIRECRAWL_PORT=3002`:
 # FIRECRAWL_PORT = "3002"
 
+# The Hermes dashboard s6 service — DISABLED by default; the flip surface
+# is the stack environment (komodo/resources.toml) for the real deploy,
+# this file for local runs. Flipping HERMES_DASHBOARD on requires the
+# three HERMES_DASHBOARD_BASIC_AUTH_* vars in $HERMES_ENV_DIR first — the
+# dashboard fails closed without them (its s6 slot restart-loops).
+# HERMES_DASHBOARD_HOST_PORT is the HOST-side published port; NEVER set
+# the upstream container-side name HERMES_DASHBOARD_PORT here.
+# HERMES_DASHBOARD = "0"
+# HERMES_DASHBOARD_HOST_PORT = "9119"
+
 # ------------------------------------------------------------------ tasks
 
 [tasks.render]

@@ -73,6 +73,20 @@ services:
       # docker/hermes/s6-rc.d/chromium-cdp/ (binds 127.0.0.1 only; the
       # rendered browser.cdp_url points the agent at it).
       HERMES_CHROMIUM_CDP: "1"
+      # The dashboard s6 service (docker/s6-rc.d/dashboard in the official
+      # image): always declared, gated here like HERMES_CHROMIUM_CDP.
+      # DISABLED by default. The flip surface is the STACK environment
+      # (komodo/resources.toml / mise.toml [env]) — NOT hermes-main.env:
+      # compose `environment:` overrides env_file, so a value in the env
+      # file never reaches this gate. Flipping HERMES_DASHBOARD on without
+      # the three HERMES_DASHBOARD_BASIC_AUTH_* vars in the env file fails
+      # closed at startup (the dashboard slot restart-loops; the rest of
+      # the container is unaffected) — see secrets/hermes-main.env.example.
+      HERMES_DASHBOARD: ${HERMES_DASHBOARD:-0}
+      # Explicit, though it is also the upstream container default: the
+      # published loopback port needs a non-loopback in-container bind,
+      # and the fail-closed auth gate is what makes that safe here.
+      HERMES_DASHBOARD_HOST: 0.0.0.0
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/hermes-main.env
     depends_on:
@@ -131,6 +145,18 @@ services:
     networks:
       hermes-net:
         aliases: [hermes-main]
+    # The Hermes dashboard (s6 service in this container, gated by
+    # HERMES_DASHBOARD above). Published to HOST loopback only, like
+    # firecrawl's API: the container binds 0.0.0.0 (Docker's port
+    # publishing needs a non-loopback bind) while the actual boundary is
+    # the fail-closed auth gate (the dashboard refuses to start without an
+    # auth provider) plus this loopback-only publish. While
+    # HERMES_DASHBOARD=0 nothing listens and the port refuses connections.
+    # The HOST-side override var is deliberately NOT HERMES_DASHBOARD_PORT
+    # — that name is the upstream CONTAINER port var and would change the
+    # in-container listen port too, breaking the mapping.
+    ports:
+      - "127.0.0.1:${HERMES_DASHBOARD_HOST_PORT:-9119}:9119"
 
 networks:
   hermes-net:

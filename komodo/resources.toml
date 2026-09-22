@@ -33,7 +33,13 @@ deploy = true
 # HERMES_ENV_DIR points the env_file/mount paths at the host secrets
 # directory (created by scripts/bootstrap-host.sh). The version pins
 # mirror mise.toml [env] so the deployed tags stay git-managed.
-environment = { HERMES_ENV_DIR = "/etc/hermes", HERMES_REF = "v2026.9.14" }
+# HERMES_DASHBOARD gates the official image's dashboard s6 service —
+# DISABLED by default; flipping it to "1" requires the three
+# HERMES_DASHBOARD_BASIC_AUTH_* vars in /etc/hermes/hermes-main.env
+# first (the dashboard fails closed without them). This is the ONLY
+# flip surface: compose `environment:` overrides env_file, so a value
+# in hermes-main.env is dead.
+environment = { HERMES_ENV_DIR = "/etc/hermes", HERMES_REF = "v2026.9.14", HERMES_DASHBOARD = "0" }
 
 [[stack]]
 name = "hermes-honcho"

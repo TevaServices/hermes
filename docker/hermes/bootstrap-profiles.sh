@@ -70,6 +70,30 @@ copy_overlay() {
   fi
 }
 
+# Vendored dashboard plugins (stack-wide, /overlay/plugins/<name> at the
+# overlay ROOT — see the Dockerfile): seeded into EVERY home,
+# exact-replace. The image is the source of truth for plugin CONTENT, so
+# a runtime `hermes plugins update` (or a hand-edit) is overwritten on
+# the next boot; enablement is NOT done here — it is the
+# `plugins.enabled` list in the home's config.yaml, which copy_overlay
+# overwrites from the overlay too. Both knobs are git-side; see
+# AGENTS.md §"Dashboard + the memory-UI plugin".
+seed_plugins() {
+  overlay="$1"
+  target="$2"
+  if [ -d "$overlay/plugins" ]; then
+    for plugin in "$overlay/plugins"/*; do
+      [ -d "$plugin" ] || continue
+      name="$(basename "$plugin")"
+      # Exact replace, not merge: a plugin upgrade must not leave stale
+      # files (e.g. a dist asset removed upstream) behind in the home.
+      rm -rf "$target/plugins/$name"
+      mkdir -p "$target/plugins"
+      cp -a "$plugin" "$target/plugins/$name"
+    done
+  fi
+}
+
 # Reconcile the profile's GitOps-declared cron jobs (rendered from
 # config/cron.toml into the overlay as cron.json). NOT a copy: a profile's
 # cron store is runtime state (run history, failure streaks, notepads), so
@@ -106,6 +130,9 @@ reconcile_cron() {
 if [ -d "$OVERLAY_ROOT/default" ]; then
   expand_overlay "$OVERLAY_ROOT/default"
   copy_overlay "$OVERLAY_ROOT/default" "$HERMES_HOME"
+  # Stack-wide vendored plugins live at the OVERLAY ROOT, not under
+  # default/ — seed from there, into this home.
+  seed_plugins "$OVERLAY_ROOT" "$HERMES_HOME"
   log "applied overlay: default"
   reconcile_cron "$OVERLAY_ROOT/default" "$HERMES_HOME"
 fi
@@ -130,6 +157,7 @@ if [ -d "$OVERLAY_ROOT/profiles" ]; then
     fi
     expand_overlay "$overlay"
     copy_overlay "$overlay" "$target"
+    seed_plugins "$OVERLAY_ROOT" "$target"
     log "applied overlay: $name"
     reconcile_cron "$overlay" "$target"
   done
