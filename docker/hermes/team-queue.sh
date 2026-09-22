@@ -627,6 +627,6 @@ fi
 OWNERS_DISPLAY="$OWNER"
 for O in $ORGS; do OWNERS_DISPLAY="$OWNERS_DISPLAY $O"; done
 log "QUEUE EMPTY  query healthy: $NR_TOTAL onboarded repo(s), all labelled"
-log "  $LABELS, nothing routed to$OWNERS_DISPLAY right now."
+log "  $LABELS, nothing routed to $OWNERS_DISPLAY right now."
 [ -z "$BLIND_NOTE" ] || log "$BLIND_NOTE"
 exit 0
