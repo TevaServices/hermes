@@ -1,0 +1,35 @@
+# Valkey — the stack's single shared cache/queue server.
+#
+# Local:  mise run up
+# Komodo: part of the "hermes" Stack (<owner>/komodo -> resources.toml),
+# which merges this file with the other compose files.
+#
+# Replaces the per-app redis containers (firecrawl-redis, honcho-redis):
+# the network aliases keep every existing redis://... URL working with
+# zero client changes — the URL's host name only needs to resolve.
+# Valkey is the BSD drop-in successor to Redis (RESP-compatible); both
+# apps' clients connect unchanged.
+#
+# Logical DB isolation: Firecrawl uses /0 (default, its rate-limit keys
+# are short-TTL), Honcho's CACHE_URL selects /1. Load is negligible —
+# these were 8 MB and 0 keys in production before the merge — so no
+# tuning, no auth (hermes-net only), and no data migration: the old
+# containers held nothing durable.
+
+services:
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: valkey
+    restart: unless-stopped
+    volumes:
+      - valkey-data:/data
+    networks:
+      hermes-net:
+        aliases: [firecrawl-redis, honcho-redis]
+
+networks:
+  hermes-net:
+    external: true
+
+volumes:
+  valkey-data:

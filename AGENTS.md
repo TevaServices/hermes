@@ -17,8 +17,8 @@ control plane, API cheatsheet, and deploy mechanics.
 Deployed as the Komodo Stack **`hermes`** (server `<your-komodo-server>`): one compose
 project merging all files under `compose/`, cloned from this repo at deploy
 time. **The compose project name is `hermes`** — all named volumes are
-prefixed `hermes_*` (agent state, honcho Postgres/Redis, firecrawl
-db/redis/rabbitmq) and hold live data; do not rename the stack. The stack
+prefixed `hermes_*` (agent state, honcho Postgres, firecrawl
+db, the shared valkey volume) and hold live data; do not rename the stack. The stack
 must be deployed before komodo-core can start with it (`hermes_net` is
 declared external in komodo's compose).
 
@@ -212,10 +212,20 @@ checking the host's actual resources.
   limit above the host's core count is unschedulable). **Env var names
   churn between releases** — when bumping `FIRECRAWL_VERSION`, diff
   `compose/firecrawl.compose.yml` against upstream's `docker-compose.yaml`
-  for the new tag; known traps: `RABBITMQ_URL` was renamed
-  `NUQ_RABBITMQ_URL`, and **`HOST` must stay `0.0.0.0`** (the default
+  for the new tag; known trap: **`HOST` must stay `0.0.0.0`** (the default
   `localhost` binds IPv6 loopback only — the in-container harness probe and
   the published port both get ECONNREFUSED, restart-looping forever).
+  **No RabbitMQ (removed 2026-09-22):** NUQ's `NUQ_RABBITMQ_URL` is
+  optional upstream — unset, `services/worker/nuq.ts` falls back to a
+  Postgres `LISTEN/NOTIFY` listener, and on a single-host stack the
+  broker idled at ~760 MB (564 MB of quorum-queue ETS with every queue
+  empty). If a bump's diff shows a hard rabbitmq dependency creeping in
+  (non-optional `NUQ_RABBITMQ_URL`), the lightweight replacement is
+  LavinMQ, not NATS (Firecrawl speaks AMQP; a rewire is upstream work).
+  **Shared Valkey** (`compose/valkey.compose.yml`) serves both apps:
+  the `firecrawl-redis`/`honcho-redis` aliases keep every client URL
+  unchanged; Firecrawl uses logical DB /0, Honcho /1 (`CACHE_URL` in
+  the honcho compose).
   **firecrawl-db** runs `postgres -c cron.database_name=firecrawl` because
   the nuq-postgres initdb script `CREATE EXTENSION pg_cron`, which only
   works in the DB named by that GUC; our `POSTGRES_DB=firecrawl` differs

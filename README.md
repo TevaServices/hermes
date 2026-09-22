@@ -19,11 +19,12 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
    │                                                        │
    │  hermes-main ──── MCP ────► honcho-mcp ──► honcho-api    │
    │                                 honcho-deriver          │
-   │      │  MCP                    honcho-db, honcho-redis  │
+   │      │  MCP                    honcho-db                │
    │      ▼                                                 │
    │  firecrawl-mcp (in-agent, stdio) ──► firecrawl-api       │
-   │         firecrawl-playwright / redis / rabbitmq / db    │
+   │         firecrawl-playwright / db                       │
    │                                                        │
+   │  shared: valkey (aliases: firecrawl-redis, honcho-redis) │
    │  hermes-main / honcho / firecrawl ──► litellm ──►       │
    │    Ollama Cloud / OpenRouter free, one group per tier   │
    └────────────────────────────────────────────────────────┘
