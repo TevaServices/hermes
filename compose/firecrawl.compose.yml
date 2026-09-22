@@ -12,14 +12,15 @@
 # firecrawl-mcp server sends (secrets/firecrawl.env -> FIRECRAWL_API_KEY).
 #
 # The env wiring mirrors Firecrawl's upstream docker-compose.yaml, with
-# two deliberate departures: NO rabbitmq (NUQ_RABBITMQ_URL is unset, and
-# upstream's NuQ falls back to a Postgres LISTEN/NOTIFY listener —
-# apps/api/src/services/worker/nuq.ts — so the broker is pure overhead
-# on a single-host stack; it idled at 564 MB of quorum-queue ETS with
-# every queue empty) and NO redis service (compose/valkey.compose.yml
-# serves both apps under the firecrawl-redis alias). When bumping
-# FIRECRAWL_VERSION, diff against upstream's compose file for that
-# release — variable names occasionally change:
+# three deliberate departures: the broker is LavinMQ, NOT upstream's
+# rabbitmq:3-management (which idled at ~760 MB on this host — 564 MB of
+# quorum-queue ETS with every queue empty; LavinMQ is a drop-in AMQP
+# 0-9-1 broker idling at tens of MB, aliased firecrawl-rabbitmq — see
+# compose/lavinmq.compose.yml for why the extract lane still needs one);
+# NO redis service (compose/valkey.compose.yml serves both apps under
+# the firecrawl-redis alias); and postgres is upstream's nuq-postgres.
+# When bumping FIRECRAWL_VERSION, diff against upstream's compose file
+# for that release — variable names occasionally change:
 #   https://github.com/firecrawl/firecrawl/blob/main/docker-compose.yaml
 #
 # Secrets (TEST_API_KEY, POSTGRES_*) flow in via env_file from
@@ -50,8 +51,11 @@ x-firecrawl-common: &firecrawl-common
     REDIS_URL: redis://firecrawl-redis:6379
     REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
     PLAYWRIGHT_SERVICE_URL: http://firecrawl-playwright:3000
-    # Deliberately NO NUQ_RABBITMQ_URL: unset, the NuQ listener falls back
-    # to Postgres LISTEN/NOTIFY (see the header comment).
+    # Only the extract lane needs this (extract-queue.ts producer +
+    # extract-worker consumer have no non-AMQP fallback upstream; the
+    # scrape path's NuQ runs Postgres-only). The broker is LavinMQ under
+    # the firecrawl-rabbitmq alias — compose/lavinmq.compose.yml.
+    NUQ_RABBITMQ_URL: amqp://guest:guest@firecrawl-rabbitmq:5672/%2F
     POSTGRES_HOST: firecrawl-db
     POSTGRES_PORT: "5432"
 
@@ -69,6 +73,9 @@ services:
       # firecrawl-redis is an alias of the shared valkey container
       # (compose/valkey.compose.yml).
       valkey:
+        condition: service_started
+      # The extract lane's broker (LavinMQ, aliased firecrawl-rabbitmq).
+      lavinmq:
         condition: service_started
       # Firecrawl's LLM features (MODEL_NAME -> the `firecrawl` group) go
       # through the gateway, and litellm binds its port only after its

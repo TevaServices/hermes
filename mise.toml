@@ -36,6 +36,7 @@ HERMES_ENV_DIR = "{{config_root}}/secrets"
 HERMES_REF = "v2026.9.14"     # ref on github.com/NousResearch/hermes-agent
 HONCHO_VERSION = "main"       # ref on github.com/plastic-labs/honcho
 FIRECRAWL_VERSION = "latest"  # tag on the ghcr.io/firecrawl/* images
+LAVINMQ_VERSION = "2.4.4"     # tag on the docker.io/cloudamqp/lavinmq image
 
 # Optional — override locally with `mise set FIRECRAWL_PORT=3002`:
 # FIRECRAWL_PORT = "3002"
@@ -57,23 +58,23 @@ run = "docker network inspect hermes-net >/dev/null 2>&1 || docker network creat
 [tasks.up]
 description = "Build and start all stacks (hermes, honcho, firecrawl, litellm, valkey)"
 depends = ["render", "net"]
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml up -d --build"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml -f compose/lavinmq.compose.yml up -d --build"
 
 [tasks.down]
 description = "Stop all stacks (volumes preserved)"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml down"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml -f compose/lavinmq.compose.yml down"
 
 [tasks.ps]
 description = "Show stack status"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml ps"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml -f compose/lavinmq.compose.yml ps"
 
 [tasks.logs]
 description = "Tail logs across the stack"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml logs -f --tail=100"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml -f compose/lavinmq.compose.yml logs -f --tail=100"
 
 [tasks.pull]
 description = "Pre-pull images (useful before a Komodo-side deploy)"
-run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml pull --ignore-buildable"
+run = "docker compose -f compose/hermes.compose.yml -f compose/honcho.compose.yml -f compose/firecrawl.compose.yml -f compose/litellm.compose.yml -f compose/valkey.compose.yml -f compose/lavinmq.compose.yml pull --ignore-buildable"
 
 [tasks.chat]
 description = "Interactive CLI chat with the main agent"
