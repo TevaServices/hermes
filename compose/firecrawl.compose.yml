@@ -11,17 +11,22 @@
 # is published off-host here) and TEST_API_KEY acts as the API key the
 # firecrawl-mcp server sends (secrets/firecrawl.env -> FIRECRAWL_API_KEY).
 #
-# The env wiring below mirrors Firecrawl's upstream docker-compose.yaml
-# (services: api, playwright-service, redis, rabbitmq, nuq-postgres).
-# When bumping FIRECRAWL_VERSION, diff against upstream's compose file
-# for that release — variable names occasionally change:
+# The env wiring mirrors Firecrawl's upstream docker-compose.yaml, with
+# two deliberate departures: NO rabbitmq (NUQ_RABBITMQ_URL is unset, and
+# upstream's NuQ falls back to a Postgres LISTEN/NOTIFY listener —
+# apps/api/src/services/worker/nuq.ts — so the broker is pure overhead
+# on a single-host stack; it idled at 564 MB of quorum-queue ETS with
+# every queue empty) and NO redis service (compose/valkey.compose.yml
+# serves both apps under the firecrawl-redis alias). When bumping
+# FIRECRAWL_VERSION, diff against upstream's compose file for that
+# release — variable names occasionally change:
 #   https://github.com/firecrawl/firecrawl/blob/main/docker-compose.yaml
 #
 # Secrets (TEST_API_KEY, POSTGRES_*) flow in via env_file from
 # HERMES_ENV_DIR — compose does NOT interpolate ${...} from env_file
 # entries, so nothing secret is referenced with ${} below. The
-# rabbitmq/postgres credentials are internal to the compose network;
-# the API key is the only one clients (the Hermes agents) use.
+# postgres credentials are internal to the compose network; the API
+# key is the only one clients (the Hermes agents) use.
 
 x-firecrawl-common: &firecrawl-common
   environment: &firecrawl-env
@@ -45,9 +50,8 @@ x-firecrawl-common: &firecrawl-common
     REDIS_URL: redis://firecrawl-redis:6379
     REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
     PLAYWRIGHT_SERVICE_URL: http://firecrawl-playwright:3000
-    # RabbitMQ wiring was renamed RABBITMQ_URL -> NUQ_RABBITMQ_URL in
-    # current releases; matches RABBITMQ_DEFAULT_USER/PASS below.
-    NUQ_RABBITMQ_URL: amqp://firecrawl:firecrawl@firecrawl-rabbitmq:5672/%2F
+    # Deliberately NO NUQ_RABBITMQ_URL: unset, the NuQ listener falls back
+    # to Postgres LISTEN/NOTIFY (see the header comment).
     POSTGRES_HOST: firecrawl-db
     POSTGRES_PORT: "5432"
 
@@ -62,9 +66,9 @@ services:
     depends_on:
       firecrawl-db:
         condition: service_started
-      firecrawl-redis:
-        condition: service_started
-      firecrawl-rabbitmq:
+      # firecrawl-redis is an alias of the shared valkey container
+      # (compose/valkey.compose.yml).
+      valkey:
         condition: service_started
       # Firecrawl's LLM features (MODEL_NAME -> the `firecrawl` group) go
       # through the gateway, and litellm binds its port only after its
@@ -95,29 +99,6 @@ services:
     networks:
       - hermes-net
 
-  firecrawl-redis:
-    image: redis:alpine
-    container_name: firecrawl-redis
-    restart: unless-stopped
-    volumes:
-      - firecrawl-redis-data:/data
-    networks:
-      - hermes-net
-
-  firecrawl-rabbitmq:
-    image: rabbitmq:3-management
-    container_name: firecrawl-rabbitmq
-    restart: unless-stopped
-    environment:
-      # Internal to the compose network; matches RABBITMQ_URL above.
-      # Change both together if you need different credentials.
-      RABBITMQ_DEFAULT_USER: firecrawl
-      RABBITMQ_DEFAULT_PASS: firecrawl
-    volumes:
-      - firecrawl-rabbitmq-data:/var/lib/rabbitmq
-    networks:
-      - hermes-net
-
   firecrawl-db:
     image: ghcr.io/firecrawl/nuq-postgres:${FIRECRAWL_VERSION:-latest}
     container_name: firecrawl-db
@@ -141,6 +122,4 @@ networks:
     external: true
 
 volumes:
-  firecrawl-redis-data:
-  firecrawl-rabbitmq-data:
   firecrawl-db-data:

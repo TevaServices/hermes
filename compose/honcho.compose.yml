@@ -30,12 +30,15 @@ services:
       # password auth, set POSTGRES_PASSWORD in honcho.env (flows in via
       # env_file), drop trust, and put the password in the URI here.
       DB_CONNECTION_URI: postgresql+psycopg://postgres@honcho-db:5432/postgres
-      CACHE_URL: redis://honcho-redis:6379
+      # honcho-redis is an alias of the shared valkey container
+      # (compose/valkey.compose.yml); /1 isolates Honcho's keys from
+      # Firecrawl's (Firecrawl uses the default /0).
+      CACHE_URL: redis://honcho-redis:6379/1
       CACHE_ENABLED: "true"
     depends_on:
       honcho-db:
         condition: service_started
-      honcho-redis:
+      valkey:
         condition: service_started
       # Every deriver/summary/dialectic step is an LLM call to the gateway,
       # and litellm binds its port only after its startup catalogue fetch.
@@ -62,12 +65,15 @@ services:
       - ${HERMES_ENV_DIR:?}/honcho.env
     environment:
       DB_CONNECTION_URI: postgresql+psycopg://postgres@honcho-db:5432/postgres
-      CACHE_URL: redis://honcho-redis:6379
+      # honcho-redis is an alias of the shared valkey container
+      # (compose/valkey.compose.yml); /1 isolates Honcho's keys from
+      # Firecrawl's (Firecrawl uses the default /0).
+      CACHE_URL: redis://honcho-redis:6379/1
       CACHE_ENABLED: "true"
     depends_on:
       honcho-db:
         condition: service_started
-      honcho-redis:
+      valkey:
         condition: service_started
       # See honcho-api: the deriver's whole job is LLM calls, and a deriver
       # that runs before the gateway is listening fails silently.
@@ -142,20 +148,10 @@ services:
     networks:
       - hermes-net
 
-  honcho-redis:
-    image: redis:8.2
-    container_name: honcho-redis
-    restart: unless-stopped
-    volumes:
-      - honcho-redis-data:/data
-    networks:
-      - hermes-net
-
 networks:
   hermes-net:
     external: true
 
 volumes:
   honcho-pgdata:
-  honcho-redis-data:
   ollama-models:
