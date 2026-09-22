@@ -90,5 +90,10 @@ if [ -n "$owner" ] && [ -n "$creds_dir" ]; then
 fi
 
 # Personal / unknown owner: exactly what git got before the router.
-# "$@" forwards the operation name git appended (typically `get`).
-exec gh auth git-credential "$@"
+# REPLAY the captured request: the router consumed the helper's stdin
+# above (req="$(cat)"), and gh's git-credential helper reads the request
+# from stdin — exec'ing gh with an empty stdin serves nothing (git then
+# falls through to an interactive prompt). "$@" forwards the operation
+# name git appended (typically `get`).
+printf '%s\n' "$req" | gh auth git-credential "$@"
+exit $?
