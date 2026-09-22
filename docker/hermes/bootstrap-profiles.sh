@@ -79,17 +79,21 @@ copy_overlay() {
 # overwrites from the overlay too. Both knobs are git-side; see
 # AGENTS.md §"Dashboard + the memory-UI plugin".
 seed_plugins() {
-  overlay="$1"
-  target="$2"
-  if [ -d "$overlay/plugins" ]; then
-    for plugin in "$overlay/plugins"/*; do
-      [ -d "$plugin" ] || continue
-      name="$(basename "$plugin")"
+  # Distinct variable names on purpose: this script's functions share one
+  # global namespace (no `local` in POSIX sh), and seed_plugins is called
+  # INSIDE the named-profile loop, whose `overlay` / `target` / `name`
+  # globals must survive it.
+  seed_root="$1"
+  seed_target="$2"
+  if [ -d "$seed_root/plugins" ]; then
+    for seed_plugin in "$seed_root/plugins"/*; do
+      [ -d "$seed_plugin" ] || continue
+      seed_name="$(basename "$seed_plugin")"
       # Exact replace, not merge: a plugin upgrade must not leave stale
       # files (e.g. a dist asset removed upstream) behind in the home.
-      rm -rf "$target/plugins/$name"
-      mkdir -p "$target/plugins"
-      cp -a "$plugin" "$target/plugins/$name"
+      rm -rf "$seed_target/plugins/$seed_name"
+      mkdir -p "$seed_target/plugins"
+      cp -a "$seed_plugin" "$seed_target/plugins/$seed_name"
     done
   fi
 }
