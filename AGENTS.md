@@ -18,7 +18,7 @@ Deployed as the Komodo Stack **`hermes`** (server `<your-komodo-server>`): one c
 project merging all files under `compose/`, cloned from this repo at deploy
 time. **The compose project name is `hermes`** — all named volumes are
 prefixed `hermes_*` (agent state, honcho Postgres, firecrawl
-db, the shared valkey volume) and hold live data; do not rename the stack. The stack
+db, the shared valkey + lavinmq volumes) and hold live data; do not rename the stack. The stack
 must be deployed before komodo-core can start with it (`hermes_net` is
 declared external in komodo's compose).
 
@@ -215,13 +215,22 @@ checking the host's actual resources.
   for the new tag; known trap: **`HOST` must stay `0.0.0.0`** (the default
   `localhost` binds IPv6 loopback only — the in-container harness probe and
   the published port both get ECONNREFUSED, restart-looping forever).
-  **No RabbitMQ (removed 2026-09-22):** NUQ's `NUQ_RABBITMQ_URL` is
-  optional upstream — unset, `services/worker/nuq.ts` falls back to a
-  Postgres `LISTEN/NOTIFY` listener, and on a single-host stack the
-  broker idled at ~760 MB (564 MB of quorum-queue ETS with every queue
-  empty). If a bump's diff shows a hard rabbitmq dependency creeping in
-  (non-optional `NUQ_RABBITMQ_URL`), the lightweight replacement is
-  LavinMQ, not NATS (Firecrawl speaks AMQP; a rewire is upstream work).
+  **The broker is LavinMQ, not rabbitmq (changed 2026-09-22):** upstream's
+  `rabbitmq:3-management` idled at ~760 MB on this host (564 MB of
+  quorum-queue ETS with every queue empty), but a broker cannot simply be
+  dropped: NuQ's *scrape* path is optional-AMQP (unset `NUQ_RABBITMQ_URL`
+  → Postgres `LISTEN/NOTIFY`, `services/worker/nuq.ts`), yet the *extract*
+  lane has no fallback — `services/extract-queue.ts` (producer) and
+  `services/extract-worker.ts` (consumer) throw without it, and a missing
+  broker crash-loops the whole API harness. `/v1/extract` is load-bearing
+  here (SmartScrape), so `compose/lavinmq.compose.yml` provides
+  `cloudamqp/lavinmq` under the `firecrawl-rabbitmq` alias — drop-in AMQP
+  0-9-1, idles at tens of MB, guest/guest (network-internal, no published
+  ports). NATS is not an option (Firecrawl speaks AMQP; a rewire is
+  upstream work). The `firecrawl-api` restart-loop signature for a missing
+  broker is `extract-worker failed with exit code 1` / "Can't accept
+  connection due to RAM/CPU load" (restart churn, not a real load
+  problem).
   **Shared Valkey** (`compose/valkey.compose.yml`) serves both apps:
   the `firecrawl-redis`/`honcho-redis` aliases keep every client URL
   unchanged; Firecrawl uses logical DB /0, Honcho /1 (`CACHE_URL` in
