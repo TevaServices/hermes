@@ -22,7 +22,7 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
    │      │  MCP                    honcho-db                │
    │      ▼                                                 │
    │  firecrawl-mcp (in-agent, stdio) ──► firecrawl-api       │
-   │         firecrawl-playwright / db                       │
+   │         firecrawl-playwright / db / lavinmq (extract)    │
    │                                                        │
    │  shared: valkey (aliases: firecrawl-redis, honcho-redis) │
    │  hermes-main / honcho / firecrawl ──► litellm ──►       │

@@ -1,0 +1,44 @@
+# LavinMQ — the AMQP 0-9-1 broker for Firecrawl's extract lane.
+#
+# Local:  mise run up
+# Komodo: part of the "hermes" Stack (<owner>/komodo -> resources.toml),
+# which merges this file with the other compose files.
+#
+# WHY A BROKER IS BACK (after PR #7 removed rabbitmq): NUQ's scrape path
+# is Postgres-only (LISTEN/NOTIFY), but Firecrawl's extract feature has
+# no fallback — apps/api/src/services/extract-queue.ts throws
+# "NUQ_RABBITMQ_URL is not configured" from the producer (addExtractJob)
+# and apps/api/src/services/extract-worker.ts consumes from AMQP
+# unconditionally; a missing broker crash-loops the whole API harness.
+# This stack's SmartScrape runs through /v1/extract, so the lane is
+# load-bearing.
+#
+# WHY LAVINMQ: drop-in AMQP 0-9-1 (same amqplib client, standard
+# exchanges/DLQ semantics), single binary, idles at tens of MB —
+# rabbitmq:3-management idled at ~760 MB on this host (564 MB of
+# quorum-queue ETS with every queue empty).
+#
+# Auth: guest/guest — the image's default, enabled for non-loopback by
+# its entrypoint. Same trust level as the old rabbitmq compose block
+# (firecrawl:firecrawl, committed, network-internal); the service
+# publishes NO ports, so the broker is reachable only on hermes-net.
+# LavinMQ's LAVINMQ_DEFAULT_PASSWORD expects a hash, not plaintext, so
+# custom creds would need an INI mount — not worth it at this exposure.
+
+services:
+  lavinmq:
+    image: cloudamqp/lavinmq:${LAVINMQ_VERSION:-latest}
+    container_name: lavinmq
+    restart: unless-stopped
+    volumes:
+      - lavinmq-data:/var/lib/lavinmq
+    networks:
+      hermes-net:
+        aliases: [firecrawl-rabbitmq]
+
+networks:
+  hermes-net:
+    external: true
+
+volumes:
+  lavinmq-data:
