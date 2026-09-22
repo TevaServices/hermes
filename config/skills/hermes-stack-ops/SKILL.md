@@ -96,6 +96,39 @@ credentials through gh (`gh auth git-credential`) — just use `gh` and
 `git` normally. The entrypoint's background refresher keeps gh's stored
 installation token fresh (boot + every 30 min; tokens last 1h).
 
+**TWO credential sets per profile: personal App + org Apps, routed by
+repo owner.** Every profile ALSO holds one GitHub App per org it works
+with (any number of orgs — e.g. `acmecorp-hermes-*[bot]` for an org
+"Acme Corp"), and the stack picks the token automatically:
+
+- **`gh` is a shim** (the real CLI is `/usr/local/bin/gh-real`). It
+  picks the ORG token when the invocation's target owner matches an org
+  the profile has credentials for — from a `-R <owner>/<repo>` argument
+  or the cwd git repo's origin — and passes through otherwise.
+  `gh auth *` and any call with `GH_TOKEN` set are ALWAYS passthrough.
+- **git routes through `git-credential-hermes.sh`**: an org-owned
+  remote gets the org token; anything else replays into
+  `gh auth git-credential` (personal, unchanged). No action needed —
+  push/fetch to an org remote just works, and commits in org worktrees
+  carry the org bot identity (git-repo.sh sets it per-worktree from the
+  org descriptor).
+- **Tokens are cached** at `$HOME/org-creds/<org>.token` and reused for
+  ~45 min; the entrypoint re-mints at boot. If an app is
+  re-installed (new installation id) the cache invalidates itself; a
+  stale one after a PEM rotation is cleared by deleting
+  `<slug>.token`.
+- **Cross-owner searches are the one sharp edge**: from inside an org
+  worktree, `gh search` runs under the ORG token and CANNOT see
+  personal repos (and vice versa from a personal worktree). For an
+  ad-hoc cross-owner search carry `-R <owner>/<repo>` or set the token
+  yourself: `GH_TOKEN="$(gh-org-token <orgslug>)" gh search …`.
+  The self-pull queue scripts already do this per owner
+  (`TEAM_OWNER_ORGS`).
+- **404/403 from `gh api repos/<org>/<repo>`** on an org repo usually
+  means the org App installation doesn't cover that repo — probe with
+  `gh api repos/<org>/<repo> --jq .full_name` before assuming the
+  token is broken.
+
 **Git repos live centrally — worktree per session, never clone.**
 One bare clone per repo sits in `/opt/data/repos/<host>/<owner>/<repo>.git`
 (shared object store, no working tree — never commit there). Work happens

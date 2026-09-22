@@ -403,6 +403,11 @@ required to bump). Both modes are env-driven from hermes-main.env; the
 entrypoint re-runs the config on every start and sets a default commit
 identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`.
 
+**Every profile can hold TWO credential sets: the personal App (for
+bcross repos) and one org-owned App PER ORG it works with (any number of
+orgs, e.g. `acmecorp-hermes-*[bot]` for an org "Acme Corp"), routed by
+repo owner.**
+
 - **GitHub App (preferred)**: `GITHUB_APP_ID` +
   `GITHUB_APP_INSTALLATION_ID` are the only GitHub vars in the env file
   (PEM at `/etc/hermes/github-app-<profile>.pem` — root:<host-group> 640,
@@ -416,6 +421,36 @@ identity from `GH_GIT_NAME`/`GH_GIT_EMAIL`.
   refresher re-runs `gh auth login --with-token` every 30 min. Hermes'
   skills hub has native app support too (tools/skills_hub.py `GitHubAuth`,
   priority PAT → gh → app).
+- **Org Apps**: `GITHUB_APP_ID_<ORG>` / `PROFILE_<NAME>_GITHUB_APP_ID_<ORG>`
+  (plus `_INSTALLATION_ID_`, `_GH_GIT_NAME_`, `_GH_GIT_EMAIL_` org-suffixed
+  variants) declare the org set; PEMs install as
+  `/etc/hermes/github-app-<orgslug>-<profile>.pem` (no compose change —
+  the whole env dir is mounted at `/run/hermes-pem`). The entrypoint
+  syncs each tool-home's NON-secret descriptor
+  `<tool_home>/org-creds/<orgslug>.env` + PEM copy (one descriptor per
+  org, discovered from the env vars themselves — the entrypoint handles
+  any number of orgs with no per-org code) — the helpers read
+  files, not env, because Hermes strips credential env vars from tool
+  subprocesses (GHSA-rhgp-j443-p4rf). Org token minting is lazy + cached
+  (`gh-org-token`, ~45-min cache in `org-creds/<slug>.token`); a boot
+  mint per org per profile fails loudly. An org with ids but no
+  installation id or no PEM is skipped with a boot warning.
+- **Routing**: `/usr/local/bin/gh` is a SHIM (real binary `gh-real`) that
+  picks the org token when `-R`/cwd resolves to an owner with a
+  descriptor — `gh auth *` and `GH_TOKEN`-set calls always pass through.
+  git's single credential helper is `git-credential-hermes.sh`
+  (`credential.https://github.com.helper` + `useHttpPath=true`): org
+  remote → org token; otherwise it replays the request into
+  `gh auth git-credential` (personal, unchanged). useHttpPath=true is
+  load-bearing — without it git sends no path and the router cannot see
+  the owner (verified against git 2.54; per-URL credential config keys
+  were rejected because git's urlmatch path compare is case-sensitive
+  while GitHub owners are case-insensitive).
+- **Commit identity**: org worktrees commit as the org bot —
+  `git-repo.sh worktree` sets `user.name`/`user.email` in the worktree's
+  own `config.worktree` (needs `extensions.worktreeConfig`, which it
+  enables idempotently; without it the config would land in the bare
+  repo's common config and leak across sessions).
 - **PAT fallback**: `GH_TOKEN` authenticates gh natively; git routes through
   `gh auth git-credential`. Prefer a fine-grained PAT scoped to the
   specific repos (Contents/Issues/Pull requests read+write).
@@ -792,6 +827,24 @@ or a chat transcript.
   PEM as root:<host-group> 640 into `$HERMES_ENV_DIR/`) and append `env-lines.txt` to
   `/etc/hermes/hermes-main.env`. Re-running is safe — an existing App name
   fails at GitHub's own name check before anything is created.
+- **Org Apps** (`create-github-apps.py --org <ORG>`): same flow, but the
+  manifests POST to the org's settings URL (browser must be logged in
+  with admin on the org) and EVERYTHING lands in
+  `build/github-apps/<orgslug>/` with org-slug'd PEM names
+  (`github-app-<orgslug>-<profile>.pem`, `env-lines-<orgslug>.txt`,
+  `host-install-<orgslug>.sh`) — a second run can never clobber the
+  personal artifacts. The org App-NAME prefix defaults to
+  `<orgslug>-hermes` (e.g. `acmecorp-hermes-planner`) — deliberately
+  different from the personal names, because App names are globally
+  unique and the personal ones are taken; override with `--prefix` or
+  `HERMES_APP_PREFIX_<ORGUC>`, per profile with
+  `PROFILE_<NAME>_GH_APP_NAME_<ORGUC>`. The env lines are the
+  ORG-SUFFIXED vars plus `TEAM_ORG_DEV_BOT_<ORGUC>` (the org author
+  filter for the self-pull queues — add the org to `TEAM_OWNER_ORGS` to
+  make the queues actually poll it). Run it ONCE PER ORG, any number of
+  orgs. Pass `main` on the command line to include the default
+  profile's org app — the org run for the full team is:
+  `python3 scripts/create-github-apps.py --org <ORG> main planner developer reviewer`
 - **Bot token for a new team profile**
   (`scripts/set-team-discord-tokens.py`, run **on the host**): prompts for
   each team bot token with hidden input (`getpass`) and validates every
@@ -1031,6 +1084,26 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${HERMES_DASHBOARD_HOS
 #   enabled: 30x redirect to the login page or 401. A 200 WITHOUT a
 #   session means the auth gate is NOT engaged — investigate immediately.
 docker logs hermes-main 2>&1 | grep -i '\[dashboard\]' | tail -5   # no auth-provider errors
+```
+
+Org GitHub Apps (after landing the org env vars + PEMs):
+
+```bash
+# Descriptors + warm token caches exist per tool-home, runtime-uid owned
+docker exec hermes-main ls -la /opt/data/home/org-creds/ \
+  /opt/data/profiles/developer/home/org-creds/
+docker exec hermes-main sh -c 'for f in /opt/data/home/org-creds/*.token; do head -1 "$f"; done'
+#   -> "<installation_id> <expiry>" per org; expiry > now + 50 min
+# Boot log: one "org creds for <ORG> ->" line + one "org token ok for <slug>"
+# line per (tool-home, org); a FAILED line means org repos are unreachable.
+docker logs hermes-main 2>&1 | grep -E 'org (creds|token)' | tail -12
+# Git router: an org remote pulls with the ORG token (no prompt), a personal
+# remote still works, an unknown owner falls through
+docker exec -e HOME=/opt/data/home hermes-main \
+  git ls-remote https://github.com/<org>/<private-repo>.git HEAD
+# gh shim: org target -> org token; auth/GH_TOKEN always passthrough
+docker exec -e HOME=/opt/data/home hermes-main gh api repos/<org>/<repo> --jq .full_name
+docker exec hermes-main gh auth status          # shim passthrough
 ```
 
 Mid-session, `/model cheap`, `/model smart`, `/model smarter` and

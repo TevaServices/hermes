@@ -10,7 +10,8 @@
 # team-queue.sh for the full reasoning and the exit-code contract.
 #
 #   exit 0  work listed (the agent wakes), or healthy-and-empty (silent)
-#   2/3/4/5 an incident — surfaced once, then deduped
+#   2/3/4/5/6 an incident — surfaced once, then deduped (6 = ORG CREDS
+#           MISSING, a TEAM_OWNER_ORGS entry with no usable org App)
 #
 # The queue is `review/in-progress` THEN `review/ready`: a review this
 # profile already claimed comes back to it first, so an interrupted review

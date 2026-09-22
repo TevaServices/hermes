@@ -154,8 +154,14 @@ RUN case "${TARGETARCH}" in \
       "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" \
       -o /tmp/gh.tgz \
  && tar -xzf /tmp/gh.tgz -C /tmp \
- && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /usr/local/bin/gh \
+ && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /usr/local/bin/gh-real \
  && rm -rf /tmp/gh*
+
+# gh is installed as gh-real: /usr/local/bin/gh is the STACK SHIM
+# (docker/hermes/gh), which picks the personal vs org App installation
+# token per invocation (see that script). Anything that must bypass the
+# shim calls gh-real directly. The shim is COPY'd with the other stack
+# helpers below.
 
 # Vendored dashboard plugin: xraysight/hermes-memory-ui. Cloned at BUILD
 # time from a pinned full commit SHA (tags are mutable; a full SHA is
@@ -209,6 +215,11 @@ COPY docker/hermes/refresh-repos.sh /usr/local/bin/refresh-repos.sh
 # claude-update.sh also lands here (not only in /opt/claude-hermes/) so
 # the reconciler can seed it as the default profile's daily job script.
 COPY docker/hermes/claude-update.sh /usr/local/bin/claude-update.sh
+# Org GitHub App plumbing: the gh shim (real binary is gh-real above),
+# the org token minter/cache, and the git credential router.
+COPY docker/hermes/gh /usr/local/bin/gh
+COPY docker/hermes/gh-org-token /usr/local/bin/gh-org-token
+COPY docker/hermes/git-credential-hermes.sh /usr/local/bin/git-credential-hermes.sh
 RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/hermes-bootstrap-profiles.sh \
                /usr/local/bin/git-repo.sh \
@@ -219,7 +230,10 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/expand-placeholders.py \
                /usr/local/bin/prune-repos.sh \
                /usr/local/bin/refresh-repos.sh \
-               /usr/local/bin/claude-update.sh
+               /usr/local/bin/claude-update.sh \
+               /usr/local/bin/gh \
+               /usr/local/bin/gh-org-token \
+               /usr/local/bin/git-credential-hermes.sh
 
 # Headless Chromium for the browser tools (browser-harness / browser_exec).
 # The base image already bakes the Playwright Chromium headless shell

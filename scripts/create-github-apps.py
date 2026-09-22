@@ -28,6 +28,16 @@ Artifacts land in build/github-apps/ (gitignored):
   env-lines.txt              the PROFILE_* lines for hermes-main.env
   host-install.sh            copies the PEMs into /etc/hermes on the host
 
+ORG RUNS (--org) namespace everything into build/github-apps/<orgslug>/
+with org-slug'd PEM names (github-app-<orgslug>-<profile>.pem) and
+org-suffixed env lines (e.g. PROFILE_DEVELOPER_GITHUB_APP_ID_<ORGUC>
+plus TEAM_ORG_DEV_BOT_<ORGUC>) — a second run can never clobber the
+personal artifacts, and vice versa. Env vars: HERMES_APP_PREFIX_<ORGUC>
+or --prefix sets the org App-name prefix; default "<orgslug>-hermes"
+(acmecorp-hermes-planner), distinct from the personal names because
+GitHub App names are globally unique. Run once PER ORG — any number of
+orgs, each with its own block in hermes-main.env.
+
 Secrets are never printed: the PEM is written straight to disk and only
 its path is reported. Re-running is safe — an app whose name already
 exists fails at click 1 with GitHub's own "name is already taken" error.
@@ -35,7 +45,10 @@ exists fails at click 1 with GitHub's own "name is already taken" error.
 Usage:
   python3 scripts/create-github-apps.py                 # the 3 team apps
   python3 scripts/create-github-apps.py planner         # just one
+  python3 scripts/create-github-apps.py main            # the default profile's app
   python3 scripts/create-github-apps.py --org my-org    # org-owned apps
+  python3 scripts/create-github-apps.py --org my-org main planner developer reviewer
+                                                        # org apps for ALL profiles
   python3 scripts/create-github-apps.py --print-url     # don't open a browser
 
 App names default to "<prefix>-<suffix>" (hermes-planner, hermes-dev,
@@ -64,7 +77,10 @@ OUTPUT_DIR = os.path.join("build", "github-apps")
 
 # App names default to "<prefix>-<suffix>". GitHub App names are GLOBALLY
 # unique, so if the default is taken, set PROFILE_<NAME>_GH_APP_NAME per
-# profile (secrets/hermes-main.env.example) and re-run.
+# profile (secrets/hermes-main.env.example) and re-run. Org runs get a
+# DIFFERENT default prefix — "<orgslug>-hermes" (e.g.
+# acmecorp-hermes-planner) — because the personal run's names
+# (hermes-planner, …) are taken by the existing personal apps.
 #
 # The App name must match the App's slug on GitHub, because the bot identity
 # git commits carry is "<slug>[bot]" — that is PROFILE_<NAME>_GH_GIT_NAME,
@@ -78,7 +94,21 @@ DEFAULT_APP_PREFIX = os.environ.get("HERMES_APP_PREFIX", "hermes")
 # `app_suffix` (not the profile name) is what goes into the App name: the
 # profile dir is "developer" so its PEM is github-app-developer.pem, but the
 # identity the team knows is "<prefix>-dev[bot]".
+#
+# "main" is the default profile's App (the primary agent). It is opt-in —
+# DEFAULT_ORDER covers only the 3 team profiles; pass `main` on the
+# command line when you want it (the org run needs all four).
 APPS = {
+    "main": {
+        "app_suffix": "main",
+        "description": "Hermes main agent — the default profile: repos, issues, PRs",
+        "permissions": {
+            "metadata": "read",
+            "contents": "write",
+            "issues": "write",
+            "pull_requests": "write",
+        },
+    },
     "planner": {
         "app_suffix": "planner",
         "description": "Hermes planner — PM/design: issues, specs, boards (read-only code)",
@@ -112,21 +142,49 @@ APPS = {
 }
 
 
-def app_name(profile: str) -> str:
+def org_slug(org: str) -> str:
+    """The org's slug: lowercase [a-z0-9] only — used in filenames."""
+    return "".join(c for c in org.lower() if c.isalnum())
+
+
+def org_var_suffix(org: str) -> str:
+    """The env-var suffix for an org: uppercase, non-[A-Z0-9] -> '_'.
+
+    "Acme Corp" -> ACME_CORP. Used for GITHUB_APP_ID_<ORGUC> and friends;
+    the entrypoint's slug derivation (lowercase, strip non-alphanumerics)
+    maps it back to the same slug both spellings share.
+    """
+    return "".join(c if c.isalnum() else "_" for c in org.upper())
+
+
+def app_name(profile: str, org=None) -> str:
     """The App name for a profile.
 
-    PROFILE_<NAME>_GH_APP_NAME wins; otherwise "<prefix>-<suffix>". Read at
-    call time rather than import so the env file can supply it.
+    Personal runs: PROFILE_<NAME>_GH_APP_NAME wins; otherwise
+    "<prefix>-<suffix>" from HERMES_APP_PREFIX (default "hermes").
+    Org runs: PROFILE_<NAME>_GH_APP_NAME_<ORGUC> wins; then --prefix /
+    HERMES_APP_PREFIX_<ORGUC>; then default "<orgslug>-hermes" — a
+    different default from the personal run, because GitHub App names
+    are globally unique and the personal run's names are taken.
     """
+    if org:
+        orguc = org_var_suffix(org)
+        override = os.environ.get(f"PROFILE_{profile.upper()}_GH_APP_NAME_{orguc}", "").strip()
+        if override:
+            return override
+        prefix = os.environ.get(f"HERMES_APP_PREFIX_{orguc}", "").strip()
+        if not prefix:
+            prefix = org_slug(org) + "-hermes"
+        return f"{prefix}-{APPS[profile]['app_suffix']}"
     override = os.environ.get(f"PROFILE_{profile.upper()}_GH_APP_NAME", "").strip()
     if override:
         return override
     return f"{DEFAULT_APP_PREFIX}-{APPS[profile]['app_suffix']}"
 
 
-def bot_login(profile: str) -> str:
+def bot_login(profile: str, org=None) -> str:
     """The bot identity git commits carry — the App slug plus `[bot]`."""
-    return f"{app_name(profile)}[bot]"
+    return f"{app_name(profile, org)}[bot]"
 
 
 def gh_login():
@@ -237,7 +295,7 @@ class Flow:
     def manifest(self, profile):
         app = APPS[profile]
         return {
-            "name": app_name(profile),
+            "name": app_name(profile, self.org),
             "url": self.repo_url,
             "description": app["description"],
             "redirect_url": f"{self.base()}/manifest/callback",
@@ -312,7 +370,11 @@ def save_app(app, flow, profile):
     pem = app.get("pem")
     if not pem:
         raise RuntimeError("conversion response carried no private key")
-    path = os.path.join(flow.outdir, f"github-app-{profile}.pem")
+    if flow.org:
+        pem_name = f"github-app-{org_slug(flow.org)}-{profile}.pem"
+    else:
+        pem_name = f"github-app-{profile}.pem"
+    path = os.path.join(flow.outdir, pem_name)
     # Create private from the start, then tighten — never a window where
     # the key is world-readable.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -380,7 +442,7 @@ class Handler(BaseHTTPRequestHandler):
         remaining = [p for p in flow.order if p != profile and not flow.results.get(p, {}).get("installation_id")]
         body = (
             f'<div class="step"><p>Creating the GitHub App '
-            f'<code>{html.escape(app_name(profile))}</code> for the '
+            f'<code>{html.escape(app_name(profile, flow.org))}</code> for the '
             f'<strong>{html.escape(profile)}</strong> profile.</p>'
             "<p>On the GitHub page that opens, click "
             "<strong>Create GitHub App</strong>.</p>"
@@ -398,7 +460,7 @@ class Handler(BaseHTTPRequestHandler):
             f'<input type="hidden" name="manifest" value="{manifest}"></form>'
             "<script>document.getElementById('m').submit()</script>"
         )
-        self.send_html(page(f"Create {app_name(profile)}", body))
+        self.send_html(page(f"Create {app_name(profile, flow.org)}", body))
 
     def handle_callback(self, qs):
         flow = self.flow
@@ -498,41 +560,78 @@ class Handler(BaseHTTPRequestHandler):
 # --- summary ----------------------------------------------------------------
 
 
-def env_lines(order, results):
-    lines = []
+def env_lines(order, results, org=None):
+    """The hermes-main.env lines for what this run created.
+
+    Personal runs emit the classic bare PROFILE_* vars; org runs emit the
+    ORG-SUFFIXED vars (org as an uppercase suffix, e.g.
+    PROFILE_DEVELOPER_GITHUB_APP_INSTALLATION_ID_ACME_CORP) plus the
+    org routing line (TEAM_ORG_DEV_BOT_<ORGUC>) that the self-pull
+    queues read for the org author filter.
+    """
+    orguc = org_var_suffix(org) if org else None
+    if org:
+        slug = org_slug(org)
+        lines = [
+            f"# ORG Apps ({orguc}) — PEMs install as"
+            f" github-app-{slug}-<profile>.pem, descriptors are wired by"
+            " the entrypoint",
+            f"# (also add the org to TEAM_OWNER_ORGS so the queues poll it)",
+        ]
+    else:
+        orguc = None
+        lines = []
     for profile in order:
         r = results.get(profile)
         if not r or not r.get("installation_id"):
             continue
-        var = profile.upper()
-        lines.append(f"# {profile} (App: {r['app_name']})")
-        lines.append(f"PROFILE_{var}_GITHUB_APP_ID={r['app_id']}")
-        lines.append(f"PROFILE_{var}_GITHUB_APP_INSTALLATION_ID={r['installation_id']}")
-        # Derived, so the commit identity can never drift from the App the
-        # commits are actually minted from. The entrypoint uses these to set
-        # the profile's git author/committer.
-        lines.append(f"PROFILE_{var}_GH_APP_NAME={r['app_name']}")
-        lines.append(f"PROFILE_{var}_GH_GIT_NAME={bot_login(profile)}")
-        lines.append(
-            f"PROFILE_{var}_GH_GIT_EMAIL={bot_login(profile)}@users.noreply.github.com"
-        )
+        if orguc:
+            if profile == "main":
+                p = ""
+            else:
+                p = "PROFILE_%s_" % profile.upper()
+            lines.append(f"# {profile} (org {orguc} App: {r['app_name']})")
+            lines.append(f"{p}GITHUB_APP_ID_{orguc}={r['app_id']}")
+            lines.append(f"{p}GITHUB_APP_INSTALLATION_ID_{orguc}={r['installation_id']}")
+            lines.append(f"{p}GH_GIT_NAME_{orguc}={r['app_name']}[bot]")
+            lines.append(
+                f"{p}GH_GIT_EMAIL_{orguc}={r['app_name']}[bot]@users.noreply.github.com"
+            )
+        else:
+            var = profile.upper()
+            lines.append(f"# {profile} (App: {r['app_name']})")
+            lines.append(f"PROFILE_{var}_GITHUB_APP_ID={r['app_id']}")
+            lines.append(f"PROFILE_{var}_GITHUB_APP_INSTALLATION_ID={r['installation_id']}")
+            # Derived, so the commit identity can never drift from the App the
+            # commits are actually minted from. The entrypoint uses these to set
+            # the profile's git author/committer.
+            lines.append(f"PROFILE_{var}_GH_APP_NAME={r['app_name']}")
+            lines.append(f"PROFILE_{var}_GH_GIT_NAME={bot_login(profile)}")
+            lines.append(
+                f"PROFILE_{var}_GH_GIT_EMAIL={bot_login(profile)}@users.noreply.github.com"
+            )
+    if org:
+        dev = results.get("developer") or {}
+        if dev.get("installation_id"):
+            lines.append(f"TEAM_ORG_DEV_BOT_{orguc}={dev['app_name']}[bot]")
     return "\n".join(lines)
 
 
 def write_summary(flow):
     outdir = flow.outdir
     done = {p: r for p, r in flow.results.items() if r.get("installation_id")}
+    suffix = f"-{org_slug(flow.org)}" if flow.org else ""
 
-    with open(os.path.join(outdir, "results.json"), "w") as fh:
+    with open(os.path.join(outdir, f"results{suffix}.json"), "w") as fh:
         json.dump(flow.results, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
-    with open(os.path.join(outdir, "env-lines.txt"), "w") as fh:
-        fh.write(env_lines(flow.order, flow.results) + "\n")
+    with open(os.path.join(outdir, f"env-lines{suffix}.txt"), "w") as fh:
+        fh.write(env_lines(flow.order, flow.results, org=flow.org) + "\n")
 
     env_dir = os.environ.get("HERMES_ENV_DIR", "/etc/hermes")
     group = os.environ.get("HERMES_HOST_GROUP", "ubuntu")
-    script = os.path.join(outdir, "host-install.sh")
+    script = os.path.join(outdir, f"host-install{suffix}.sh")
     with open(script, "w") as fh:
         fh.write("#!/bin/sh\n")
         fh.write(f"# Run ON THE DOCKER HOST (the Komodo Periphery machine) from\n")
@@ -542,11 +641,14 @@ def write_summary(flow):
         for profile in flow.order:
             if profile not in done:
                 continue
-            fh.write(
-                f"sudo install -o root -g {group} -m 640 "
-                f"{OUTPUT_DIR}/github-app-{profile}.pem "
-                f"{env_dir}/github-app-{profile}.pem\n"
-            )
+            if flow.org:
+                slug = org_slug(flow.org)
+                src = f"{OUTPUT_DIR}/{slug}/github-app-{slug}-{profile}.pem"
+                dst = f"{env_dir}/github-app-{slug}-{profile}.pem"
+            else:
+                src = f"{OUTPUT_DIR}/github-app-{profile}.pem"
+                dst = f"{env_dir}/github-app-{profile}.pem"
+            fh.write(f"sudo install -o root -g {group} -m 640 {src} {dst}\n")
     os.chmod(script, 0o755)
 
     print("\n" + "=" * 68)
@@ -615,11 +717,24 @@ def main(argv=None):
         "it). Omit for user-owned Apps.",
     )
     parser.add_argument(
+        "--prefix",
+        help="override the App-NAME prefix for this run (org default: "
+        "'<orgslug>-hermes'; personal: $HERMES_APP_PREFIX, default 'hermes'). "
+        "Per-profile overrides still win: PROFILE_<NAME>_GH_APP_NAME, or "
+        "PROFILE_<NAME>_GH_APP_NAME_<ORG> on an org run.",
+    )
+    parser.add_argument(
         "--repo-url",
         help="the App's homepage URL (default: https://github.com/<owner>/hermes, "
         "where <owner> is --org if given, else your gh login)",
     )
     args = parser.parse_args(argv)
+
+    if args.prefix:
+        if args.org:
+            os.environ[f"HERMES_APP_PREFIX_{org_var_suffix(args.org)}"] = args.prefix
+        else:
+            os.environ["HERMES_APP_PREFIX"] = args.prefix
 
     unknown = [p for p in args.profiles if p not in APPS]
     if unknown:
@@ -628,7 +743,12 @@ def main(argv=None):
 
     repo_url = args.repo_url or f"https://github.com/{owner_for(args.org)}/hermes"
 
+    # Org runs namespace EVERYTHING into their own subdirectory (and
+    # their PEMs carry the org slug), so a second run can never clobber
+    # the personal PEMs and vice versa.
     outdir = OUTPUT_DIR
+    if args.org:
+        outdir = os.path.join(OUTPUT_DIR, org_slug(args.org))
     os.makedirs(outdir, exist_ok=True)
 
     port = free_port(args.port)
@@ -643,7 +763,7 @@ def main(argv=None):
     print(f"  apps, in order: {', '.join(order)}")
     print(f"  app owner:     {args.org or owner_for(None)}")
     for profile in order:
-        print(f"    {profile:<10} -> {app_name(profile)}")
+        print(f"    {profile:<10} -> {app_name(profile, args.org)}")
     print(f"  homepage:      {repo_url}")
     print(f"  artifacts →    {outdir}/")
     print("\nTwo clicks per app: Create GitHub App, then Install (All repositories).")

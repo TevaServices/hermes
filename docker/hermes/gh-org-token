@@ -1,0 +1,119 @@
+#!/bin/sh
+# Print an installation access token for an ORG GitHub App, with caching.
+#
+# Every profile can hold a SECOND GitHub App credential set per org
+# (org-owned apps for work under that org; the primary App stays
+# personal). The runtime plumbing is descriptor files, not env vars:
+# Hermes strips credential env vars from tool subprocesses
+# (GHSA-rhgp-j443-p4rf), so helpers locate the org App through files in
+# the tool-home instead:
+#
+#   $HOME/org-creds/<slug>.env    descriptor (ORG_SLUG, GITHUB_APP_ID,
+#                                 GITHUB_APP_INSTALLATION_ID,
+#                                 GITHUB_APP_PRIVATE_KEY_PATH, …) — no
+#                                 secrets; written by the entrypoint
+#   $HOME/org-creds/<slug>.pem    the org App's private key
+#   $HOME/org-creds/<slug>.token  cached installation token (this file)
+#
+# Usage: gh-org-token <org-slug>            (e.g. gh-org-token acmecorp)
+#        gh-org-token <OrgName>             (case-insensitive)
+#
+# Prints the token on stdout; diagnostics on stderr, exit 1 on failure.
+#
+# The cache is a two-line file: line 1 = "<installation_id> <expiry-epoch>",
+# line 2 = the token. Reused while expiry is more than 5 minutes away AND
+# the stored installation id still matches the descriptor — so the cache
+# survives container restarts (the volume persists it) and is invalidated
+# the moment the descriptor's installation id changes (app re-installed).
+# A stale-but-unexpired token after a PEM rotation is cleared by deleting
+# the file; the window is <= 45 min by construction.
+#
+# Descriptor dir resolution (shared shape with the queue scripts):
+#   $ORG_CREDS_DIR -> $HOME/org-creds -> <script_dir>/../home/org-creds
+# The third form is for cron scripts, whose HOME is whatever the
+# scheduler's subprocess env carries; cron scripts live at
+# <profile_root>/scripts/ and the tool-home is always
+# <profile_root>/home.
+set -eu
+
+usage() { echo "usage: gh-org-token <org-slug>" >&2; exit 64; }
+[ $# -eq 1 ] || usage
+org_input="$1"
+
+creds_dir="${ORG_CREDS_DIR:-}"
+if [ -z "$creds_dir" ] && [ -d "${HOME:-}/org-creds" ]; then
+    creds_dir="$HOME/org-creds"
+fi
+if [ -z "$creds_dir" ]; then
+    # $0 is the invoked path — under cron it is the seeded script's own
+    # path, i.e. <profile_root>/scripts/gh-org-token.
+    script_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd)" || script_root=""
+    if [ -n "$script_root" ] && [ -d "$script_root/home/org-creds" ]; then
+        creds_dir="$script_root/home/org-creds"
+    fi
+fi
+[ -n "$creds_dir" ] || {
+    echo "gh-org-token: no org-creds directory (ORG_CREDS_DIR unset, no $HOME/org-creds)" >&2
+    exit 1
+}
+[ -d "$creds_dir" ] || {
+    echo "gh-org-token: org-creds directory not found: $creds_dir" >&2
+    exit 1
+}
+
+# Case-insensitive AND separator-insensitive descriptor match: GitHub
+# owners are case-insensitive while filesystems here are not; slug form
+# is lowercase [a-z0-9] only (same normalization as the router).
+org_lc="$(printf '%s' "$org_input" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+[ -n "$org_lc" ] || usage
+desc=""
+for f in "$creds_dir"/*.env; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f" .env | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+    if [ "$b" = "$org_lc" ]; then
+        desc="$f"
+        break
+    fi
+done
+[ -n "$desc" ] || {
+    echo "gh-org-token: no org descriptor for '$org_input' in $creds_dir" >&2
+    exit 1
+}
+
+slug="$(basename "$desc" .env)"
+token_file="$creds_dir/$slug.token"
+now="$(date +%s)"
+
+if [ -f "$token_file" ]; then
+    head1="$(sed -n '1p' "$token_file" 2>/dev/null || true)"
+    stored_inst="$(printf '%s' "$head1" | cut -d' ' -f1)"
+    stored_expiry="$(printf '%s' "$head1" | cut -d' ' -f2)"
+    desc_inst="$(sed -n 's/^GITHUB_APP_INSTALLATION_ID=//p' "$desc")"
+    if [ -n "$stored_expiry" ] && [ -n "$desc_inst" ] \
+       && [ "$stored_inst" = "$desc_inst" ] \
+       && [ "$((stored_expiry - now))" -gt 300 ] 2>/dev/null; then
+        sed -n '2p' "$token_file"
+        exit 0
+    fi
+fi
+
+# Cache miss/expired/invalidated -> mint fresh. The descriptor's var
+# names are exactly what github-app-token.sh reads.
+set -a
+. "$desc"
+set +a
+token="$(github-app-token.sh)" || {
+    echo "gh-org-token: mint failed for '$slug' (see github-app-token.sh error above)" >&2
+    exit 1
+}
+[ -n "$token" ] || {
+    echo "gh-org-token: empty installation token for '$slug'" >&2
+    exit 1
+}
+# 3300s margin against the 1h token TTL (5-min safety + clock skew).
+printf '%s %s\n%s\n' "$GITHUB_APP_INSTALLATION_ID" "$((now + 3300))" "$token" \
+    > "$token_file.tmp"
+chown "$(id -u):$(id -g)" "$token_file.tmp" 2>/dev/null || true
+chmod 600 "$token_file.tmp"
+mv -f "$token_file.tmp" "$token_file"
+printf '%s\n' "$token"

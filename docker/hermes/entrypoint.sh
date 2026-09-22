@@ -186,7 +186,96 @@ if [ -d "$HERMES_HOME/profiles" ]; then
   done
 fi
 
-# --- 3b. Komodo auth header: host mount -> runtime-owned home -------------
+# --- 3b. ORG GitHub App credentials: host PEMs -> org-creds descriptors ----
+# Every profile can hold a SECOND App per org (org-owned apps for work
+# under that org; the primary App stays personal). The container env
+# carries the org variants as suffixed var names:
+#
+#   GITHUB_APP_ID_<ORGUC> / PROFILE_<NAME>_GITHUB_APP_ID_<ORGUC>
+#   ..._INSTALLATION_ID_<ORGUC> / ..._GH_GIT_NAME_<ORGUC> / _GH_GIT_EMAIL_<ORGUC>
+#
+# and the PEMs live on the host as github-app-<orgslug>-<profile>.pem
+# (mounted with the rest of $HERMES_ENV_DIR at /run/hermes-pem — no
+# compose change needed). Here each tool-home gets:
+#
+#   org-creds/<slug>.env   NON-SECRET descriptor (app id, installation
+#                          id, pem path, org git identity) — the helpers
+#                          (gh-org-token, git-credential-hermes.sh, the
+#                          gh shim, git-repo.sh) read this, because Hermes
+#                          strips credential env vars from tool
+#                          subprocess env (GHSA-rhgp-j443-p4rf)
+#   org-creds/<slug>.pem   the org App's private key (600)
+#
+# A declared org with NO host PEM is skipped with a loud warning: the
+# descriptor is only written when the key exists, so the routing never
+# half-fires. An org with no INSTALLATION_ID is likewise skipped.
+sync_org_creds() {  # sync_org_creds <tool_home> <profile_name or "">
+  tool_home="$1"; profile_name="$2"
+  up="${profile_name^^}"
+  for orguc in $(env | grep -oE "^(PROFILE_${up}_)?GITHUB_APP_ID_[A-Z0-9_]+=" 2>/dev/null | \
+                    sed -n 's/^.*GITHUB_APP_ID_\([A-Z0-9_]*\)=$/\1/p' | sort -u); do
+    slug="$(printf '%s' "$orguc" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+    [ -n "$slug" ] || continue
+    if [ -n "$profile_name" ]; then
+      org_app_id="$(eval "echo \${PROFILE_${up}_GITHUB_APP_ID_${orguc}:-}")"
+      org_inst_id="$(eval "echo \${PROFILE_${up}_GITHUB_APP_INSTALLATION_ID_${orguc}:-}")"
+      org_git_name="$(eval "echo \${PROFILE_${up}_GH_GIT_NAME_${orguc}:-}")"
+      org_git_email="$(eval "echo \${PROFILE_${up}_GH_GIT_EMAIL_${orguc}:-}")"
+    else
+      org_app_id="$(eval "echo \${GITHUB_APP_ID_${orguc}:-}")"
+      org_inst_id="$(eval "echo \${GITHUB_APP_INSTALLATION_ID_${orguc}:-}")"
+      org_git_name="$(eval "echo \${GH_GIT_NAME_${orguc}:-}")"
+      org_git_email="$(eval "echo \${GH_GIT_EMAIL_${orguc}:-}")"
+    fi
+    if [ -z "$org_app_id" ] || [ -z "$org_inst_id" ]; then
+      echo "hermes-stack: warning: org $orguc has no app id/installation id for profile ${profile_name:-main}; org credentials skipped" >&2
+      continue
+    fi
+    if [ -n "$profile_name" ]; then
+      pem_mount="/run/hermes-pem/github-app-${slug}-${profile_name}.pem"
+    else
+      pem_mount="/run/hermes-pem/github-app-${slug}-main.pem"
+    fi
+    if [ ! -f "$pem_mount" ]; then
+      echo "hermes-stack: warning: no org PEM for $orguc at $pem_mount; org credentials skipped (install it on the host first)" >&2
+      continue
+    fi
+    mkdir -p "$tool_home/org-creds"
+    cp -f "$pem_mount" "$tool_home/org-creds/${slug}.pem"
+    chmod 600 "$tool_home/org-creds/${slug}.pem"
+    # Descriptor: NON-secret (ids only), but 600 anyway — it names the
+    # bot identity, and cheap paranoia costs nothing. Var names are the
+    # exact ones github-app-token.sh reads, so helpers just source it.
+    {
+      printf 'ORG_NAME=%s\n' "$orguc"
+      printf 'ORG_SLUG=%s\n' "$slug"
+      printf 'GITHUB_APP_ID=%s\n' "$org_app_id"
+      printf 'GITHUB_APP_INSTALLATION_ID=%s\n' "$org_inst_id"
+      printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$tool_home/org-creds/${slug}.pem"
+      [ -n "$org_git_name" ] && printf 'GH_GIT_NAME=%s\n' "$org_git_name"
+      [ -n "$org_git_email" ] && printf 'GH_GIT_EMAIL=%s\n' "$org_git_email"
+    } > "$tool_home/org-creds/${slug}.env"
+    chmod 600 "$tool_home/org-creds/${slug}.env"
+    echo "hermes-stack: org creds for $orguc -> $tool_home/org-creds/${slug}.env (app id=${org_app_id})"
+  done
+}
+
+# Org PEMs for the main home + every profile home (bootstrap-profiles.sh
+# above created any missing profile dirs).
+sync_org_creds "$HERMES_HOME/home" ""
+if [ -d "$HERMES_HOME/profiles" ]; then
+  for profile_dir in "$HERMES_HOME/profiles"/*/; do
+    [ -d "$profile_dir" ] || continue
+    sync_org_creds "${profile_dir%/}/home" "$(basename "${profile_dir%/}")"
+  done
+fi
+if [ -d "$HERMES_HOME" ]; then
+  chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME/home/org-creds" 2>/dev/null || true
+  [ ! -d "$HERMES_HOME/profiles" ] || \
+    chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME"/profiles/*/home/org-creds 2>/dev/null || true
+fi
+
+# --- 3c. Komodo auth header: host mount -> runtime-owned home -------------
 # Same trap as the PEMs, and it bit the same way: the header is mounted
 # read-only from the host, where it is 600 and owned by the host user, so
 # the s6 services (UID 10000) get "curl: option -H: error encountered when
@@ -258,19 +347,29 @@ configure_github_for_home() {  # <tool_home> [profile_name]
 
   mkdir -p "$tool_home"
   chown "$RUNTIME_UID:$RUNTIME_UID" "$tool_home" 2>/dev/null || true
-  # git identity + credential helper. Git routes through gh's OWN
-  # credential store (`gh auth git-credential`): the entrypoint's
-  # background refresher keeps gh logged in with a fresh installation
-  # token (minted at boot + every 30 min, so the stored token is always
-  # < 1h old). This needs NO env inheritance — Hermes strips credential
-  # vars from tool subprocesses by design (GHSA-rhgp-j443-p4rf), and
-  # gh reads its token from the tool-home's ~/.config/gh/hosts.yml.
+  # git identity + credential helper. The helper is the STACK ROUTER
+  # (git-credential-hermes.sh): it serves the ORG App's installation
+  # token when the remote's owner matches an org descriptor
+  # ($HOME/org-creds/<owner>.env, synced in §3b) and replays the request
+  # into `gh auth git-credential` otherwise — so the personal behavior
+  # is exactly what it was: the entrypoint's background refresher keeps
+  # gh logged in with a fresh installation token (minted at boot + every
+  # 30 min, so the stored token is always < 1h old). This needs NO env
+  # inheritance — Hermes strips credential vars from tool subprocesses by
+  # design (GHSA-rhgp-j443-p4rf), and gh reads its token from the
+  # tool-home's ~/.config/gh/hosts.yml.
+  #
+  # useHttpPath=true is what makes the router work: without it git sends
+  # no path component, and without the path the router cannot see the
+  # owner. (Verified against git 2.54: with the default false, the path
+  # is not sent at all and per-owner routing is impossible.)
   "$S6_SETUIDGID" hermes /bin/sh -c '
     export HOME="$1"
     git config --global user.name  "$2"
     git config --global user.email "$3"
+    git config --global credential.https://github.com.useHttpPath true
     git config --global credential.https://github.com.helper \
-      "!gh auth git-credential"
+      "!/usr/local/bin/git-credential-hermes.sh"
   ' sh "$tool_home" "$GIT_NAME" "$GIT_EMAIL"
 
   if [ -n "$APP_ID" ] && [ -n "$APP_INSTALLATION_ID" ] && [ -n "$APP_PEM" ]; then
@@ -303,6 +402,26 @@ configure_github_for_home() {  # <tool_home> [profile_name]
   elif [ -n "${GH_TOKEN:-}" ]; then
     echo "hermes-stack: no App credentials for $tool_home; PAT fallback (git identity only)" >&2
   fi
+
+  # ORG Apps: mint once per org at boot (warm cache, loud failure).
+  # Independent of the personal App branch above — a profile could hold
+  # org credentials without a personal App. Runtime refresh is LAZY +
+  # cached: gh-org-token reuses the cached token while it is >5min from
+  # expiry and re-mints on miss, so no second refresher loop per org per
+  # home is needed.
+  for orgenv in "$tool_home"/org-creds/*.env; do
+    [ -f "$orgenv" ] || continue
+    org_slug="$(basename "$orgenv" .env)"
+    if "$S6_SETUIDGID" hermes /bin/sh -c '
+         export HOME="$1"
+         </dev/null
+         ORG_CREDS_DIR="$HOME/org-creds" gh-org-token "$2" >/dev/null
+       ' sh "$tool_home" "$org_slug"; then
+      echo "hermes-stack: org token ok for $org_slug (home=$tool_home)"
+    else
+      echo "hermes-stack: FAILED to mint the org token for $org_slug (home=$tool_home) — org-owned repos will be unreachable until this is fixed" >&2
+    fi
+  done
 }
 
 configure_github_for_home "$HERMES_HOME/home"
