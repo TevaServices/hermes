@@ -29,6 +29,11 @@
 #      provisions missing profiles; entrypoint.sh adds the GitHub App
 #      wiring upstream doesn't know about, then execs the upstream
 #      dispatcher so s6 takes over.
+#   4. The hermes-memory-ui dashboard plugin (xraysight/hermes-memory-ui),
+#      cloned at build time from a pinned commit and vendored into the
+#      overlay's plugins/ — shipped DISABLED (enablement is the
+#      plugins.enabled config key, not this copy); see AGENTS.md
+#      §"Dashboard + the memory-UI plugin".
 #
 ARG HERMES_REF=v2026.9.14
 FROM nousresearch/hermes-agent:${HERMES_REF}
@@ -152,6 +157,37 @@ RUN case "${TARGETARCH}" in \
  && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /usr/local/bin/gh \
  && rm -rf /tmp/gh*
 
+# Vendored dashboard plugin: xraysight/hermes-memory-ui. Cloned at BUILD
+# time from a pinned full commit SHA (tags are mutable; a full SHA is
+# not) and installed into /overlay/plugins/ later, after the render —
+# bootstrap-profiles.sh then seeds it into every profile home at boot.
+# This is CONTENT only: the plugin ships DISABLED, enablement is the
+# `plugins.enabled` config key (render.py fails the build on a name that
+# is not vendored here). See AGENTS.md §"Dashboard + the memory-UI
+# plugin" for the enable/upgrade procedures.
+#
+# Integrity: git's object model makes the checkout exactly the pinned
+# commit's content — the rev-parse assertion IS the checksum (a tarball
+# sha256 would add nothing but a per-bump chore). The `version:` grep
+# cross-checks that the pinned commit is the release we think it is.
+#
+# If a build host ever rejects `fetch <sha>` (needs allowAnySHA1InWant,
+# which github.com grants), fall back to
+# `git clone --depth 1 --branch <tag>` + the same rev-parse assertion.
+# Desktop half deliberately stripped: no desktop app in this stack
+# (re-add desktop/ to the vendored set if that changes).
+ARG HERMES_MEMORY_UI_REF=97cc937e49517dbd9e55cf10717da55d9024c29c  # tag v0.6.2
+RUN set -e \
+ && git clone --quiet --no-checkout \
+      https://github.com/xraysight/hermes-memory-ui /tmp/hermes-memory-ui \
+ && git -C /tmp/hermes-memory-ui fetch --quiet --depth 1 origin "$HERMES_MEMORY_UI_REF" \
+ && git -C /tmp/hermes-memory-ui checkout --quiet --detach FETCH_HEAD \
+ && test "$(git -C /tmp/hermes-memory-ui rev-parse HEAD)" = "$HERMES_MEMORY_UI_REF" \
+ && grep -q '^version: 0\.6\.2$' /tmp/hermes-memory-ui/plugin.yaml \
+ && rm -rf /tmp/hermes-memory-ui/.git /tmp/hermes-memory-ui/.github \
+            /tmp/hermes-memory-ui/tests /tmp/hermes-memory-ui/desktop \
+            /tmp/hermes-memory-ui/docs
+
 # Stack helpers (each a separate layer so script-only pushes stay cheap).
 COPY docker/hermes/github-app-token.sh /usr/local/bin/github-app-token.sh
 COPY docker/hermes/bootstrap-profiles.sh /usr/local/bin/hermes-bootstrap-profiles.sh
@@ -247,6 +283,18 @@ RUN python3 /tmp/render.py --build-root /overlay \
       mv "$d" "/overlay/profiles/$b"; \
     done \
  && rm -rf /tmp/render.py /tmp/config /tmp/docker
+
+# Install the vendored dashboard plugin into the overlay (stack-wide,
+# at the overlay ROOT — not under default/ or profiles/<name>/; the
+# arrange loop above would otherwise sweep a pre-created plugins/ dir
+# into /overlay/profiles/plugins, which is why the clone stages in /tmp
+# and this layer sits after the render). This layer re-runs on
+# config-only pushes by design — it is a local cp, no network — and
+# stays BEFORE the entrypoint COPY so the entrypoint layer remains the
+# config-change boundary.
+RUN mkdir -p /overlay/plugins \
+ && cp -a /tmp/hermes-memory-ui /overlay/plugins/hermes-memory-ui \
+ && rm -rf /tmp/hermes-memory-ui
 
 COPY docker/hermes/entrypoint.sh /usr/local/bin/hermes-stack-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/hermes-stack-entrypoint.sh

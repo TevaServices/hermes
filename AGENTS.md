@@ -262,15 +262,24 @@ checking the host's actual resources.
   Note what this does NOT cover: a model that answers but answers badly.
   Failover is for transport/rate-limit failures, so escalating for quality is
   still manual (`/model smartest`, or `claude --model smartest`).
-- **The agent's BUILT-IN Honcho integration must stay off**: it
-  auto-enables from the mere presence of `HONCHO_API_KEY` in the
-  environment, then fails against the *hosted* Honcho API ("Invalid API
-  key") and leaves dead `honcho_*` tools on the surface. `render.py` ships
-  an `honcho.json` (`{"enabled": false}`) in every profile overlay to
-  suppress it — Honcho reaches the agent through MCP only. The banner's
-  "Skipping MCP toolset alias 'honcho'" is cosmetic: the built-in toolset
-  owns the alias, but the MCP tools register as `mcp_honcho_*` in the
-  hermes-* umbrella toolsets regardless.
+- **The agent's BUILT-IN Honcho *toolset* is gone from this agent
+  version** (the `honcho` toolset was removed — Honcho IS the memory
+  provider plugin). What exists now: `render.py` ships `honcho.json`
+  (`{"enabled": true, "baseUrl": "http://honcho-api:8000"}`) in every
+  profile overlay, which activates the **Honcho memory-provider plugin**
+  (`plugins/memory/honcho`, driven by `memory.provider: honcho` in the
+  rendered config) against the stack's self-hosted instance — Honcho
+  reaches the agent as the memory provider AND through MCP
+  (config/integrations.toml). The `apiKey` falls back to env
+  `HONCHO_API_KEY` (present in every container's env; only honcho-mcp
+  enforces it). The same `honcho.json` is what the memory-UI dashboard
+  plugin reads (see §"Dashboard + the memory-UI plugin"). If a
+  future HERMES_REF ever reintroduces a built-in honcho *toolset*
+  integration that auto-enables from `HONCHO_API_KEY` and fails against
+  the hosted API ("Invalid API key") with dead `honcho_*` tools on the
+  surface, that is the failure mode to re-suppress — by flipping the
+  rendered `honcho.json`'s `enabled` to false, not by removing the
+  credential.
 - **Tool search must stay on** (`[config_extra.tools.tool_search]`
   `enabled = "on"` in profile.toml): honcho+firecrawl MCP ship 66 tool
   schemas ≈ 18k tokens — on a small context window that pins every turn
@@ -463,6 +472,85 @@ deliberately.
    aux call goes through litellm → Ollama Cloud, and when that call times
    out twice the gate escalates to a human button even though the model
    would have approved — the model's latency, not its verdict, was deciding.
+
+### Dashboard + the memory-UI plugin (both shipped DISABLED)
+
+The official image already carries a web dashboard as an s6 service
+(`docker/s6-rc.d/dashboard/{run,finish}` — same always-declared, env-gated
+shape as this stack's chromium-cdp slot) and a plugin system. Both are
+deployed here but OFF; flipping either on is a config/env change with no
+rebuild. The dashboard is PRIVILEGED — it edits `.env`, serves config and
+session APIs, and can restart the gateway — which is why the plumbing is
+shipped but the defaults are inert.
+
+- **Enablement contract.** `HERMES_DASHBOARD=1` in the container
+  environment is the only gate (no config.yaml enable key); bind is
+  `HERMES_DASHBOARD_HOST=0.0.0.0` in-container (Docker port publishing
+  needs it; also the upstream default) and the port publishes as
+  `127.0.0.1:${HERMES_DASHBOARD_HOST_PORT:-9119}:9119` — host loopback
+  only, like firecrawl's API. The real boundary is upstream's fail-closed
+  auth gate (a non-loopback bind REQUIRES an auth provider —
+  `HERMES_DASHBOARD_INSECURE=1` is accepted but ignored, June 2026
+  hardening) plus the loopback publish. **The flag lives ONLY in the
+  stack environment** (`komodo/resources.toml` hermes-agents
+  `environment`, mirroring mise.toml [env] locally): compose
+  `environment:` overrides env_file, so setting `HERMES_DASHBOARD` in
+  `hermes-main.env` is a dead value — the #1 operator mistake here. The
+  host-side port var is deliberately `HERMES_DASHBOARD_HOST_PORT`, NOT
+  `HERMES_DASHBOARD_PORT` — the upstream name is the CONTAINER-side
+  listen port and would break the mapping.
+- **Auth.** Basic auth (`HERMES_DASHBOARD_BASIC_AUTH_USERNAME/_PASSWORD/
+  _SECRET` in `/etc/hermes/hermes-main.env`; templates and generation
+  commands in `secrets/hermes-main.env.example`) with an optional OIDC
+  block. **Flipping the flag on without the three basic-auth vars fails
+  closed**: `start_server` errors at startup and the dashboard s6 slot
+  restart-loops — the rest of the container is unaffected, and the
+  symptom is repeated `[dashboard]` startup errors in `docker logs
+  hermes-main`. Set the credentials BEFORE flipping the flag.
+- **The no-rebuild flip procedure**: (1) fill the three auth vars in
+  `/etc/hermes/hermes-main.env`; (2) set `HERMES_DASHBOARD = "1"` in
+  komodo/resources.toml (locally: mise.toml [env]); (3) Resource Sync +
+  DeployStack — the image is unchanged, this is recreation only; (4)
+  verify (checklist below). Reverse = set back to `"0"`.
+- **The memory-UI plugin is vendored, seeded, and GitOps-owned.**
+  `xraysight/hermes-memory-ui` (read-only Memory inspection UI: built-in
+  MEMORY.md/USER.md + provider sections; Honcho read through each
+  profile's own rendered `honcho.json` — no extra wiring) is cloned at
+  BUILD time from a pinned full SHA (`ARG HERMES_MEMORY_UI_REF` in
+  docker/hermes/Dockerfile; v0.6.2 =
+  `97cc937e49517dbd9e55cf10717da55d9024c29c`), staged in `/tmp`, and
+  installed into `/overlay/plugins/` AFTER the render (never pre-create
+  `/overlay/plugins` earlier — the render's arrange loop would sweep it
+  into `/overlay/profiles/plugins`). `bootstrap-profiles.sh`
+  (`seed_plugins`) exact-replaces it into EVERY profile home's
+  `plugins/` on every boot: a runtime `hermes plugins update` (or
+  hand-edit) is overwritten next boot, and a runtime `hermes plugins
+  enable` is reverted when the overlay overwrites `config.yaml` — both
+  knobs are git-side. The plugin declares no capabilities and its root
+  `__init__.py` is a deliberate no-op, so headless vendoring needs no
+  consent prompt.
+- **Enabling the plugin (config change, no code rebuild)**: add to
+  `config/profiles/default/profile.toml` —
+  `[config_extra.plugins]` / `enabled = ["hermes-memory-ui"]` → PR →
+  cache-hit rebuild → deploy. The container recreation restarts the
+  dashboard AND the gateway, which satisfies the upstream rule that
+  plugin_api routes mount only at process startup (the
+  `/api/dashboard/plugins/rescan` endpoint exists for hand-poked setups
+  this GitOps layout doesn't need). Discovery is an opt-in allow-list —
+  an absent `plugins` key enables nothing — and render.py FAILS the
+  build on an enabled-but-not-vendored name
+  (`STACK_VENDORED_PLUGINS`), the same fail-loud shape as the tier and
+  cron-script checks. Enable it in the DEFAULT profile (the dashboard
+  process runs with `HERMES_HOME=/opt/data`); per-profile data is
+  selected with `?profile=<name>`, and the plugin reads each profile's
+  own `honcho.json`.
+- **Plugin upgrade = bump the pin in one place**: resolve the new tag
+  to its full SHA (`git ls-remote https://github.com/xraysight/hermes-memory-ui <tag>`
+  or the GitHub API), update `ARG HERMES_MEMORY_UI_REF` and the
+  `version:` grep in the same layer, PR, merge (the clone layer onward
+  re-runs; config-only pushes keep it cached). The Dockerfile's
+  rev-parse assertion is the integrity check; if a build host ever
+  rejects fetch-by-SHA, the comment documents the tag-clone fallback.
 
 ### Steering the profiles' working style
 
@@ -934,6 +1022,15 @@ for m in cheap smart smarter smartest; do printf '%-9s ' "$m"; \
 # internet but no key) — the ONLY check that can catch litellm.yaml and
 # models.toml drifting apart.
 mise run check-model-windows                        # all ok, exit 0
+# Dashboard plumbing (true in BOTH states): the vendored plugin is seeded
+# into the default home, and the loopback port behaves per the gate.
+docker exec hermes-main test -f /opt/data/plugins/hermes-memory-ui/dashboard/manifest.json \
+  && echo "memory-ui vendored"
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${HERMES_DASHBOARD_HOST_PORT:-9119}/
+#   disabled (default): 000 — connection refused, nothing listens. Expected.
+#   enabled: 30x redirect to the login page or 401. A 200 WITHOUT a
+#   session means the auth gate is NOT engaged — investigate immediately.
+docker logs hermes-main 2>&1 | grep -i '\[dashboard\]' | tail -5   # no auth-provider errors
 ```
 
 Mid-session, `/model cheap`, `/model smart`, `/model smarter` and

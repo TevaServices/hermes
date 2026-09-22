@@ -178,6 +178,14 @@ TIRITH_PREAPPROVED_RULES = [
     "tirith:archive_extract",
 ]
 
+# Dashboard plugins vendored into the image (docker/hermes/Dockerfile,
+# ARG HERMES_MEMORY_UI_REF). Enablement is a config key
+# (`plugins.enabled` — an opt-in allow-list; a missing key enables
+# nothing). A name listed under [config_extra.plugins] that is not
+# vendored would 404 its plugin-api routes forever, so fail the build
+# on it — same shape as the unknown-tier and cron-script checks.
+STACK_VENDORED_PLUGINS = {"hermes-memory-ui"}
+
 
 def set_build_root(path: str | None) -> None:
     """Override the output root (default <repo>/build).
@@ -669,6 +677,21 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
+
+    # plugins.enabled must name plugins the image actually vendors
+    # (STACK_VENDORED_PLUGINS). Discovery is opt-in — an absent
+    # `plugins` key enables nothing — so this only fires on an explicit
+    # enablement naming something the dashboard could never mount.
+    enabled_plugins = (config.get("plugins") or {}).get("enabled") or []
+    unknown = [p for p in enabled_plugins if p not in STACK_VENDORED_PLUGINS]
+    if unknown:
+        raise ConfigError(
+            f"profile '{name}': plugins.enabled names {', '.join(unknown)} — "
+            f"not vendored in the image. Known: "
+            f"{', '.join(sorted(STACK_VENDORED_PLUGINS))}. Vendor it in "
+            f"docker/hermes/Dockerfile (ARG HERMES_MEMORY_UI_REF) or fix "
+            f"the name."
+        )
 
     # smart_model_routing.cheap_model may be a TIER NAME (a plain string —
     # the shape the default profile writes) rather than the {provider, model}
