@@ -176,6 +176,39 @@ case "$cmd" in
       fi
     fi
     rm -f /tmp/git-repo-wt.err
+
+    # Org commit identity: a worktree of an ORG-owned repo commits as the
+    # ORG bot (e.g. acmecorp-hermes-dev[bot]), not the personal one.
+    # The credential side routes itself (git-credential-hermes.sh picks
+    # the org token from the remote owner); the AUTHOR side needs git
+    # config, which cannot vary per org at the global level — so each
+    # worktree gets its own local identity when the repo's owner matches
+    # an org descriptor.
+    #
+    # extensions.worktreeConfig is REQUIRED for the scoping: without it,
+    # `git config` inside a worktree writes the COMMON bare config and
+    # the org bot identity would leak onto every session's worktree of
+    # that repo. With it, values land in this worktree's own
+    # worktrees/<id>/config.worktree. Idempotent.
+    git -C "$bare" config extensions.worktreeConfig true 2>/dev/null || true
+    owner="$(printf '%s' "$(repo_id "$url")" | cut -d/ -f2)"
+    oslug="$(printf '%s' "$owner" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+    creds_dir="${ORG_CREDS_DIR:-}"
+    [ -n "$creds_dir" ] || creds_dir="${HOME:-}/org-creds"
+    if [ -n "$oslug" ] && [ -d "$creds_dir" ]; then
+      for d in "$creds_dir"/*.env; do
+        [ -f "$d" ] || continue
+        if [ "$(basename "$d" .env | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')" = "$oslug" ]; then
+          # shellcheck disable=SC1090
+          if . "$d" && [ -n "${GH_GIT_NAME:-}" ] && [ -n "${GH_GIT_EMAIL:-}" ]; then
+            git -C "$dest" config --worktree user.name "$GH_GIT_NAME"
+            git -C "$dest" config --worktree user.email "$GH_GIT_EMAIL"
+          fi
+          break
+        fi
+      done
+    fi
+
     printf '%s\n' "$dest"
     ;;
   list)

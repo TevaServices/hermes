@@ -40,6 +40,17 @@
 # only signal that the pipeline has stopped) rather than reporting "no
 # work".
 #
+# MULTI-OWNER: TEAM_OWNER is the PERSONAL owner (searched with the
+# profile's own gh auth state); TEAM_OWNER_ORGS (space-separated org
+# names) adds org owners, each searched with that org's own App
+# installation token (gh-org-token via the org-creds descriptors —
+# see git-credential-hermes.sh). The results MERGE; every health check
+# runs PER OWNER and the incidents name the owner they are about:
+#
+#   exit 6  ORG CREDS MISSING — a TEAM_OWNER_ORGS entry has no resolvable
+#           org descriptor (PEM not installed / env vars missing). An org
+#           queue silently missing is the dual-owner version of exit 3.
+#
 # Usage:
 #   team-queue.sh [--kind issues|prs] [--label LABEL]... [--owner OWNER]
 #                 [--author LOGIN] [--verbose] [--quiet]
@@ -78,18 +89,22 @@
 #              and never dedupe incidents. Use this when you are running
 #              it by hand and want to see the state.
 #
-# Env: TEAM_OWNER (REQUIRED — the GitHub account whose repos carry the
-#      topic tag; the script refuses to run without it rather than
-#      searching all of GitHub), TEAM_QUEUE_LABEL, TEAM_TOPIC
-#      (default hermes-team), HERMES_HOME (for the dedupe state file).
-#      Run per installation/account with that account's token — see the
-#      team-github-token skill.
+# Env: TEAM_OWNER (REQUIRED — the personal GitHub account whose repos
+#      carry the topic tag; the script refuses to run without it rather
+#      than searching all of GitHub), TEAM_OWNER_ORGS (optional, org
+#      owners for the org Apps), TEAM_ORG_DEV_BOT_<ORG> (the org
+#      developer bot login — author filter for org PR searches;
+#      provisioning's env-lines emits it), TEAM_QUEUE_LABEL, TEAM_TOPIC
+#      (default hermes-team), HERMES_HOME (for the dedupe state file),
+#      ORG_CREDS_DIR (org descriptor dir override; default resolution:
+#      $HOME/org-creds, then <script_root>/home/org-creds for cron).
 
 set -u
 
 KIND="issues"
 LABELS=""
 OWNER="${TEAM_OWNER:-}"
+ORGS="${TEAM_OWNER_ORGS:-}"
 TOPIC="${TEAM_TOPIC:-hermes-team}"
 AUTHOR=""
 VERBOSE=0
@@ -143,8 +158,25 @@ if [ -z "$OWNER" ]; then
     exit 64
 fi
 
+# --- org descriptor resolution (same chain as gh-org-token) ---------------
+CREDS_DIR="${ORG_CREDS_DIR:-}"
+if [ -z "$CREDS_DIR" ] && [ -d "${HOME:-}/org-creds" ]; then
+    CREDS_DIR="$HOME/org-creds"
+fi
+if [ -z "$CREDS_DIR" ]; then
+    script_root="$(CDPATH= cd -- "$(dirname "$0")/.." 2>/dev/null && pwd)" || script_root=""
+    if [ -n "$script_root" ] && [ -d "$script_root/home/org-creds" ]; then
+        CREDS_DIR="$script_root/home/org-creds"
+    fi
+fi
+
+slug_of() {  # owner/org name -> slug (lowercase [a-z0-9], like gh-org-token)
+    printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9'
+}
+
 ERR=$(mktemp)
-trap 'rm -f "$ERR"' EXIT INT TERM
+OUTDIR=$(mktemp -d)
+trap 'rm -rf "$ERR" "$OUTDIR"' EXIT INT TERM
 
 # --- housekeeping: close finished work-item threads ----------------------
 # A work item's Discord thread stays open until the PR is merged, and the
@@ -196,6 +228,41 @@ incident() {
     return 0
 }
 
+# --- owner loop helpers ---------------------------------------------------
+# The queue runs ONCE PER OWNER with THAT owner's token: the personal
+# owner uses gh's own auth state (the primary App's installation token,
+# refreshed by the entrypoint); each org owner mints/uses its org App
+# installation token (gh-org-token against the org descriptor). The
+# wrapper below applies the CURRENT owner's token; CUR_TOKEN/EMPTY means
+# personal. Every gh call inside the pipeline goes through ogh().
+CUR_TOKEN=""
+
+ogh() {  # gh with the current owner's token applied
+    if [ -n "$CUR_TOKEN" ]; then
+        GH_TOKEN="$CUR_TOKEN" gh "$@"
+    else
+        gh "$@"
+    fi
+}
+
+# Resolve an owner entry to (owner, slug, token). $1 = owner name,
+# $2 = slug ("" for the personal owner). Prints nothing; sets ORG_TOKEN.
+# Returns 1 when an org owner has no usable credentials.
+resolve_owner() {
+    ORG_TOKEN=""
+    [ -n "$2" ] || return 0
+    if [ ! -d "$CREDS_DIR" ]; then
+        fail "team-queue.sh: org owner '$1' has no org-creds directory ($CREDS_DIR missing)."
+        return 1
+    fi
+    ORG_TOKEN="$(ORG_CREDS_DIR="$CREDS_DIR" gh-org-token "$2" 2>&1)" || {
+        fail "team-queue.sh: org token for '$1' failed: $ORG_TOKEN"
+        return 1
+    }
+    [ -n "$ORG_TOKEN" ] || { fail "team-queue.sh: empty org token for '$1'"; return 1; }
+    return 0
+}
+
 # --- handoff audit --------------------------------------------------------
 # An in-progress item whose PR is open but NOT handed off is the one state
 # that LOOKS like progress and is actually a stall. The hand-off is
@@ -208,17 +275,18 @@ incident() {
 # missing label is indistinguishable from "nothing to review".
 #
 # So the queue says it out loud, in the same output the agent already
-# reads. Deterministic, no agent turn required.
+# reads. Deterministic, no agent turn required. Runs per owner (ogh), so
+# the per-item calls carry that owner's token.
 audit_handoffs() {
     printf '%s\n' "$1" | while IFS= read -r line; do
         printf '%s\n' "$line"
         key=$(printf '%s' "$line" | awk '{print $1}')
         case "$key" in */*'#'*) ;; *) continue ;; esac
         repo=${key%#*}; num=${key##*#}
-        labels=$(gh issue view "$num" --repo "$repo" --json labels \
+        labels=$(ogh issue view "$num" --repo "$repo" --json labels \
                     --jq '[.labels[].name]|join(",")' 2>/dev/null) || continue
         case ",$labels," in *",status/in-progress,"*) ;; *) continue ;; esac
-        pr=$(gh pr list --repo "$repo" --state open --limit 50 \
+        pr=$(ogh pr list --repo "$repo" --state open --limit 50 \
                --json number,isDraft,labels,body \
                --jq "[.[] | select((.body // \"\") | test(\"(?i)closes #${num}\\\\b\"))] | .[0]
                      | if . == null then \"\" else \"\\(.number)|\\(.isDraft)|\\([.labels[].name]|join(\",\"))\" end" \
@@ -244,97 +312,235 @@ clear_state() {
     rm -f "$(state_file)" 2>/dev/null || true
 }
 
-# --- 1. the queue itself -------------------------------------------------
+# --- 1. the queue, per owner ---------------------------------------------
 # Only the PR queue is author-scoped (the reviewer reviews the dev bot's
 # work); the issue queue is label-only. AUTHOR_OPT is deliberately
 # unquoted at the call site — it is a pre-split "flag value" pair.
-AUTHOR_OPT=""
+# The personal owner keeps the classic default author; an org owner uses
+# TEAM_ORG_DEV_BOT_<ORGUC> (set by provisioning), or no author filter
+# when that is unset (the org PRs then come from every author — a wider
+# net, never a narrower one).
 if [ "$KIND" = "prs" ]; then
     AUTHOR="${AUTHOR:-hermes-dev[bot]}"
 fi
-[ -n "$AUTHOR" ] && AUTHOR_OPT="--author $AUTHOR"
 
-QUEUE=""
-for L in $LABELS; do
-    # shellcheck disable=SC2086
-    PART=$(gh search "$KIND" --owner "$OWNER" --label "$L" --state open \
-              --limit 30 --json repository,number,title,url $AUTHOR_OPT \
-              --jq '.[] | "\(.repository.nameWithOwner)#\(.number)  \(.title)  \(.url)"' \
-              2>"$ERR")
+BROKEN=""      # "<owner>|<label>|<rc>|<stderr-head>" lines
+BLIND_OWNERS=""
+SEEN_OWNERS="" # owners whose unfiltered search saw anything
+ORG_FAIL=""
+
+SEEN_SLUGS=""
+for O in $OWNER $ORGS; do
+    if [ "$O" = "$OWNER" ]; then SLUG=""; else SLUG=$(slug_of "$O"); fi
+    OSLUG="$SLUG"
+    [ -n "$OSLUG" ] || OSLUG="personal"
+    # Case variants / duplicates of an owner would mint, search and list
+    # twice (same descriptor, same items) — process each slug once.
+    case " $SEEN_SLUGS " in *" $OSLUG "*) continue ;; esac
+    SEEN_SLUGS="$SEEN_SLUGS $OSLUG"
+    [ -n "$OSLUG" ] || OSLUG="personal"
+
+    if ! resolve_owner "$O" "$SLUG"; then
+        ORG_FAIL="$ORG_FAIL $O"
+        continue
+    fi
+    CUR_TOKEN="$ORG_TOKEN"
+
+    # Author per owner: org owners use their own bot if declared.
+    OA="$AUTHOR"
+    if [ -n "$SLUG" ] && [ "$KIND" = "prs" ]; then
+        # The suffix convention is uppercase + non-[A-Z0-9] -> '_'
+        # ("Acme Corp" -> ACME_CORP) — the same derivation provisioning's
+        # env-lines uses, so the two can never drift.
+        orguc=$(printf '%s' "$O" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9_' '_')
+        obot="$(eval "echo \${TEAM_ORG_DEV_BOT_${orguc}:-}")"
+        [ -n "$obot" ] && OA="$obot" || OA=""
+    fi
+    AUTHOR_OPT=""
+    [ -n "$OA" ] && AUTHOR_OPT="--author $OA"
+
+    OQ=""
+    for L in $LABELS; do
+        # shellcheck disable=SC2086
+        PART=$(ogh search "$KIND" --owner "$O" --label "$L" --state open \
+                  --limit 30 --json repository,number,title,url $AUTHOR_OPT \
+                  --jq '.[] | "\(.repository.nameWithOwner)#\(.number)  \(.title)  \(.url)"' \
+                  2>"$ERR")
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+            BROKEN="$BROKEN
+$O|$L|$rc|$(head -3 "$ERR" | tr '\n' ' ')"
+            break
+        fi
+        OQ="$OQ
+$PART"
+    done
+    if [ -n "$BROKEN" ]; then continue; fi
+    # Dedupe by item id, preserving the LABEL ORDER given (first label
+    # wins), so resume entries stay ahead of newly-routable ones.
+    OQ=$(printf '%s\n' "$OQ" | awk 'NF && !seen[$1]++')
+    printf '%s\n' "$OQ" > "$OUTDIR/queue.$OSLUG"
+
+    # --- 2. empty: is it us or is it the world? --------------------------
+    # The queue is filtered by label, so an empty result is only meaningful
+    # if an UNFILTERED search can see anything at all. If it cannot, the
+    # problem is credentials/scope, not a quiet backlog.
+    #
+    # Deliberately NOT --state open: zero OPEN items is a perfectly normal
+    # quiet state (a team between PRs has no open PRs), so requiring one
+    # would cry wolf constantly. Searching every state asks the question we
+    # actually care about — "can this token see this owner's work at all?" —
+    # and a brand-new empty account is covered by the onboarding check below.
+    BLIND=$(ogh search "$KIND" --owner "$O" --limit 1 \
+                --json number --jq '.[] | .number' 2>/dev/null)
+    if [ "$(count_lines "$BLIND")" -eq 0 ]; then
+        BLIND_OWNERS="$BLIND_OWNERS $O"
+        continue
+    fi
+
+    # --- 3. is anything even onboarded? -----------------------------------
+    REPOS=$(ogh search repos --owner "$O" --topic "$TOPIC" --limit 100 \
+                --json fullName --jq '.[] | .fullName' 2>"$ERR")
     rc=$?
     if [ "$rc" -ne 0 ]; then
-        if incident "QUEUE BROKEN  the self-pull query failed (gh exit $rc).
-  command: gh search $KIND --owner $OWNER --label $L --state open
-  stderr: $(head -3 "$ERR" | tr '\n' ' ')
-  This is an incident, not an empty queue — the pipeline is stalled."; then
-            exit 2
-        fi
-        exit 0
+        # Do NOT swallow this. A failed topic query and an empty one look
+        # identical, and the empty branch below reports "NOT ONBOARDED" —
+        # which is how a wrong --json field name ("nameWithOwner" instead
+        # of "fullName") spent its life being reported as a repo that was
+        # never onboarded, while the repo WAS onboarded and the topic WAS
+        # set.
+        BROKEN="$BROKEN
+$O|topic|$rc|$(head -2 "$ERR" | tr '\n' ' ')"
+        continue
     fi
-    QUEUE="$QUEUE
-$PART"
+    printf '%s\n' "$REPOS" > "$OUTDIR/repos.$OSLUG"
 done
-# Dedupe by item id, preserving the LABEL ORDER given (first label wins),
-# so resume entries stay ahead of newly-routable ones.
-QUEUE=$(printf '%s\n' "$QUEUE" | awk 'NF && !seen[$1]++')
+
+if [ -n "$ORG_FAIL" ]; then
+    if incident "ORG CREDS MISSING  org owner(s) with no usable App credentials:$ORG_FAIL
+  The org queue is silently missing work: either the PEM is not installed
+  on the host (/etc/hermes/github-app-<org>-<profile>.pem) or the org env
+  vars are not in hermes-main.env. See the hermes-stack-ops skill."; then
+        exit 6
+    fi
+    exit 0
+fi
+
+QUEUE=$(cat "$OUTDIR"/queue.* 2>/dev/null | awk 'NF && !seen[$1]++')
+
+N=$(count_lines "$QUEUE")
+QUEUE=$(cat "$OUTDIR"/queue.* 2>/dev/null | awk 'NF && !seen[$1]++')
 
 N=$(count_lines "$QUEUE")
 if [ "$N" -gt 0 ]; then
     clear_state
-    log "QUEUE OK  $N item(s) labelled $LABELS for $OWNER:"
+    OWNERS_DISPLAY="$OWNER"
+    for O in $ORGS; do OWNERS_DISPLAY="$OWNERS_DISPLAY $O"; done
+    log "QUEUE OK  $N item(s) labelled $LABELS for $OWNERS_DISPLAY:"
     [ "$QUIET" -eq 1 ] || log ""
     if [ "$KIND" = "issues" ]; then
-        audit_handoffs "$QUEUE"
+        # audit per owner, with that owner's token
+        for O in $OWNER $ORGS; do
+            if [ "$O" = "$OWNER" ]; then SLUG="personal"; else SLUG=$(slug_of "$O"); fi
+            [ -f "$OUTDIR/queue.$SLUG" ] || continue
+            if [ "$SLUG" = "personal" ]; then CUR_TOKEN=""; else
+                resolve_owner "$O" "$SLUG" >/dev/null 2>&1 && CUR_TOKEN="$ORG_TOKEN" || CUR_TOKEN=""
+            fi
+            audit_handoffs "$(cat "$OUTDIR/queue.$SLUG")" || true
+        done
     else
         printf '%s\n' "$QUEUE"
     fi
-    exit 0
-fi
-
-# --- 2. empty: is it us or is it the world? ------------------------------
-# The queue is filtered by label, so an empty result is only meaningful
-# if an UNFILTERED search can see anything at all. If it cannot, the
-# problem is credentials/scope, not a quiet backlog.
-#
-# Deliberately NOT --state open: zero OPEN items is a perfectly normal
-# quiet state (a team between PRs has no open PRs), so requiring one
-# would cry wolf constantly. Searching every state asks the question we
-# actually care about — "can this token see this owner's work at all?" —
-# and a brand-new empty account is covered by the onboarding check below.
-BLIND=$(gh search "$KIND" --owner "$OWNER" --limit 1 \
-            --json number --jq '.[] | .number' 2>/dev/null)
-if [ "$(count_lines "$BLIND")" -eq 0 ]; then
-    if incident "SEARCH BLIND  the queue is empty, but so is an unfiltered search.
-  gh search sees NO open $KIND at all for owner '$OWNER'.
+    # A broken or blind owner NEXT TO a working one must still surface
+    # (its items would otherwise silently vanish from the merge) — but
+    # never fail the run for it: work IS flowing.
+    if [ -n "$BROKEN" ]; then
+        while IFS='|' read -r o l rc esrc; do
+            [ -n "$o" ] || continue
+            incident "QUEUE BROKEN (partially)  owner '$o', label '$l': gh exit $rc — $esrc
+  The other owner(s) listed work above; this one's query failed and its
+  items are missing from the merge." || true
+        done <<EOF
+$BROKEN
+EOF
+    fi
+    if [ -n "$BLIND_OWNERS" ]; then
+        incident "SEARCH BLIND  while other owners listed work above, an unfiltered search sees NO $KIND at all for:$BLIND_OWNERS
   Suspect: expired/invalid token, lost scopes, or the App installation
-  losing repo access — NOT an idle team."; then
-        exit 3
+  losing repo access — NOT an idle team." || true
     fi
     exit 0
 fi
 
-# --- 3. is anything even onboarded? --------------------------------------
-REPOS=$(gh search repos --owner "$OWNER" --topic "$TOPIC" --limit 100 \
-            --json fullName --jq '.[] | .fullName' 2>"$ERR")
-rc=$?
-if [ "$rc" -ne 0 ]; then
-    # Do NOT swallow this. A failed topic query and an empty one look
-    # identical, and the empty branch below reports "NOT ONBOARDED" —
-    # which is how a wrong --json field name ("nameWithOwner" instead of
-    # "fullName") spent its life being reported as a repo that was never
-    # onboarded, while the repo WAS onboarded and the topic WAS set.
-    if incident "TOPIC QUERY BROKEN  could not list '$TOPIC' repos under '$OWNER' (gh exit $rc).
-  stderr: $(head -2 "$ERR" | tr '\n' ' ')
-  Without this the onboarded-repo check is meaningless — do not trust
-  any 'NOT ONBOARDED' conclusion until this succeeds."; then
+# Everything empty from here on: aggregate the per-owner health.
+
+if [ -n "$BROKEN" ]; then
+    DETAIL=""
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        o=${line%%|*}; rest=${line#*|}; l=${rest%%|*}; rest=${rest#*|}; rc=${rest%%|*}; esrc=${rest#*|}
+        DETAIL="$DETAIL
+  owner '$o', label '$l': gh exit $rc — $esrc"
+    done <<EOF
+$BROKEN
+EOF
+    if incident "QUEUE BROKEN  the self-pull query failed.
+$DETAIL
+  This is an incident, not an empty queue — the pipeline is stalled."; then
         exit 2
     fi
     exit 0
 fi
 
-NR=$(count_lines "$REPOS")
-if [ "$NR" -eq 0 ]; then
-    if incident "NOT ONBOARDED  no repo under '$OWNER' carries the '$TOPIC' topic.
+# Blind only if EVERY owner is blind: one working owner means the query
+# works and the world is genuinely quiet for it — the others get their
+# own line in the incident.
+if [ -n "$BLIND_OWNERS" ]; then
+    ALLOK=""
+    for O in $OWNER $ORGS; do
+        case " $BLIND_OWNERS " in *" $O "*) ;; *) ALLOK="$ALLOK $O" ;; esac
+    done
+    if [ -z "$(printf '%s' "$ALLOK" | tr -d ' ')" ]; then
+        if incident "SEARCH BLIND  the queue is empty, and so is an unfiltered search.
+  gh search sees NO open $KIND at all for owner(s):$BLIND_OWNERS
+  Suspect: expired/invalid token, lost scopes, or the App installation
+  losing repo access — NOT an idle team."; then
+            exit 3
+        fi
+        exit 0
+    fi
+    # Some owners work, some are blind, nothing labelled anywhere: fall
+    # through to the onboarded checks, but mention the blind ones.
+    BLIND_NOTE="SEARCH BLIND (partially): no unfiltered $KIND visible for:$BLIND_OWNERS
+  The other owner(s) work fine; the blind ones suspect token/scope/lost
+  App installation access."
+else
+    BLIND_NOTE=""
+fi
+
+# --- 3b. onboarded repos, per owner ---------------------------------------
+NR_TOTAL=0
+REPOS=""
+for O in $OWNER $ORGS; do
+    if [ "$O" = "$OWNER" ]; then SLUG="personal"; else SLUG=$(slug_of "$O"); fi
+    [ -f "$OUTDIR/repos.$SLUG" ] || continue
+    R=$(cat "$OUTDIR/repos.$SLUG" 2>/dev/null)
+    [ -n "$(printf '%s' "$R" | tr -d '[:space:]')" ] || continue
+    REPOS="$REPOS
+$R"
+    NR=$(count_lines "$R")
+    NR_TOTAL=$((NR_TOTAL + NR))
+done
+
+if [ "$NR_TOTAL" -eq 0 ]; then
+    if [ -n "$BLIND_NOTE" ]; then
+        if incident "$BLIND_NOTE"; then exit 3; fi
+        exit 0
+    fi
+    # Every owner came back blind-or-empty on repos with no incident —
+    # the classic "quiet but healthy" case falls through here only when
+    # searches worked and nothing is onboarded. That is exit 4.
+    if incident "NOT ONBOARDED  no repo under '$OWNER'${ORGS:+ (or under$ORGS)} carries the '$TOPIC' topic.
   The team has no work surface: nothing can be routed to you, and every
   future run will look identical to this one.
   Run the team-onboarding procedure (planner owns it)."; then
@@ -352,53 +558,75 @@ fi
 # result is cached with a TTL — the label set is a slow-moving fact about
 # repo setup, not a per-tick condition. A missing label is deliberately
 # never cached: it must keep firing until someone fixes it. Tune with
-# TEAM_LABEL_CHECK_TTL (seconds, default 6h).
-CACHE="$(dirname "$(state_file)")/team-labels-$LABEL_SLUG.cache"
-MISSING=""
-NEED_CHECK=1
-if [ -f "$CACHE" ]; then
-    CACHED_AT=$(head -1 "$CACHE" 2>/dev/null || echo 0)
-    case "$CACHED_AT" in ''|*[!0-9]*) CACHED_AT=0 ;; esac
-    if [ $(( $(date +%s) - CACHED_AT )) -lt "${TEAM_LABEL_CHECK_TTL:-21600}" ]; then
-        NEED_CHECK=0
-        MISSING=$(sed -n '2p' "$CACHE" 2>/dev/null || true)
-    fi
-fi
+# TEAM_LABEL_CHECK_TTL (seconds, default 6h). The cache is PER OWNER
+# (the token that must see the labels differs per owner).
+for O in $OWNER $ORGS; do
+    if [ "$O" = "$OWNER" ]; then SLUG="personal"; else SLUG=$(slug_of "$O"); fi
+    [ -f "$OUTDIR/repos.$SLUG" ] || continue
+    REPOS=$(cat "$OUTDIR/repos.$SLUG")
+    NR=$(count_lines "$REPOS")
+    [ "$NR" -eq 0 ] && continue
 
-if [ "$NEED_CHECK" -eq 1 ]; then
-    # Every label this queue polls must exist, or the work routed under it
-    # is invisible forever. A repo is only "good" when it carries them ALL.
-    for R in $REPOS; do
-        for L in $LABELS; do
-            FOUND=$(gh label list -R "$R" --search "$L" --json name \
-                        --jq '.[] | .name' 2>/dev/null)
-            case "$FOUND" in
-                *"$L"*) ;;
-                *) MISSING="$MISSING $R:$L" ;;
-            esac
+    CACHE="$(dirname "$(state_file)")/team-labels-$SLUG-$LABEL_SLUG.cache"
+    MISSING=""
+    NEED_CHECK=1
+    if [ -f "$CACHE" ]; then
+        CACHED_AT=$(head -1 "$CACHE" 2>/dev/null || echo 0)
+        case "$CACHED_AT" in ''|*[!0-9]*) CACHED_AT=0 ;; esac
+        if [ $(( $(date +%s) - CACHED_AT )) -lt "${TEAM_LABEL_CHECK_TTL:-21600}" ]; then
+            NEED_CHECK=0
+            MISSING=$(sed -n '2p' "$CACHE" 2>/dev/null || true)
+        fi
+    fi
+
+    if [ "$NEED_CHECK" -eq 1 ]; then
+        if [ "$SLUG" = "personal" ]; then
+            resolve_owner "$O" "" >/dev/null 2>&1
+            CUR_TOKEN="$ORG_TOKEN"
+        else
+            if ! resolve_owner "$O" "$SLUG"; then
+                continue
+            fi
+            CUR_TOKEN="$ORG_TOKEN"
+        fi
+        # Every label this queue polls must exist, or the work routed
+        # under it is invisible forever. A repo is only "good" when it
+        # carries them ALL.
+        for R in $REPOS; do
+            for L in $LABELS; do
+                FOUND=$(ogh label list -R "$R" --search "$L" --json name \
+                            --jq '.[] | .name' 2>/dev/null)
+                case "$FOUND" in
+                    *"$L"*) ;;
+                    *) MISSING="$MISSING $R:$L" ;;
+                esac
+            done
         done
-    done
-    if [ -z "$MISSING" ]; then
-        mkdir -p "$(dirname "$CACHE")" 2>/dev/null || true
-        { date +%s; echo ""; } > "$CACHE" 2>/dev/null || true
+        if [ -z "$MISSING" ]; then
+            mkdir -p "$(dirname "$CACHE")" 2>/dev/null || true
+            { date +%s; echo ""; } > "$CACHE" 2>/dev/null || true
+        fi
     fi
-fi
 
-if [ -n "$MISSING" ]; then
-    CREATE=""
-    for RL in $MISSING; do CREATE="$CREATE
+    if [ -n "$MISSING" ]; then
+        CREATE=""
+        for RL in $MISSING; do CREATE="$CREATE
     gh label create $(printf '%s' "$RL" | cut -d: -f2) --repo $(printf '%s' "$RL" | cut -d: -f1)"; done
-    if incident "LABEL MISSING  onboarded repo(s) lack a routing label:$MISSING
+        if incident "LABEL MISSING  onboarded repo(s) under '$O' lack a routing label:$MISSING
   Work routed under that label would never reach this queue. Create it:$CREATE"; then
-        exit 5
+            exit 5
+        fi
+        exit 0
     fi
-    exit 0
-fi
+done
 
 clear_state
 if [ "$VERBOSE" -eq 0 ]; then
     exit 0    # healthy + empty: SILENT (zero tokens — the cron default)
 fi
-log "QUEUE EMPTY  query healthy: $NR onboarded repo(s), all labelled"
-log "  $LABELS, nothing routed to $OWNER right now."
+OWNERS_DISPLAY="$OWNER"
+for O in $ORGS; do OWNERS_DISPLAY="$OWNERS_DISPLAY $O"; done
+log "QUEUE EMPTY  query healthy: $NR_TOTAL onboarded repo(s), all labelled"
+log "  $LABELS, nothing routed to$OWNERS_DISPLAY right now."
+[ -z "$BLIND_NOTE" ] || log "$BLIND_NOTE"
 exit 0
