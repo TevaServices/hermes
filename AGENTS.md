@@ -1050,7 +1050,27 @@ than by remembering it:
   command that undoes it. It rides the delivery the profile's agent already
   reads and needs no agent turn; it changes no exit code, since work still
   flows. It deliberately reports an item its own queue cannot see, which is
-  the fault's whole signature.
+  the fault's whole signature. **Two placement rules make that real, and
+  the first version of this guard got both wrong** (found by running the
+  test suite inside the container rather than on the Mac, after the deploy
+  logged `Job ...: empty stdout — silent run` on a tick where a misfiled
+  label was live):
+  - the scan runs **inside the owner loop**, per owner with that owner's
+    token, not after it. The post-loop code exits early on a credential
+    fault (`ORG CREDS MISSING`), and **that incident is deduped**, so from
+    the second tick on the exit is silent — anything after it would never
+    run again for *any* owner. In the loop, a bad credential skips only its
+    own owner.
+  - it keeps its **own dedupe slot** (`team-queue-<slug>-foreign.state`,
+    not the shared `team-queue-<slug>.state`). The shared slot holds one key
+    per label set, so a standing unrelated incident would either silence the
+    guard or be silenced by it — and this lane already carries one (see
+    `AUTHOR FILTER DROPPED` below). Both slots are cleared by a healthy run,
+    so a fault that returns is reported again.
+- **A guard nobody can reach is not a guard**, which is why the test suite
+  covers reachability, not just logic: `sh scripts/test-team-labels.sh` is
+  run under the container's own `/bin/sh` as well as locally, and one case
+  asserts a finding still appears when an owner's credentials fail.
 - **The protocol is pinned offline** by `scripts/test-team-labels.sh`
   (`mise run test`): every `--add-label`/`--remove-label` command must
   target the object its family belongs to (logical lines, backslash
@@ -1060,7 +1080,10 @@ than by remembering it:
   name the undo, dedupe on the second run, and stay silent on a clean
   state. This is the check that fails in CI-shaped form when a future skill
   edit reintroduces the collision, instead of after two profiles have
-  swapped an issue back and forth for six hours.
+  swapped an issue back and forth for six hours. Note `run_queue` pins
+  `TEAM_OWNER_ORGS` empty: compose injects the stack environment into every
+  process, so an ambient value would otherwise leak into the test and add a
+  credential-less owner.
 
 `team-queue.sh` (baked at `/usr/local/bin/team-queue.sh`) wraps the
 developer's self-pull **with a loud failure mode**, because an empty search
@@ -1084,6 +1107,19 @@ retried WITHOUT the filter when the filtered one fails, on the same
 principle the org branch already states: a wider net is recoverable, a dead
 queue is not. The widening is announced once (deduped) as
 `AUTHOR FILTER DROPPED` — fix the login, or unset it deliberately.
+
+**The filters are DECLARED, never assumed** — `TEAM_OWNER_DEV_BOT` for the
+personal owner, `TEAM_ORG_DEV_BOT_<ORG>` per org; neither set = no filter.
+The personal one used to be a hardcoded `hermes-dev[bot]` default, which
+was correct only while the team's repos lived under the personal account: a
+login compiled into the script cannot be fixed by an operator, so once the
+repos moved to an org the queue took the fallback path every tick and
+announced `AUTHOR FILTER DROPPED` about a queue that was working correctly.
+A hardcoded login is a standing fault the moment the account layout moves.
+The fallback is still there for a *declared* filter that goes stale (that is
+the safety net, and it is tested), but the default is now the empty string,
+and **no bot login appears as a `:-` default anywhere in the script** — the
+test suite enforces that, so the next one cannot creep back in.
 
 ## Scheduled jobs are GitOps-declared (`config/cron.toml`)
 
