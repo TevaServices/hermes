@@ -38,7 +38,7 @@ declared external in komodo's compose).
   `git push origin main` from a working copy fails with `GH013` ("Changes
   must be made through a pull request"). Push your branch and open a PR.
 - **Images are built by Komodo Builds — never compose build** (the stack
-  runs `run_build = false`; images `hermes-agent:v2026.9.14`, `litellm:main`,
+  runs `run_build = false`; images `hermes-agent:v2026.9.24`, `litellm:main`,
   `honcho:main`, `honcho-mcp:main`, `builder = "<your-builder>"`). The
   `hermes-agent` and `litellm` Builds use a **repo-root build context**
   (`build_path = "."`) — the Dockerfiles COPY `docker/hermes/*`, `config/` +

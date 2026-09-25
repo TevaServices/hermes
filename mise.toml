@@ -33,7 +33,7 @@ HERMES_ENV_DIR = "{{config_root}}/secrets"
 # Komodo webhook-driven rebuild/deploy does the rest.
 # HERMES_REF is also the FROM pin of the agent image (the official
 # nousresearch/hermes-agent:<ref> base) and its image tag.
-HERMES_REF = "v2026.9.14"     # ref on github.com/NousResearch/hermes-agent
+HERMES_REF = "v2026.9.24"     # ref on github.com/NousResearch/hermes-agent
 HONCHO_VERSION = "main"       # ref on github.com/plastic-labs/honcho
 FIRECRAWL_VERSION = "latest"  # tag on the ghcr.io/firecrawl/* images
 LAVINMQ_VERSION = "2.4.4"     # tag on the docker.io/cloudamqp/lavinmq image

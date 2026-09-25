@@ -35,7 +35,7 @@
 #      plugins.enabled config key, not this copy); see AGENTS.md
 #      §"Dashboard + the memory-UI plugin".
 #
-ARG HERMES_REF=v2026.9.14
+ARG HERMES_REF=v2026.9.24
 FROM nousresearch/hermes-agent:${HERMES_REF}
 
 # ── Source patches over upstream ──────────────────────────────────────
@@ -43,9 +43,9 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # Each must be re-anchored at every HERMES_REF bump, and DELETED once
 # upstream adopts the fix (the build says so — see below).
 #
-# FOUR patches currently.
+# THREE patches currently.
 #
-# 4. plugins/platforms/discord/adapter.py — self-heal voice after Discord
+# 3. plugins/platforms/discord/adapter.py — self-heal voice after Discord
 # externally terminates the session. Discord kicks voice sessions
 # server-side ("We were externally disconnected from voice" — discord.py
 # logs the reason at DEBUG only, so at INFO the only trace is "The voice
@@ -59,7 +59,7 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # grace, when a user (re)joins while we hold a dead binding, and on demand
 # from play_tts before falling back to an attachment).
 #
-# 3. gateway/platforms/base.py — build_auto_tts_output_path() must not
+# 2. gateway/platforms/base.py — build_auto_tts_output_path() must not
 # point /tmp when HERMES_WRITE_SAFE_ROOT is set. This stack sets
 # HERMES_WRITE_SAFE_ROOT=/opt/data (Dockerfile below), and the TTS tool
 # hard-rejects any output_path outside the safe root with
@@ -72,24 +72,6 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # redirects to the TTS tool's default dir (HERMES_HOME/cache/audio,
 # under the safe root) only when /tmp is outside the configured safe
 # roots; stock behavior (no HERMES_WRITE_SAFE_ROOT) is byte-identical.
-#
-# 2. cron/scheduler_delivery.py — bot-chat delivery must POINT
-# HERMES_HOME at the target profile before spawning
-# `hermes -p <name> chat`. Upstream drops it (the code moved here from
-# cron/scheduler.py at v2026.9.14; upstream fixed the no-profile
-# multiplex branch in the same move but kept the drop for -p). Dropping
-# is right when HERMES_HOME points AT a profile (it would
-# shadow -p) but wrong when it is the ROOT holding profiles/, as here
-# (/opt/data holds profiles/<name>): the child falls back to the native
-# ~/.hermes, so every delivery died with "Profile '<name>' does not
-# exist" and no cron job could wake a named profile at all. Simply KEEPING
-# the root is no better — the child's home then points at the DEFAULT
-# profile, so anything resolving credentials from the home rather than
-# from -p (`hermes send`'s get_hermes_home()/.env, the GitHub App env)
-# acts as the default profile; observed live as the main bot posting a
-# developer status line into #dev, and the child inheriting a sibling
-# profile's GITHUB_APP_ID. The patch sets it to get_profile_dir(profile),
-# so -p and the home agree and every .env lookup is profile-scoped.
 #
 # 1. tools/approval_detection.py (the grep-operand scanner lived in
 #    tools/approval.py until v2026.9.14 moved it): `grep` inside a quoted
