@@ -958,6 +958,19 @@ incidents to surface, not idle states.** Grep new skills for the colon
 form before shipping them — `--flag:value` does not exist in gh search
 syntax; it is `--flag value`.
 
+**One degraded state is deliberately NOT an incident: an unresolvable
+author filter.** `author:<login>` for an unknown or unviewable user fails
+the WHOLE query — so a bot whose App lost the repositories it was installed
+on takes the entire queue down with it. Observed 2026-09-25: the personal
+`hermes-dev[bot]` stopped resolving after its repos moved to an org, and
+every reviewer run died as `QUEUE BROKEN` for ~6 hours *while its org half
+was perfectly healthy* — and that failure was itself masking the exit-64
+fault above, because both lived in the same script. So the PR search is
+retried WITHOUT the filter when the filtered one fails, on the same
+principle the org branch already states: a wider net is recoverable, a dead
+queue is not. The widening is announced once (deduped) as
+`AUTHOR FILTER DROPPED` — fix the login, or unset it deliberately.
+
 ## Scheduled jobs are GitOps-declared (`config/cron.toml`)
 
 Every cron job is declared in **`config/cron.toml`**, rendered per profile
