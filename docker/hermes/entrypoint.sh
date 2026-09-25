@@ -87,9 +87,48 @@ fi
 # profile's own Discord bot token lands at the var name the gateway's
 # per-profile credential resolution expects (the multiplexer reads each
 # profile's own .env scope).
+#
+# WHY THE ROOT COPY IS FILTERED (2026-09-25). Hermes builds a cron job's
+# child env as `strip_launch_profile_env(build_subprocess_env(...))`
+# (cron/scheduler.py), and that first step DELETES from the child env every
+# name found in the LAUNCH profile's .env unless it is a "global" env name
+# (tools/environments/local.py::strip_launch_profile_env). The launch
+# profile here is the DEFAULT one — i.e. this file. A routed profile's job
+# child therefore loses any non-global name that sits in it.
+#
+# The team-routing family is exactly that: TEAM_OWNER, TEAM_OWNER_ORGS,
+# TEAM_ORG_DEV_BOT_<ORG>. team-queue.sh / review-queue.sh read them, and
+# they run as `no_agent` script children that re-load NOTHING. With
+# TEAM_OWNER in this file the reviewer's self-pull died 71 consecutive
+# times (`team-queue.sh: owner must not be empty`, exit 64) while the
+# developer's survived by luck: the scheduler calls the strip WITHOUT
+# passing the job's own profile_home, so the strip keyed off whatever
+# override the PREVIOUS dispatch happened to leave behind. Same scripts,
+# same env builder, opposite outcomes — and a queue that fails like that is
+# indistinguishable from a quiet one, which is the failure this stack's
+# exit-code contract exists to prevent.
+#
+# Filtering here is sufficient AND complete, which is why nothing else had
+# to move: compose injects the same file as container env (`env_file:`), so
+# these vars are still in the gateway's environment and still reach every
+# script — they are simply no longer LAUNCH-PROFILE RESIDUE. The profile
+# .env copies below deliberately KEEP the TEAM_* lines: those homes are not
+# the launch home, and `served_profile_child_env` re-adds a routed
+# profile's own .env names for `hermes -p X` children.
+#
+# The rule for anything added later: a var read by a SCRIPT in a cron job
+# must not live in THIS file. Put it in the stack `environment:` (komodo
+# resources.toml, mirrored in mise.toml) or accept that a routed profile's
+# job child will never see it.
 ENV_MOUNT="${HERMES_ENV_FILE_MOUNT:-/run/hermes-env/hermes-main.env}"
 if [ -f "$ENV_MOUNT" ]; then
-  cp -f "$ENV_MOUNT" "$HERMES_HOME/.env"
+  if ! grep -vE '^TEAM_[A-Z0-9_]+=' "$ENV_MOUNT" > "$HERMES_HOME/.env"; then
+    # grep -v exits 1 when it selected nothing, and >1 on a read error.
+    # Either way an empty root .env would break every service, so fall back
+    # to the unfiltered copy rather than shipping a truncated one.
+    echo "hermes-stack: warning: TEAM_* filter produced no output; using the unfiltered env" >&2
+    cp -f "$ENV_MOUNT" "$HERMES_HOME/.env"
+  fi
   chown "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME/.env"
   chmod 600 "$HERMES_HOME/.env"
   if [ -d "$HERMES_HOME/profiles" ]; then
