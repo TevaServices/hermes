@@ -192,6 +192,11 @@ COPY docker/hermes/cron-reconcile.py /usr/local/bin/cron-reconcile.py
 # build time and cannot see runtime secrets — see bootstrap-profiles.sh).
 COPY docker/hermes/expand-placeholders.py /usr/local/bin/expand-placeholders.py
 COPY docker/hermes/team-thread.sh /usr/local/bin/team-thread.sh
+# Answers "is a session in this profile already working on this item?" —
+# read by team-queue.sh before it offers work, and by an agent before it
+# picks an item up. Stdlib-only python3 (the image's own interpreter, same
+# as cron-reconcile.py).
+COPY docker/hermes/team-session.py /usr/local/bin/team-session.py
 COPY docker/hermes/prune-repos.sh /usr/local/bin/prune-repos.sh
 COPY docker/hermes/refresh-repos.sh /usr/local/bin/refresh-repos.sh
 # claude-update.sh also lands here (not only in /opt/claude-hermes/) so
@@ -208,6 +213,7 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/team-queue.sh \
                /usr/local/bin/review-queue.sh \
                /usr/local/bin/team-thread.sh \
+               /usr/local/bin/team-session.py \
                /usr/local/bin/cron-reconcile.py \
                /usr/local/bin/expand-placeholders.py \
                /usr/local/bin/prune-repos.sh \
