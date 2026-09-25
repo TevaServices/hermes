@@ -351,6 +351,15 @@ clear_state() {
     rm -f "$(state_file)" 2>/dev/null || true
 }
 
+# Clearing the dedupe state is for a HEALTHY run only. A dark gate or a
+# dropped author filter must keep its slot, or its notice reprints on every
+# tick — the noise the dedupe exists to prevent.
+clear_state_unless_degraded() {
+    if [ -z "$GATE_DARK" ] && [ -z "$FILTER_FALLBACK" ]; then
+        clear_state
+    fi
+}
+
 # --- 1. the queue, per owner ---------------------------------------------
 # Only the PR queue is author-scoped (the reviewer reviews the dev bot's
 # work); the issue queue is label-only. AUTHOR_OPT is deliberately
@@ -359,11 +368,31 @@ clear_state() {
 # TEAM_ORG_DEV_BOT_<ORGUC> (set by provisioning), or no author filter
 # when that is unset (the org PRs then come from every author — a wider
 # net, never a narrower one).
+#
+# The same principle covers a filter that is present but UNRESOLVABLE,
+# which is what an author login becomes once its App loses the repos it was
+# installed on. GitHub answers `author:<login>` for an unknown or unviewable
+# user with "Invalid search query … The listed users cannot be searched"
+# (gh exit 1) — a failure of the WHOLE query, so the queue dies with it.
+# Observed 2026-09-25: the personal `hermes-dev[bot]` stopped resolving
+# after its repos moved to an org, and every reviewer run died as "QUEUE
+# BROKEN" while its org half was perfectly healthy. So the search is retried
+# WITHOUT the filter: a wider net is recoverable, a dead queue is not. The
+# notice below is what keeps the widening visible instead of silent.
 if [ "$KIND" = "prs" ]; then
     AUTHOR="${AUTHOR:-hermes-dev[bot]}"
 fi
 
+run_queue_search() {  # run_queue_search <owner> <label> <author_opt>
+    # $3 is a pre-split "flag value" pair (or empty) and MUST stay unquoted.
+    # shellcheck disable=SC2086
+    ogh search "$KIND" --owner "$1" --label "$2" --state open \
+        --limit 30 --json repository,number,title,url $3 \
+        --jq '.[] | "\(.repository.nameWithOwner)#\(.number)  \(.title)  \(.url)"'
+}
+
 BROKEN=""      # "<owner>|<label>|<rc>|<stderr-head>" lines
+FILTER_FALLBACK=""   # "<owner>/<label>(<author>)" where the filter was dropped
 BLIND_OWNERS=""
 SEEN_OWNERS="" # owners whose unfiltered search saw anything
 ORG_FAIL=""
@@ -400,12 +429,15 @@ for O in $OWNER $ORGS; do
 
     OQ=""
     for L in $LABELS; do
-        # shellcheck disable=SC2086
-        PART=$(ogh search "$KIND" --owner "$O" --label "$L" --state open \
-                  --limit 30 --json repository,number,title,url $AUTHOR_OPT \
-                  --jq '.[] | "\(.repository.nameWithOwner)#\(.number)  \(.title)  \(.url)"' \
-                  2>"$ERR")
+        PART=$(run_queue_search "$O" "$L" "$AUTHOR_OPT" 2>"$ERR")
         rc=$?
+        if [ "$rc" -ne 0 ] && [ -n "$AUTHOR_OPT" ]; then
+            # The filter itself may be what failed (see the header): retry
+            # unfiltered before declaring the owner broken.
+            PART=$(run_queue_search "$O" "$L" "" 2>"$ERR")
+            rc=$?
+            [ "$rc" -eq 0 ] && FILTER_FALLBACK="$FILTER_FALLBACK $OSLUG/$L($OA)"
+        fi
         if [ "$rc" -ne 0 ]; then
             BROKEN="$BROKEN
 $O|$L|$rc|$(head -3 "$ERR" | tr '\n' ' ')"
@@ -454,6 +486,19 @@ $O|topic|$rc|$(head -2 "$ERR" | tr '\n' ' ')"
     fi
     printf '%s\n' "$REPOS" > "$OUTDIR/repos.$OSLUG"
 done
+
+# A dropped author filter WIDENS the queue, which the operator has to know
+# about — a queue quietly scanning more than it was configured to is exactly
+# the "looks like progress" state this script's incidents exist to name. It
+# keeps its dedupe slot (see the clear_state guards below), so it is said
+# once rather than every tick.
+if [ -n "$FILTER_FALLBACK" ]; then
+    incident "AUTHOR FILTER DROPPED  GitHub could not resolve the author login, so the PR search was re-run WITHOUT it for:$FILTER_FALLBACK
+  This queue is WIDER than the configured author filter and can list PRs by
+  other authors. Either fix the login, or unset it deliberately — an org
+  owner with no TEAM_ORG_DEV_BOT_<ORG> already searches unfiltered, by
+  design." || true
+fi
 
 if [ -n "$ORG_FAIL" ]; then
     if incident "ORG CREDS MISSING  org owner(s) with no usable App credentials:$ORG_FAIL
@@ -519,10 +564,9 @@ QUEUE=$(cat "$OUTDIR"/queue.* 2>/dev/null | awk 'NF && !seen[$1]++')
 
 N=$(count_lines "$QUEUE")
 if [ "$N" -gt 0 ]; then
-    # A DARK gate keeps its dedupe slot: clearing it would reprint the
-    # SESSION GATE UNAVAILABLE notice on every tick, which is the noise the
-    # dedupe exists to prevent.
-    [ -n "$GATE_DARK" ] || clear_state
+    # A DARK gate or a dropped author filter keeps its dedupe slot: clearing
+    # it would reprint that notice every tick — see clear_state_unless_degraded.
+    clear_state_unless_degraded
     OWNERS_DISPLAY="$OWNER"
     for O in $ORGS; do OWNERS_DISPLAY="$OWNERS_DISPLAY $O"; done
     log "QUEUE OK  $N item(s) labelled $LABELS for $OWNERS_DISPLAY:"
@@ -709,7 +753,7 @@ for O in $OWNER $ORGS; do
     fi
 done
 
-[ -n "$GATE_DARK" ] || clear_state
+clear_state_unless_degraded
 if [ "$VERBOSE" -eq 0 ]; then
     exit 0    # healthy + empty: SILENT (zero tokens — the cron default)
 fi
