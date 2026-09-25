@@ -65,6 +65,18 @@
 # so, because a guard that silently stopped guarding is indistinguishable
 # from a quiet week.
 #
+# LABEL FAMILIES ARE OBJECT-SCOPED, AND THIS QUEUE SAYS WHEN THEY ARE NOT.
+# `status/*` belongs on ISSUES and `review/*` on PULL REQUESTS (see the
+# team-conventions skill), and this queue polls exactly one family on one
+# object kind. So a label of the wrong family is not untidiness: it takes
+# the item out of BOTH lanes at once while it still looks busy, and the
+# queue that would otherwise have listed it is the one that cannot see it.
+# Observed 2026-09-25 on TevaServices/mach#26 (an issue left carrying
+# `review/ready` and no `status/*`), where the two profiles then traded the
+# same issue every tick. A deduped `FOREIGN LABEL` incident names the item,
+# the label and the command that undoes it. It changes no exit code below:
+# work still flows, so it is a warning riding the delivery, not a stall.
+#
 # MULTI-OWNER: TEAM_OWNER is the PERSONAL owner (searched with the
 # profile's own gh auth state); TEAM_OWNER_ORGS (space-separated org
 # names) adds org owners, each searched with that org's own App
@@ -345,17 +357,77 @@ audit_handoffs() {
     done
 }
 
+# --- label family / object guard -----------------------------------------
+# `status/*` belongs on ISSUES and `review/*` on PULL REQUESTS, and each
+# queue polls ONE family on ONE object kind. So a label of the wrong family
+# does not merely look untidy — it takes the item out of both lanes at once
+# while it still looks busy. Observed 2026-09-25: TevaServices/mach#26 ended
+# up carrying `review/ready` and no `status/*` label at all, so the
+# developer's queue (issues by status/*) could not see it and neither could
+# the reviewer's (PRs by review/*); the two profiles then traded the same
+# issue on every tick until the container was paused by hand. Nothing
+# reported it, because a misfiled label is indistinguishable from "nothing
+# to do" — exactly the blind spot the HANDOFF INCOMPLETE audit above exists
+# for. Deterministic: no agent turn required, the line rides the delivery
+# the profile's agent already reads.
+#
+# ONE unfiltered search per owner, with THAT owner's token, filtered here.
+# NOT one search per label: repeating `--label` means AND, not OR, so a
+# four-label check would quadruple the calls this 5-minute tick makes.
+audit_foreign_labels() {  # $1 = owner (for the message); uses $KIND, ogh()
+    case "$KIND" in
+        issues)
+            # `repository.nameWithOwner` (not `url`) because the item key must
+            # match the queue's own `owner/repo#N`, and the remediation needs
+            # the repo by name. The label list is SORTED IN JQ: `gh search`
+            # orders by relevance, not stably, and incident() dedupes on a
+            # cksum of the message — an unstable order would reprint forever.
+            JQ='.[] | ([.labels[].name] | map(select(startswith("review/"))) | sort | join(",")) as $f | select($f != "") | "\(.repository.nameWithOwner)#\(.number)|\($f)"'
+            OWN="PR-family label on an ISSUE"
+            FIX="gh issue edit"
+            HINT="the PR for it is the one whose body says Closes #<num>"
+            ;;
+        prs)
+            JQ='.[] | ([.labels[].name] | map(select(startswith("status/"))) | sort | join(",")) as $f | select($f != "") | "\(.repository.nameWithOwner)#\(.number)|\($f)"'
+            OWN="ISSUE-family label on a PR"
+            FIX="gh pr edit"
+            HINT="the issue is the one this PR closes"
+            ;;
+        *) return 0 ;;
+    esac
+    # A failed search is NOT this guard's to report: the blind/broken checks
+    # own credential faults, and crying FOREIGN LABEL on a query error would
+    # be a false accusation. Stay silent and let them speak.
+    FOUND=$(ogh search "$KIND" --owner "$1" --state open --limit 100 \
+              --json repository,number,labels --jq "$JQ" 2>/dev/null) || return 0
+    [ -n "$FOUND" ] || return 0
+    # Sorted again here (LC_ALL=C, so the cron env and a human shell agree) for
+    # the same dedupe reason: identical finding sets must hash identically.
+    while IFS='|' read -r key labels; do
+        [ -n "$key" ] || continue
+        repo=${key%#*}; num=${key##*#}
+        FOREIGN_LABEL="$FOREIGN_LABEL $key"
+        FOREIGN_DETAIL="$FOREIGN_DETAIL
+  !! FOREIGN LABEL: $key carries $labels — that is a $OWN.
+     Fix: $FIX $num --repo $repo --remove-label $labels   ($HINT). Until it
+     moves, the item is invisible to BOTH queues — each polls one family on
+     one object kind — while it still looks busy."
+    done <<EOF
+$(printf '%s\n' "$FOUND" | LC_ALL=C sort)
+EOF
+}
+
 # Clear the dedupe state on a healthy run, so a fault that recurs after a
 # good period is reported again rather than being suppressed forever.
 clear_state() {
     rm -f "$(state_file)" 2>/dev/null || true
 }
 
-# Clearing the dedupe state is for a HEALTHY run only. A dark gate or a
-# dropped author filter must keep its slot, or its notice reprints on every
-# tick — the noise the dedupe exists to prevent.
+# Clearing the dedupe state is for a HEALTHY run only. A dark gate, a
+# dropped author filter or a misfiled label must keep its slot, or its
+# notice reprints on every tick — the noise the dedupe exists to prevent.
 clear_state_unless_degraded() {
-    if [ -z "$GATE_DARK" ] && [ -z "$FILTER_FALLBACK" ]; then
+    if [ -z "$GATE_DARK" ] && [ -z "$FILTER_FALLBACK" ] && [ -z "$FOREIGN_LABEL" ]; then
         clear_state
     fi
 }
@@ -396,6 +468,11 @@ FILTER_FALLBACK=""   # "<owner>/<label>(<author>)" where the filter was dropped
 BLIND_OWNERS=""
 SEEN_OWNERS="" # owners whose unfiltered search saw anything
 ORG_FAIL=""
+# Misfiled labels ("<owner>/<repo>#<n>", for the dedupe slot) and their
+# message body. Kept OUT of the queue itself: this is an audit of the repos'
+# state, not of the work routed to this profile.
+FOREIGN_LABEL=""
+FOREIGN_DETAIL=""
 
 SEEN_SLUGS=""
 for O in $OWNER $ORGS; do
@@ -508,6 +585,30 @@ if [ -n "$ORG_FAIL" ]; then
         exit 6
     fi
     exit 0
+fi
+
+# --- 1b. is any label filed under the wrong family? -----------------------
+# Before the queue is assembled and after the credential exit above, so it
+# never runs without a working token and can never delay or suppress real
+# queue output — it adds lines to the delivery, it does not replace any.
+# Deliberately runs whether or not the queue turns out to be empty: the
+# misfiled item is usually INVISIBLE to this queue (that is the whole fault),
+# so waiting for it to be listed would be waiting for the symptom to fix
+# itself. Deduped like every other incident, so a standing fault wakes the
+# profile once instead of every tick.
+for O in $OWNER $ORGS; do
+    if [ "$O" = "$OWNER" ]; then SLUG=""; else SLUG=$(slug_of "$O"); fi
+    resolve_owner "$O" "$SLUG" >/dev/null 2>&1 || continue
+    CUR_TOKEN="$ORG_TOKEN"
+    audit_foreign_labels "$O"
+done
+CUR_TOKEN=""
+
+if [ -n "$FOREIGN_LABEL" ]; then
+    incident "FOREIGN LABEL  a label of the wrong family is on an object:$FOREIGN_DETAIL
+  Each queue polls one family on one object kind, so a misfiled label makes
+  the item invisible to BOTH lanes while it still looks busy — undo it as the
+  line above says. Said once; it returns when the condition changes." || true
 fi
 
 # --- one session per work item: drop what a live session already holds ----

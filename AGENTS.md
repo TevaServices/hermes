@@ -1008,6 +1008,60 @@ machine user. Bots *authoring* issues/PRs works fine, which is why the
 reviewer leg (`gh search prs --author 'hermes-dev[bot]'`) was never
 affected.
 
+**The labels come in two families, and the OBJECT is half the rule.**
+`status/*` (`status/backlog`, `status/ready`, `status/in-progress`,
+`status/in-review`, `status/blocked`, `status/done`) belongs on **issues**
+and is planner's and developer's; `review/*` (`review/ready`,
+`review/in-progress`, `review/changes`, `review/approved`) belongs on
+**pull requests** — the developer adds `review/ready` as the handoff and
+drops `review/changes` on a re-handoff, and everything else in the family
+is the reviewer's. Each queue polls ONE family on ONE object kind, so a
+label of the wrong family is not untidiness — it takes the item out of
+BOTH lanes at once while it still looks busy. Observed 2026-09-25
+(`TevaServices/mach#26`): the *reviewer* ran a `gh issue edit` with
+`status/in-progress` — the developer's own claim **and resume** label,
+because `team-reviewer`'s verdict steps said "Card → In Progress" and on a
+label-mechanism repo the card IS that label — while the *developer* put
+`review/ready` on the issue instead of on its PR. The issue then carried no
+`status/*` label at all, so the developer's queue could not see it and
+neither could the reviewer's, and the two profiles traded the same issue on
+every 5-minute tick (add `review/ready`, drop `status/in-progress`; add
+`status/in-progress` back) until the container was paused by hand in
+Komodo.
+
+Three things now hold, and each is enforced somewhere mechanical rather
+than by remembering it:
+
+- **Ownership is stated once**, in the shared `team-conventions` skill
+  ("The routing labels" — the ten labels with added-by/removed-by columns,
+  and the rule that a profile writes only its own family). The reviewer
+  never writes a `status/*` label and never runs `gh issue edit` at all: it
+  judges on the PR and names the card state it implies to planner
+  (`@hermes-planner` — the same intake channel the developer's roadblocks
+  use), and the developer moves the issue to `status/in-review` at handoff.
+  Commands in the skills name their object explicitly (`<ISSUE#>` for
+  `gh issue edit`, `<PR#>` for `gh pr edit`), because the two numbers for
+  one work item differ and are joined only by `Closes #N`.
+- **The queues report a misfiled label** (`!! FOREIGN LABEL`) —
+  `docker/hermes/team-queue.sh` scans its own object kind once per owner
+  (one unfiltered search, filtered client-side; repeating `--label` means
+  AND, so a per-label check would multiply the calls a 5-minute tick makes)
+  and prints a **deduped** incident naming the item, the label, and the
+  command that undoes it. It rides the delivery the profile's agent already
+  reads and needs no agent turn; it changes no exit code, since work still
+  flows. It deliberately reports an item its own queue cannot see, which is
+  the fault's whole signature.
+- **The protocol is pinned offline** by `scripts/test-team-labels.sh`
+  (`mise run test`): every `--add-label`/`--remove-label` command must
+  target the object its family belongs to (logical lines, backslash
+  continuations joined, so a real two-line handoff is checked as one), every
+  `status/…`/`review/…` literal must be one of the ten, and the guard itself
+  is exercised against a stubbed `gh` — it must fire on a misfiled label,
+  name the undo, dedupe on the second run, and stay silent on a clean
+  state. This is the check that fails in CI-shaped form when a future skill
+  edit reintroduces the collision, instead of after two profiles have
+  swapped an issue back and forth for six hours.
+
 `team-queue.sh` (baked at `/usr/local/bin/team-queue.sh`) wraps the
 developer's self-pull **with a loud failure mode**, because an empty search
 and a broken search are indistinguishable downstream. Exit codes are the
@@ -1258,6 +1312,29 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${HERMES_DASHBOARD_HOS
 #   enabled: 30x redirect to the login page or 401. A 200 WITHOUT a
 #   session means the auth gate is NOT engaged — investigate immediately.
 docker logs hermes-main 2>&1 | grep -i '\[dashboard\]' | tail -5   # no auth-provider errors
+```
+
+Team label protocol (offline, and the live probe for a misfiled label —
+see §"Routing work to a profile"):
+
+```bash
+# Offline: the family/object invariant, the declared label set, and the
+# queue's FOREIGN LABEL guard against a stubbed gh. No Docker, no network.
+mise run test
+# Live: is any open item carrying a label of the WRONG family? An issue with
+# review/* (or a PR with status/*) is invisible to BOTH queues — the state
+# that flip-flopped TevaServices/mach#26 on 2026-09-25. Empty output is the
+# healthy answer; the queue prints `!! FOREIGN LABEL` for whatever this finds.
+docker exec -e HOME=/opt/data/profiles/developer/home hermes-main \
+  gh search issues --owner <owner> --state open --limit 100 \
+    --json repository,number,labels \
+    --jq '.[] | ([.labels[].name] | map(select(startswith("review/"))) | length) as $n
+          | select($n > 0) | "\(.repository.nameWithOwner)#\(.number)"'
+docker exec -e HOME=/opt/data/profiles/reviewer/home hermes-main \
+  gh search prs --owner <owner> --state open --limit 100 \
+    --json repository,number,labels \
+    --jq '.[] | ([.labels[].name] | map(select(startswith("status/"))) | length) as $n
+          | select($n > 0) | "\(.repository.nameWithOwner)#\(.number)"'
 ```
 
 DCO sign-off hook (installed per tool-home; signs off only where the repo asks):
