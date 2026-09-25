@@ -61,6 +61,13 @@ run = "python render.py"
 description = "Validate config without writing build output"
 run = "python render.py --check"
 
+# Offline tests — no Docker, no network. Separate from `validate` on
+# purpose: that task gates the config render, and a routing bug in a shell
+# helper must not be able to block it (or vice versa).
+[tasks.test]
+description = "Run the repo's offline tests (gh shim owner routing)"
+run = "sh scripts/test-gh-shim.sh"
+
 [tasks.net]
 description = "Create the shared external docker network (idempotent)"
 run = "docker network inspect hermes-net >/dev/null 2>&1 || docker network create hermes-net"

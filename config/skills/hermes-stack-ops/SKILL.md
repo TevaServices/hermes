@@ -1,7 +1,7 @@
 ---
 name: hermes-stack-ops
 description: How this agent's own stack works — config source of truth, gateway, verification
-version: 1.1.0
+version: 1.2.0
 metadata:
   hermes:
     tags: [hermes, docker, litellm, self]
@@ -102,10 +102,44 @@ with (any number of orgs — e.g. `acmecorp-hermes-*[bot]` for an org
 "Acme Corp"), and the stack picks the token automatically:
 
 - **`gh` is a shim** (the real CLI is `/usr/local/bin/gh-real`). It
-  picks the ORG token when the invocation's target owner matches an org
-  the profile has credentials for — from a `-R <owner>/<repo>` argument
-  or the cwd git repo's origin — and passes through otherwise.
+  picks the ORG token when it can resolve the invocation's target owner
+  to an org the profile has credentials for, and passes through
+  otherwise. Three owner sources, in this order:
+  1. a `-R`/`--repo` argument (every spelling gh accepts: `-R x/y`,
+     `-R=x/y`, `-Rx/y`, `--repo x/y`), or a `gh repo <sub> owner/repo`
+     positional;
+  2. **for `gh api`, the ENDPOINT PATH** — `repos/<owner>/…` or
+     `orgs/<owner>`. `gh api` accepts no `-R` at all (gh rejects the
+     flag: `unknown shorthand flag: 'R'`), so when your cwd is a scratch
+     dir — where REST payload files get written — the path is the only
+     owner signal the call carries. Put the owner in the path and it
+     routes from anywhere;
+  3. the cwd git repo's origin.
   `gh auth *` and any call with `GH_TOKEN` set are ALWAYS passthrough.
+- **A 403 `Resource not accessible by integration` on an org repo is a
+  TOKEN question before it is a permission question.** The personal App
+  has no installation on the org, and on a *public* repo its reads still
+  succeed — so a write 403s while `gh api repos/<org>/<public-repo>` looks
+  fine, which is exactly how a correct installation gets reported as a
+  missing permission. Check, in this order:
+  1. does the call carry owner context at all (path, `-R`, or cwd)? If
+     not, re-run it as `GH_TOKEN="$(gh-org-token <orgslug>)" gh api …`;
+  2. probe with a **PRIVATE** org repo read — 200 under the org token,
+     404 under the personal one. A public repo proves nothing;
+  3. read the GRANTED permissions with a USER token:
+     `gh api /orgs/<org>/installations --jq '.installations[] | {app_slug,permissions}'`.
+     The App's own token cannot read that endpoint (404 either way).
+  Only if (3) shows the permission genuinely absent is it an owner-side
+  fix. `mise run test` exercises this routing offline; the shim's own
+  header carries the same note.
+- **Cross-owner searches are the one sharp edge**: from inside an org
+  worktree, `gh search` runs under the ORG token and CANNOT see
+  personal repos (and vice versa from a personal worktree), and a
+  search's `--owner` is a filter the shim does not route on (one search
+  can span owners). For an ad-hoc cross-owner search, set the token
+  yourself: `GH_TOKEN="$(gh-org-token <orgslug>)" gh search …`.
+  The self-pull queue scripts already do this per owner
+  (`TEAM_OWNER_ORGS`).
 - **git routes through `git-credential-hermes.sh`**: an org-owned
   remote gets the org token; anything else replays into
   `gh auth git-credential` (personal, unchanged). No action needed —
@@ -117,17 +151,6 @@ with (any number of orgs — e.g. `acmecorp-hermes-*[bot]` for an org
   re-installed (new installation id) the cache invalidates itself; a
   stale one after a PEM rotation is cleared by deleting
   `<slug>.token`.
-- **Cross-owner searches are the one sharp edge**: from inside an org
-  worktree, `gh search` runs under the ORG token and CANNOT see
-  personal repos (and vice versa from a personal worktree). For an
-  ad-hoc cross-owner search carry `-R <owner>/<repo>` or set the token
-  yourself: `GH_TOKEN="$(gh-org-token <orgslug>)" gh search …`.
-  The self-pull queue scripts already do this per owner
-  (`TEAM_OWNER_ORGS`).
-- **404/403 from `gh api repos/<org>/<repo>`** on an org repo usually
-  means the org App installation doesn't cover that repo — probe with
-  `gh api repos/<org>/<repo> --jq .full_name` before assuming the
-  token is broken.
 
 **Git repos live centrally — worktree per session, never clone.**
 One bare clone per repo sits in `/opt/data/repos/<host>/<owner>/<repo>.git`

@@ -1,7 +1,7 @@
 ---
 name: team-planner
 description: Planner role procedure — issue authoring, per-repo boards, standup/sprint cadence, roadblock intake
-version: 1.0.0
+version: 1.1.0
 metadata:
   hermes:
     tags: [team, planner, pm, design]
@@ -62,7 +62,7 @@ Moving the issue to Ready *is* the routing: `status/ready` is
 developer's queue.
 
 ```bash
-gh issue edit owner/repo#N --add-label status/ready
+gh issue edit <n> --repo owner/repo --add-label status/ready
 ```
 
 Developer discovers routed work via its self-pull cron and claims it by
@@ -74,7 +74,7 @@ non-trivial specs).
 done:
 
 ```bash
-gh issue view owner/repo#N --json labels --jq '.labels[].name'
+gh issue view <n> --repo owner/repo --json labels --jq '.labels[].name'
 ```
 
 The handoff is silent by design, so a label that failed to apply leaves

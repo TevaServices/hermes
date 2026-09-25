@@ -462,8 +462,21 @@ repo owner.**
   mint per org per profile fails loudly. An org with ids but no
   installation id or no PEM is skipped with a boot warning.
 - **Routing**: `/usr/local/bin/gh` is a SHIM (real binary `gh-real`) that
-  picks the org token when `-R`/cwd resolves to an owner with a
-  descriptor — `gh auth *` and `GH_TOKEN`-set calls always pass through.
+  picks the org token when it can resolve the invocation's target owner
+  to one with a descriptor, from three sources in order: a `-R`/`--repo`
+  argument (every spelling gh accepts), a `gh api` ENDPOINT PATH
+  (`repos/<owner>/…`, `orgs/<owner>` — `gh api` takes no `-R`, so from a
+  scratch dir the path is the only signal), or the cwd's git origin.
+  `gh auth *` and `GH_TOKEN`-set calls always pass through.
+  **A 403 `Resource not accessible by integration` on an org repo means
+  the personal token went out — not that a permission is missing**: the
+  personal App has no installation on the org, while its reads of a
+  public repo still succeed, so the write 403s and a public-repo probe
+  "confirms" a gap that is not there. The granted set is only readable
+  with a USER token (`gh api /orgs/<org>/installations`; the App's own
+  token 404s regardless). `mise run test` covers this routing offline —
+  `scripts/test-gh-shim.sh`, which stubs `gh-real` via the shim's
+  `GH_REAL` seam.
   git's single credential helper is `git-credential-hermes.sh`
   (`credential.https://github.com.helper` + `useHttpPath=true`): org
   remote → org token; otherwise it replays the request into
@@ -1283,8 +1296,20 @@ docker logs hermes-main 2>&1 | grep -E 'org (creds|token)' | tail -12
 # remote still works, an unknown owner falls through
 docker exec -e HOME=/opt/data/home hermes-main \
   git ls-remote https://github.com/<org>/<private-repo>.git HEAD
-# gh shim: org target -> org token; auth/GH_TOKEN always passthrough
-docker exec -e HOME=/opt/data/home hermes-main gh api repos/<org>/<repo> --jq .full_name
+# gh shim routing: an org target must resolve to the ORG token. Probe with a
+# PRIVATE org repo from a non-git cwd (docker exec's cwd is /) — a public
+# repo proves nothing, because reads pass under BOTH tokens.
+docker exec -e HOME=/opt/data/home hermes-main \
+  sh -c 'cd /tmp && gh api repos/<org>/<private-repo> --jq .full_name'
+#   -> <org>/<private-repo>. A 404 means the PERSONAL token went out: the
+#      call carried no owner context, not a missing permission. `gh api`
+#      takes no -R, so the owner must be in the endpoint path
+#      (`repos/<org>/…`) or passed as GH_TOKEN="$(gh-org-token <orgslug>)".
+# What each installation is actually GRANTED (user token; the App's own
+# token 404s on this endpoint whatever is granted):
+gh api /orgs/<org>/installations --jq '.installations[] | {app_slug, permissions}'
+# Routing logic itself, offline — no Docker, no network:
+mise run test
 docker exec hermes-main gh auth status          # shim passthrough
 ```
 

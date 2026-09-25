@@ -1,7 +1,7 @@
 ---
 name: team-github-token
-description: Select the right GitHub App installation token for a repo (owner → GH_TOKEN_<ACCOUNT> mapping)
-version: 1.0.0
+description: Which GitHub App identity a gh/git command runs as (owner routing), and what a 403 on an org repo actually means
+version: 2.0.0
 metadata:
   hermes:
     tags: [github, tokens, team]
@@ -10,45 +10,75 @@ metadata:
 
 # GitHub token selection for team roles
 
-The team's GitHub Apps are installed once per account/org (user
-accounts and organizations). Each installation has its own
-installation-token env var: `GH_TOKEN_<ACCOUNT>` with the account name
-upper-cased and non-alphanumerics replaced by `_` (e.g. account
-`acme-corp` → `GH_TOKEN_ACME_CORP`).
+**You do not pick tokens by hand for ordinary work.** There is no
+`GH_TOKEN_<ACCOUNT>` variable to export and no token file to read: the
+stack routes automatically.
 
-## Procedure
+`/usr/local/bin/gh` is a shim (the real CLI is `gh-real`). It runs your
+command under the ORG App installation token when it can resolve the
+command's target owner to an org you hold credentials for, and under the
+profile's personal App token otherwise. git routes the same way through
+`git-credential-hermes.sh`. Both read descriptors in your tool-home
+(`$HOME/org-creds/<orgslug>.env` + `.pem`) — a file layout, because
+Hermes strips credential env vars from tool subprocesses
+(GHSA-rhgp-j443-p4rf).
 
-1. Determine the repo's owner from `owner/repo`.
-2. Export the matching variable for the gh/git call. **Hermes strips
-   credential env vars from tool subprocesses by design** (GHSA
-   rhgp-j443-p4rf) — plain `export GH_TOKEN=…` before a `terminal()`
-   call does not reach gh. Instead, write the token to a temp file with
-   a tool that can, or pass it via `gh`'s `--hostname` config:
+## The shim can see the owner when the command carries it
 
-   ```bash
-   # inside terminal():
-   grep -oP '(?<=^GH_TOKEN_<OWNER>=).*' "$HERMES_HOME/.env" > /tmp/tok
-   gh auth status
-   # per-call: GH_TOKEN="$(cat /tmp/tok)" gh api …   # works: env is
-   # set INSIDE the shell process, not inherited from the agent
-   shred -u /tmp/tok   # when done with the batch
-   ```
+1. `-R`/`--repo owner/repo` — every spelling gh accepts (`-R x/y`,
+   `-R=x/y`, `-Rx/y`, `--repo x/y`);
+2. for `gh api`, the ENDPOINT PATH: `repos/<owner>/…` or `orgs/<owner>`.
+   `gh api` takes no `-R` (gh rejects it), so the path is the only owner
+   signal a REST call carries;
+3. the cwd's git origin — which is why an org worktree usually "just
+   works".
 
-   Setting the var **inside the terminal command** (`VAR=x gh …`) is
-   reliable; setting it in the agent process is not.
+Put the owner in the path (or pass `-R` where gh supports it) and you
+never think about tokens.
 
-3. If the variable is missing or the call 401s/403s, the repo's owner
-   probably has no installation for your App yet — do not fall back to
-   another App's identity. Report it to the user (or, for planner:
-   flag it in the onboarding checklist) and move on.
-4. Never log, echo, or commit token values. Temp-token files live under
-   `/tmp` and are deleted immediately after the batch of calls.
+## When it cannot see the owner, force the identity
+
+`gh api graphql`, `gh search` (its `--owner` is a filter, not routing),
+`gh api` with no owner in the path, and any command run from a scratch
+directory. Then name the token yourself:
+
+```bash
+GH_TOKEN="$(gh-org-token <orgslug>)" gh api graphql -f query='…'
+```
+
+- Setting the var **inside** the command is what works. Hermes strips
+  credential env vars from tool subprocesses, so an `export` in one
+  `terminal()` call does not reach the next one.
+- `gh-org-token <orgslug>` prints a cached (~45 min) installation token,
+  minting a fresh one from the descriptor's PEM when needed. Never log or
+  echo its output — pipe it straight into the call.
+
+## A 403 `Resource not accessible by integration` is a TOKEN question first
+
+The personal App has no installation on an org, so on an org repo its
+**writes** 403 while its reads of a *public* repo still succeed — which
+is exactly how a correctly-granted installation gets reported as a
+missing permission. Do not report a missing App permission until you have
+walked this order:
+
+1. **Did the call carry owner context at all?** A scratch-dir `gh api
+   repos/<org>/<repo>/…` did not, before the path was read. Re-run with
+   `GH_TOKEN="$(gh-org-token <orgslug>)"` and see if the 403 survives.
+2. **Probe with a PRIVATE org repo read.** 200 = the org token is in
+   play; 404 = you are on the personal token. A public repo proves
+   nothing (reads pass under both).
+3. **Read what is actually GRANTED**, with a user token:
+   `gh api /orgs/<org>/installations --jq '.installations[] | {app_slug,permissions}'`.
+   The App's own token cannot read that endpoint — it returns 404
+   whatever is granted, so it can tell you nothing.
+
+Only step 3 showing the permission absent makes it an owner-side fix.
 
 ## Which App am I?
 
 The entrypoint provisions each profile with its own App credentials
 (`GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`,
 `GITHUB_APP_PRIVATE_KEY_PATH`) and keeps the gh CLI in this profile's
-tool-home logged in with the default installation's token. For
-cross-installation work use the explicit `GH_TOKEN_<ACCOUNT>` vars —
-the profile's stored gh auth covers only its primary installation.
+tool-home logged in with the personal App's installation token. The org
+descriptors are a SECOND set alongside it — never fall back to another
+App's identity to make a call work: report the gap instead.

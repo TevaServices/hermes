@@ -1,7 +1,7 @@
 ---
 name: team-reviewer
 description: Reviewer gate set — fixed checklist (security, tests, style, testability), verdicts, merge protocol
-version: 1.1.0
+version: 1.2.0
 metadata:
   hermes:
     tags: [team, reviewer, review-gates]
@@ -28,8 +28,8 @@ own it re-lists every open PR on every tick, including ones you already
 reviewed — the label is what makes the queue finite and poll-safe.
 
 ```bash
-# find review work — run per installation/account with that account's
-# token (GH_TOKEN_<ACCOUNT>; see team-github-token)
+# find review work — the owner comes from the repo/token routing the
+# shim and the queue script already do (see team-github-token)
 review-queue.sh
 
 # claim the PR you picked (same turn, BEFORE reviewing)
