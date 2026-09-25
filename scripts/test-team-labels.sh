@@ -164,6 +164,12 @@ cat > "$tmp/bin/gh" <<'STUB'
 #!/bin/sh
 args="$*"
 case "$args" in
+    # An unresolvable author fails the WHOLE query ("Invalid search query …
+    # The listed users cannot be searched"). The stub reproduces that exactly,
+    # because the fallback it triggers is the thing under test.
+    *"--author hermes-dev[bot]"*)
+        echo "Invalid search query. The listed users cannot be searched." >&2
+        exit 1 ;;
     # the foreign-label scan: the one call that asks for this json shape.
     # STUB_FOREIGN=2 returns TWO items in gh's own (relevance, unstable)
     # order — deliberately reversed, to prove the guard sorts them.
@@ -175,6 +181,9 @@ case "$args" in
         ;;
     # the queue search: nothing routed (the misfiled item is invisible)
     *"--label status/in-progress"*|*"--label status/ready"*) ;;
+    # the PR queue search: one item, so a dropped filter is visible in output
+    *"--label review/in-progress"*|*"--label review/ready"*)
+        printf 'bcross/mach#27  Fix the thing  https://github.com/bcross/mach/pull/27\n' ;;
     # the blind check ("can this token see anything at all?")
     *"--limit 1"*"--json number"*) printf '2\n' ;;
     # the onboarded-repo topic search
@@ -193,14 +202,16 @@ exit 0
 STUB
 chmod 0755 "$tmp/bin/gh"
 
-run_queue() {  # run_queue <foreign 0|1|2> [--verbose] [TEAM_OWNER_ORGS]
+run_queue() {  # run_queue <foreign 0|1|2> [--verbose] [TEAM_OWNER_ORGS] [kind] [TEAM_OWNER_DEV_BOT]
     # TEAM_* is set to empty on purpose: on the deployed host compose injects
     # the stack environment into EVERY process (env_file:), so an unset-but-
     # present TEAM_OWNER_ORGS would add an org owner with no credentials here
     # — which is exactly how this test first failed in the container.
+    kind="${4:-}"
     HOME="$tmp/home" HERMES_HOME="$tmp/home" TEAM_OWNER=bcross \
-    TEAM_OWNER_ORGS="${3:-}" STUB_FOREIGN="$1" PATH="$tmp/bin:/bin:/usr/bin" \
-    sh "$tmp/queue/team-queue.sh" ${2:-}
+    TEAM_OWNER_ORGS="${3:-}" TEAM_OWNER_DEV_BOT="${5:-}" \
+    STUB_FOREIGN="$1" PATH="$tmp/bin:/bin:/usr/bin" \
+    sh "$tmp/queue/team-queue.sh" ${kind:+--kind "$kind"} ${2:-}
 }
 
 out=$(run_queue 1)
@@ -263,6 +274,43 @@ case "$out" in
     *"FOREIGN LABEL"*"bcross/mach#26"*)
         ok "guard reports its finding even when an owner's creds fail" ;;
     *)  bad "an unresolvable owner suppressed the guard (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))" ;;
+esac
+
+# --- 5. the author filter is DECLARED, not assumed -------------------------
+# It shipped as a hardcoded `hermes-dev[bot]` default, which was right only
+# while the team's repos lived under the personal account. Once they moved to
+# an org that login stopped resolving — and an unresolvable author fails the
+# WHOLE query, so every reviewer run took the fallback and announced AUTHOR
+# FILTER DROPPED on a queue that was working correctly. A login in the source
+# cannot be fixed by an operator; a variable can.
+if grep -qE '\$\{[A-Za-z_]+:-[^}]*\[bot\]\}' "$queue"; then
+    bad "a bot login is hardcoded as a default: $(grep -nE '\$\{[A-Za-z_]+:-[^}]*\[bot\]\}' "$queue" | head -1)"
+else
+    ok "no bot login is hardcoded as a default (author filters are declared)"
+fi
+
+# The PR lane with no declared author: unfiltered, and NO complaint about it.
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 --verbose "" prs "")
+case "$out" in
+    *"AUTHOR FILTER DROPPED"*)
+        bad "PR lane complains about an author filter it was never given" ;;
+    *"bcross/mach#27"*)
+        ok "PR lane runs unfiltered when no author is declared" ;;
+    *)  bad "PR lane listed nothing (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))" ;;
+esac
+
+# A DECLARED filter that has gone stale still widens loudly rather than dying
+# — that safety net is the reason the hardcoded default could be dropped.
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 --verbose "" prs "hermes-dev[bot]")
+case "$out" in
+    *"AUTHOR FILTER DROPPED"*) ok "a stale declared filter is reported, not fatal" ;;
+    *)  bad "a stale declared filter was swallowed" ;;
+esac
+case "$out" in
+    *"bcross/mach#27"*) ok "work still flows under a stale declared filter" ;;
+    *)  bad "a stale declared filter emptied the queue" ;;
 esac
 
 # --- summary ---------------------------------------------------------------

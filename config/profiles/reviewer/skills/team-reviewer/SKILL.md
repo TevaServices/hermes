@@ -54,9 +54,18 @@ below and prints one line per PR, `owner/repo#N  title  url`:
 
 ```bash
 gh search prs --owner <owner> --label review/ready --state open \
-  --author 'hermes-dev[bot]' \
   --limit 30 --json repository,number,title,url
 ```
+
+**The author filter is the script's business, not this query's.** Per owner
+it applies a *declared* login — `TEAM_OWNER_DEV_BOT` for the personal
+owner, `TEAM_ORG_DEV_BOT_<ORG>` for an org — and applies none when neither
+is set. Do not hardcode a developer-bot login into a query of your own: a
+login compiled into a command goes stale the moment the repos move, and
+`author:<unknown-user>` fails the WHOLE search rather than narrowing it. To
+tie a PR back to the developer's work, use the link GitHub already has
+(`gh issue view <ISSUE#> --json closedByPullRequestsReferences`) rather than
+filtering by author.
 
 (Note the **space** in `--author` / `--state`: the `--author:` colon
 form is not valid gh syntax and fails every run, which looks exactly

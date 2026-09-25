@@ -131,7 +131,11 @@
 #      than searching all of GitHub), TEAM_OWNER_ORGS (optional, org
 #      owners for the org Apps), TEAM_ORG_DEV_BOT_<ORG> (the org
 #      developer bot login — author filter for org PR searches;
-#      provisioning's env-lines emits it), TEAM_QUEUE_LABEL, TEAM_TOPIC
+#      provisioning's env-lines emits it), TEAM_OWNER_DEV_BOT (the same
+#      for the PERSONAL owner; unset = no author filter, which is the
+#      default and the right answer once the personal dev App is
+#      vestigial — a login that stops resolving fails the whole query and
+#      is reported as AUTHOR FILTER DROPPED), TEAM_QUEUE_LABEL, TEAM_TOPIC
 #      (default hermes-team), HERMES_HOME (for the dedupe state file),
 #      TEAM_SESSION_TTL (seconds of session silence before an item stops
 #      counting as held; default 600 — see team-session.py),
@@ -467,23 +471,29 @@ clear_state_unless_degraded() {
 # Only the PR queue is author-scoped (the reviewer reviews the dev bot's
 # work); the issue queue is label-only. AUTHOR_OPT is deliberately
 # unquoted at the call site — it is a pre-split "flag value" pair.
-# The personal owner keeps the classic default author; an org owner uses
-# TEAM_ORG_DEV_BOT_<ORGUC> (set by provisioning), or no author filter
-# when that is unset (the org PRs then come from every author — a wider
-# net, never a narrower one).
+# The personal owner's bot login is DECLARED too — TEAM_OWNER_DEV_BOT — not
+# assumed. It used to default to the literal `hermes-dev[bot]`, which was
+# correct only while the team's repos lived under the personal account: once
+# they moved to an org the login stopped resolving, and since an unresolvable
+# author fails the WHOLE query (see below) every reviewer run took the
+# fallback path and announced `AUTHOR FILTER DROPPED` on a queue that was
+# working exactly as it should. A hardcoded login is a standing fault the
+# moment the account layout moves; a variable is a knob. Unset = no filter,
+# which is the same "wider net, never a narrower one" the org path already
+# chose, and the label is the real routing either way.
 #
-# The same principle covers a filter that is present but UNRESOLVABLE,
-# which is what an author login becomes once its App loses the repos it was
-# installed on. GitHub answers `author:<login>` for an unknown or unviewable
-# user with "Invalid search query … The listed users cannot be searched"
-# (gh exit 1) — a failure of the WHOLE query, so the queue dies with it.
-# Observed 2026-09-25: the personal `hermes-dev[bot]` stopped resolving
-# after its repos moved to an org, and every reviewer run died as "QUEUE
-# BROKEN" while its org half was perfectly healthy. So the search is retried
-# WITHOUT the filter: a wider net is recoverable, a dead queue is not. The
-# notice below is what keeps the widening visible instead of silent.
+# The fallback below still matters for a DECLARED filter that goes stale —
+# an App that loses the repos it was installed on. GitHub answers
+# `author:<login>` for an unknown or unviewable user with "Invalid search
+# query … The listed users cannot be searched" (gh exit 1) — a failure of
+# the WHOLE query, so the queue dies with it. Observed 2026-09-25: the
+# personal `hermes-dev[bot]` stopped resolving after its repos moved to an
+# org, and every reviewer run died as "QUEUE BROKEN" while its org half was
+# perfectly healthy. So the search is retried WITHOUT the filter: a wider net
+# is recoverable, a dead queue is not. The notice below is what keeps the
+# widening visible instead of silent.
 if [ "$KIND" = "prs" ]; then
-    AUTHOR="${AUTHOR:-hermes-dev[bot]}"
+    AUTHOR="${AUTHOR:-${TEAM_OWNER_DEV_BOT:-}}"
 fi
 
 run_queue_search() {  # run_queue_search <owner> <label> <author_opt>

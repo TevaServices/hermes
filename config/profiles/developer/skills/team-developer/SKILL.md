@@ -56,11 +56,25 @@ gh search issues --owner <owner> --label status/ready --state open \
 
 An issue still carrying `status/ready` is **unclaimed** — the cron will
 hand it to you again, so claim it in the same turn you pick it up. A
-second guard against double-starting on cron re-wakes: skip anything
-whose repo+number already has an open PR authored by you
-(`gh search prs --author 'hermes-dev[bot]' --state open` — note
-the space, not `--author:`, which is not valid gh syntax). Pick oldest
-first. Post one line to `#dev` when you pick work up.
+second guard against double-starting on cron re-wakes: skip an issue that
+already has an open PR closing it —
+
+```bash
+gh pr list --repo <owner>/<repo> --state open --limit 50 \
+  --json number,isDraft,body \
+  --jq '.[] | select((.body // "") | test("(?i)closes #<ISSUE#>\\b")) | "PR #\(.number) draft=\(.isDraft)"'
+```
+
+(That is the same idiom the queue script's own handoff audit uses, so the
+two can never disagree about what "already has a PR" means.)
+
+**Do not filter that check by author.** A named bot login goes stale — a
+login that stops resolving fails the WHOLE search rather than narrowing it,
+which is exactly how `hermes-dev[bot]` broke the queues once the repos moved
+to an org — and `--author '@me'` is not a substitute: an App installation
+token has no user identity (`gh api /user` → 403), so `@me` matches nothing
+**silently**, which would turn this guard into a no-op. Pick oldest first.
+Post one line to `#dev` when you pick work up.
 
 If the cron handed you a specific issue in its prompt, start there —
 the query above is the fallback.
