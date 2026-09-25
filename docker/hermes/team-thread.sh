@@ -30,7 +30,13 @@
 #   team-thread.sh list                  show tracked threads
 #   team-thread.sh id    <key>           print the tracked thread id, if any
 #
-# <key> identifies the work item: <owner>/<repo>#<n>, e.g. <owner>/mach#7.
+# <key> identifies the work item: <owner>/<repo>#<n>, e.g. <owner>/mach#7,
+# where <n> is the ISSUE number — always, including for the reviewer, whose
+# queue prints PR numbers. The sweep below resolves every key as an issue
+# (`Closes #N` is what closes it on merge), so a thread opened with a PR
+# number is archived against an unrelated issue or never archived at all.
+# The reviewer maps PR -> issue from the PR body:
+#   gh pr view <PR#> --json body --jq '.body | capture("(?i)closes #(?<n>[0-9]+)").n'
 #
 # Exit: 0 ok; 2 could not resolve credentials/channel; 3 the API refused;
 #       4 no such tracked thread. Never fails silently.

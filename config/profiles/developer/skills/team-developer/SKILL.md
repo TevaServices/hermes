@@ -31,10 +31,19 @@ The planner routes by adding the label; you claim by moving it:
 # shim and the queue script already do (see team-github-token)
 team-queue.sh
 
-# claim the issue you picked (same turn, BEFORE starting work)
-gh issue edit <n> --repo owner/repo --remove-label status/ready \
+# claim the ISSUE you picked (same turn, BEFORE starting work)
+gh issue edit <ISSUE#> --repo owner/repo --remove-label status/ready \
   --add-label status/in-progress
 ```
+
+**Two families, two objects.** `status/*` labels go on the **issue**
+(`gh issue edit`); `review/*` labels go on the **PR** (`gh pr edit`).
+They are different numbers for one work item — the queue prints issue
+numbers, and the PR you open for an issue is a different number joined to
+it by `Closes #N`. Never write a `review/*` label to an issue, and never
+put a `status/*` label on a PR: each queue polls one family on one object
+kind, so a misfiled label makes the item invisible to *both* lanes. The
+queues report the mismatch (`!! FOREIGN LABEL`) rather than let it sit.
 
 `team-queue.sh` wraps the query below (it is baked at
 `/usr/local/bin/team-queue.sh`) and prints one line per issue,
@@ -190,7 +199,7 @@ the target repo's conventions allow.
    confirms it actually landed.
 3. Verify before marking ready: tests, lint, type checks — whatever the
    repo's CI runs, run locally. If CI exists, watch it green — and read
-   `gh pr checks <n>` for **every** job, not only the ones your local
+   `gh pr checks <PR#>` for **every** job, not only the ones your local
    suite mirrors. A policy job (DCO sign-off, license header, commit
    format) fails the PR exactly as hard as a red test, and it is
    precisely the job a local run cannot tell you about.
@@ -199,19 +208,36 @@ the target repo's conventions allow.
    (`gh pr edit --add-reviewer 'hermes-reviewer[bot]'` fails with
    "GraphQL: Could not resolve user"; the REST endpoint returns 201 and
    silently drops it). `gh pr ready` alone only clears the draft flag —
-   the reviewer polls `review/ready`, so both are needed:
+   the reviewer polls `review/ready`, so both are needed. Two commands,
+   **two different numbers**: the card (an issue) and the PR are separate
+   objects.
 
    ```bash
-   gh pr ready <n> --repo owner/repo
-   gh pr edit <n> --repo owner/repo --add-label review/ready
+   # the ISSUE's card state — status/* belongs on the issue
+   gh issue edit <ISSUE#> --repo owner/repo \
+     --remove-label status/in-progress --add-label status/in-review
+   # the PR handoff — review/* belongs on the PR
+   gh pr ready <PR#> --repo owner/repo
+   gh pr edit <PR#> --repo owner/repo --add-label review/ready
    ```
 
-   Reviewer claims it by swapping the label to `review/in-progress`, so
-   a PR still carrying `review/ready` is unreviewed and untouched. Move
-   the card to In Review (or ask planner to).
+   Reviewer claims it by swapping the PR's label to `review/in-progress`,
+   so a PR still carrying `review/ready` is unreviewed and untouched.
+   **A handoff never touches the issue's `status/*` label beyond that
+   move, and never puts a `review/*` label on the issue** — an issue
+   carrying `review/ready` is invisible to both queues (yours polls
+   issues by `status/*`, the reviewer's polls PRs), which is the state
+   `!! FOREIGN LABEL` reports.
 5. `review/changes` from reviewer → fix on the same branch (the PR
-   re-opens as draft), re-verify, then hand off AGAIN: `gh pr ready` plus
-   `gh pr edit --add-label review/ready --remove-label review/changes`.
+   re-opens as draft), re-verify, then hand off AGAIN — the PR's labels
+   only (the issue is already In Review):
+
+   ```bash
+   gh pr ready <PR#> --repo owner/repo
+   gh pr edit <PR#> --repo owner/repo \
+     --add-label review/ready --remove-label review/changes
+   ```
+
    The re-added label is what wakes the reviewer for the second pass —
    without it the fix sits invisible, because the reviewer's queue is
    the label and nothing else. Comment what changed per point if the fix

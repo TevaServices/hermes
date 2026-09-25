@@ -33,9 +33,18 @@ reviewed — the label is what makes the queue finite and poll-safe.
 review-queue.sh
 
 # claim the PR you picked (same turn, BEFORE reviewing)
-gh pr edit <n> --repo owner/repo --remove-label review/ready \
+gh pr edit <PR#> --repo owner/repo --remove-label review/ready \
   --add-label review/in-progress
 ```
+
+**Every label command in this skill is `gh pr edit <PR#>`.** The
+`status/*` family belongs to issues and to planner/developer — you never
+write one and you never run `gh issue edit` at all. A review is judged on
+the PR; if a verdict implies a card change, ask planner (see "The verdict
+and the loop back"). `review-queue.sh` prints PR numbers; the *issue* the
+PR closes is a different number, readable from the PR body
+(`Closes #<issue#>`) — that number is the work-item key you open the
+thread with, and it is never a label target here.
 
 `review-queue.sh` is **quiet by default** — that is the cron contract
 (the scheduler invokes it with no arguments), so an empty run prints
@@ -67,14 +76,20 @@ verdict into it — one thread per work item, and the developer may have its
 own in `#dev` for the same item:
 
 ```bash
-team-thread.sh open "owner/repo#N" "#N · review"
-team-thread.sh post "owner/repo#N" "gates: … verdict: …"
+# key with the ISSUE number, not the PR number: the queue prints PRs, but
+# team-thread.sh's sweep resolves every key as an issue (that is where
+# "done" lives — `Closes #N` closes the issue on merge). Open with the PR
+# number and the thread is archived against an unrelated issue, or never.
+issue=$(gh pr view <PR#> --repo owner/repo --json body \
+          --jq '.body | capture("(?i)closes #(?<n>[0-9]+)").n')
+team-thread.sh open "owner/repo#$issue" "#$issue · review"
+team-thread.sh post "owner/repo#$issue" "gates: … verdict: …"
 ```
 
 Keep it open until the PR is **merged**. On merge the issue auto-closes
 (`Closes #N`) and the queue script's sweep archives the thread; when YOU
 merge, that sweep is what closes it, so you do not need to close it by
-hand. Use `team-thread.sh close "owner/repo#N"` only if the item is
+hand. Use `team-thread.sh close "owner/repo#$issue"` only if the item is
 abandoned or duplicated.
 
 `team-thread.sh` speaks as your own bot (it reads the token and the
@@ -83,12 +98,25 @@ never appear under another role's identity.
 
 ### The verdict and the loop back
 
-- **Pass**: `gh pr review <n> --approve`, then
-  `gh pr edit <n> --remove-label review/in-progress --add-label review/approved`,
+Every command here is on the PR (`<PR#>` is the number
+`review-queue.sh` printed):
+
+- **Pass**: `gh pr review <PR#> --approve`, then
+  `gh pr edit <PR#> --remove-label review/in-progress --add-label review/approved`,
   then request the user's review (`--add-reviewer <owner>` — a HUMAN, which
   works) and post the verdict into the item's thread.
-- **Fail**: `gh pr review <n> --request-changes -b '<issues explained>'`,
+- **Fail**: `gh pr review <PR#> --request-changes -b '<issues explained>'`,
   then swap `review/in-progress` → `review/changes`.
+
+**The card is not yours to move.** Neither verdict writes a `status/*`
+label or touches the issue. The card follows from the verdict, so say
+which way it should go to planner in the same turn — one comment on the
+PR naming `@hermes-planner` and the card state it implies is enough
+(planner's roadblock intake is the channel for exactly this). Writing
+`status/in-progress` here is the mistake this skill exists to prevent: on
+a label-mechanism repo it is the developer's own claim/**resume** label,
+so the developer's next self-pull reads the item as its own interrupted
+turn, moves it back, and the two of you trade the same issue every tick.
 
 Developer fixes and hands back by re-adding `review/ready` (it removes
 `review/changes` at the same time) — that label re-add is what wakes you
@@ -165,11 +193,15 @@ never author a fix.
 - **Request changes**: one GitHub review; every finding as a separate
   comment anchored to the line, each stating: what, why it violates a
   gate (name the gate number), and what a correct fix looks like. Top
-  comment summarizes. Card → In Progress (or tell planner).
+  comment summarizes, and names the card state in the same comment
+  (`@hermes-planner` — back to In Progress). **Do not write the label.**
 - **Approve**: approve + `gh pr ready` + request the user's review
   (`gh pr edit --add-reviewer <owner>` where possible; otherwise
   cc @<owner> in a comment). Comment gates-passed summary (one line per
-  gate). Card → In Review/human-gate. Post verdict to `#reviews`.
+  gate), naming the card state it implies (`@hermes-planner` — In
+  Review/human gate). Post verdict to `#reviews`. **Do not write a
+  `status/*` label and do not edit the issue** — the reviewer's writes
+  are `review/*` on this PR, nothing else.
 
 ## Merge protocol (only after the user)
 
@@ -181,7 +213,9 @@ planner). Then:
    approval.
 2. Merge per repo convention (registry: merge commit | squash) with
    your reviewer identity.
-3. Card → Done; `#reviews` post: merged, link.
+3. `#reviews` post: merged, link. The merge closes the issue via
+   `Closes #N`, which is the state change that counts; planner moves the
+   card to Done — ask in the same post rather than writing the label.
 
 If the user flags changes: convert each flag into review comments
 (explained like any Request-changes finding) → back to developer.

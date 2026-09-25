@@ -44,11 +44,12 @@ entrypoint from the profile env).
    decision in the PR/issue, hands the information to planner via a
    GitHub comment `@hermes-planner` (planner may surface it to
    the user on Discord; developer never messages the user directly).
-5. **Review** → developer marks the PR ready (`gh pr ready`) AND labels
-   it `review/ready` — **the label is the handoff**, because bot
-   identities cannot be requested as PR reviewers (the request is
-   rejected, and the REST form silently drops it). Reviewer claims it by
-   swapping to `review/in-progress`, then runs the gates
+5. **Review** → developer moves the ISSUE to `status/in-review`, marks the
+   PR ready (`gh pr ready`) and labels **the PR** `review/ready` — **the
+   label is the handoff**, because bot identities cannot be requested as
+   PR reviewers (the request is rejected, and the REST form silently
+   drops it). Reviewer claims it by swapping the PR's label to
+   `review/in-progress`, then runs the gates
    (`team-reviewer` skill): pass = approve + `review/approved` +
    request the user's review; fail = "Request changes" + `review/changes`
    with issues explained, back to developer. A developer fix re-adds
@@ -56,8 +57,9 @@ entrypoint from the profile env).
    never merge a fix silently.
 6. **Human gate** → the user reviews → reviewer merges (only reviewer
    merges) or routes the user's flags back to developer.
-7. Issue auto-closes via `Closes #N`; reviewer/board updates status to
-   Done.
+7. Issue auto-closes via `Closes #N` on merge; planner moves the card to
+   Done. (The close is the state change that matters; the label is
+   bookkeeping, and it is not the reviewer's to write.)
 
 ## Boards and status labels
 
@@ -70,9 +72,11 @@ entrypoint from the profile env).
   `status/in-review`, `status/blocked`, `status/done` — same lifecycle,
   same semantics. The onboarding procedure creates the label set and
   records which mechanism the repo uses.
-- Moving items through columns/labels is planner's job (developer and
-  reviewer do it for their own cards when a self-serve step is natural,
-  e.g. developer sets In Progress when starting a card).
+- Moving items through columns/labels is planner's job. Developer moves
+  its own card where a self-serve step is natural (it sets In Progress on
+  claim, and In Review when it hands off). **Reviewer moves no card at
+  all**: it judges on the PR and asks planner (see the routing-label
+  rules below).
 
 ### The routing labels (these ARE the queues)
 
@@ -81,17 +85,69 @@ are impossible for App bot identities. Each handoff is a label that the
 receiving role polls and then *consumes*, which is also what stops a
 queue from re-serving the same item every tick:
 
-| Label | On | Means | Owner moves it to |
+| Label | On | Added by | Removed by |
 |---|---|---|---|
-| `status/ready` | issue | routed to developer | `status/in-progress` (on claim) |
-| `status/blocked` | issue | needs a decision | — (planner/the user) |
-| `review/ready` | PR | routed to reviewer | `review/in-progress` (on claim) |
-| `review/changes` | PR | back with developer | re-add `review/ready` when fixed |
-| `review/approved` | PR | waiting on the user | — (reviewer merges on approval) |
+| `status/backlog` | issue | planner | planner |
+| `status/ready` | issue | planner (routing) | planner, developer (on claim) |
+| `status/in-progress` | issue | developer (on claim) | developer (on handoff) |
+| `status/in-review` | issue | developer (on handoff) | planner |
+| `status/blocked` | issue | planner, developer | planner |
+| `status/done` | issue | planner | planner |
+| `review/ready` | PR | developer (handoff) | reviewer (on claim) |
+| `review/in-progress` | PR | reviewer (on claim) | reviewer (on verdict) |
+| `review/changes` | PR | reviewer (verdict) | developer (on re-handoff) |
+| `review/approved` | PR | reviewer (verdict) | — (terminal) |
+
+**Two families, two objects, and the object is half the rule.** The
+`status/*` family belongs to ISSUES and the `review/*` family to PULL
+REQUESTS — `gh issue edit` writes the first, `gh pr edit` the second,
+and the two numbers for one work item are *different* (the issue and the
+PR it is closed by). A `review/*` label on an issue and a `status/*`
+label on a PR are both faults, not untidiness: each queue polls one
+family on one object kind, so a misfiled label makes the work item
+invisible to *both* lanes while it still looks busy. That happened here
+(2026-09-25, an issue left carrying `review/ready` and no `status/*`),
+it flip-flopped for hours, and the guard below is what reports it.
+
+```bash
+# which object am I writing?
+#   status/*  -> the ISSUE      gh issue edit <ISSUE#> --add-label status/…
+#   review/*  -> the PR         gh pr edit    <PR#>    --add-label review/…
+# the PR for an issue (the reviewer's whole surface is the PR):
+gh pr list --repo <owner>/<repo> --state open \
+  --json number,body --jq '.[] | select(.body | test("(?i)closes #<ISSUE#>")) | .number'
+```
+
+**Who may write what.** A profile writes only what it owns:
+
+- `status/*` is **planner's and developer's**. Planner routes and keeps
+  the board honest; developer claims, hands off, and flags blocked.
+- `review/*` is **developer's to hand off and reviewer's to judge**:
+  developer adds `review/ready` and drops `review/changes`; everything
+  else in the family — claim, verdict, and the `review/ready` removal on
+  claim — is the reviewer's.
+- **The reviewer never writes a `status/*` label and never edits an
+  issue.** A review is judged on the PR; the card is not the reviewer's
+  to move. When a verdict implies a card change, say so to planner
+  (`@hermes-planner` comment on the PR/issue) and let planner move it —
+  the same intake channel the developer's roadblocks use.
+
+That last rule is the one this team got wrong. The reviewer's verdict
+steps used to say "Card → In Progress / In Review / Done", and on a
+label-mechanism repo the card *is* the `status/*` label — so a failed
+review wrote `status/in-progress`, which is the developer's own
+claim/**resume** label: the developer's next self-pull then reads the
+item as its own interrupted turn, moves it back, and the two profiles
+trade the same issue every tick. Judge on the PR; hand the card to
+planner.
 
 The onboarding procedure creates this whole set per repo; a missing one
 is a real fault (work routed there goes invisible), which the queue
-scripts report rather than silently showing an empty queue.
+scripts report rather than silently showing an empty queue. The
+converse — a label of the *wrong family* for the object — is reported
+just as loudly by the queue guard (`!! FOREIGN LABEL`, see below), so a
+misfiled label is a thing you will be told about rather than a thing you
+have to remember to check.
 
 ## Surfaces the team does NOT touch (user-owned)
 
@@ -112,7 +168,7 @@ a mechanism; use it.
   **So: an item that needs CI/workflow changes is the user's to land.**
   Write the proposed file content into the issue (or the work-item
   thread) so it can be reviewed and applied verbatim, label the issue
-  `blocked`, and say plainly that it is waiting on the user. Do **not**
+  `status/blocked`, and say plainly that it is waiting on the user. Do **not**
   commit it to a branch and attempt the push — it cannot succeed, and the
   turn is better spent. Everything else about the item is still yours:
   the design, the content, the review.
@@ -131,13 +187,20 @@ turn reported *"review/ready label added"* while the PR was still a draft
 with no labels, and the reviewer, correctly idle, looked like the
 problem. The developer's own queue now prints `!! HANDOFF INCOMPLETE` for
 exactly this state; if you see that line, it is describing your previous
-turn, not someone else's.
+turn, not someone else's. It also prints `!! FOREIGN LABEL` when a label
+of the wrong family is sitting on an object (`review/*` on an issue, or
+`status/*` on a PR) — that one is a misfiled write, and the line names
+the object and the command to undo it.
 
-Read back after each handoff, and compare with what you intended:
+Read back after each handoff, and compare with what you intended. Note
+the two different numbers: `gh issue view` takes the **issue** number,
+`gh pr view` the **pull request** number, and for one work item they are
+not the same (the PR body's `Closes #<issue#>` is the link between them —
+`gh pr list --json number,body` finds the PR for an issue):
 
 ```bash
-gh issue view <n> --repo <owner/repo> --json labels --jq '[.labels[].name]|join(",")'
-gh pr view    <n> --repo <owner/repo> --json isDraft,labels
+gh issue view <ISSUE#> --repo <owner/repo> --json labels --jq '[.labels[].name]|join(",")'
+gh pr view    <PR#>    --repo <owner/repo> --json isDraft,labels
 ```
 
 `gh issue edit` / `gh pr edit` print a URL on success but do **not** fail

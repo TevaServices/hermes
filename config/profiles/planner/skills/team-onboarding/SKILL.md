@@ -62,6 +62,13 @@ skips.
    the queue scripts report the missing label rather than showing an
    empty queue, which is deliberate.
 
+   **These ten are the whole protocol — no others.** `status/*` lives on
+   issues and `review/*` on PRs, one profile-family each (see
+   `team-conventions` → "The routing labels"). A bare `blocked`, a second
+   `in-progress` spelling, or a `review/*` label applied to an issue is
+   drift, not a variant: the queues poll exact names, so anything that
+   does not match is invisible work.
+
 3. **Branch protection on `main`** — needs Administration write; on 403
    it becomes a manual checklist item:
    ```bash

@@ -131,8 +131,8 @@ Aggregate across ALL onboarded repos (search-based, no per-board crawl):
    (repeat per account with the right token).
 2. In flight: open PRs (draft + ready) by team bots; issues in
    Ready/In Progress (label- or board-based per repo registry).
-3. Blocked/needs-user: anything tagged `blocked` or `status/blocked`,
-   plus open questions to the user.
+3. Blocked/needs-user: anything tagged `status/blocked`, plus open
+   questions to the user.
 4. Today: top of each repo's Ready column/label.
 5. Post to Discord `#planning` (≤ 30 lines, repo-prefixed references).
 
