@@ -257,6 +257,14 @@ state_file() {
         "$LABEL_SLUG"
 }
 
+# The foreign-label guard's own slot — see foreign_incident(). Kept separate
+# so neither it nor the generic slot can silence the other.
+foreign_state_file() {
+    printf '%s/team-queue-%s-foreign.state' \
+        "${HERMES_HOME:-/opt/data}/cache" \
+        "$LABEL_SLUG"
+}
+
 # Emit an incident, honouring the dedupe contract.
 # $@ = the lines to emit. Returns 1 when suppressed (unchanged), else 0.
 #
@@ -273,6 +281,28 @@ incident() {
     mkdir -p "$(dirname "$f")" 2>/dev/null || true
     if [ -f "$f" ] && [ "$(cat "$f" 2>/dev/null)" = "$key" ]; then
         return 1   # unchanged — stay silent
+    fi
+    printf '%s' "$key" > "$f" 2>/dev/null || true
+    echo "$@"
+    return 0
+}
+
+# Same contract, OWN SLOT. The generic slot holds one key for the whole label
+# set, so two standing incidents in one lane overwrite each other's key and
+# both reprint every tick — and worse, one can SILENCE the other. The
+# foreign-label guard must not be at the mercy of an unrelated standing fault
+# (this lane already carries one: the unresolvable personal author login), so
+# it keeps its findings in `-foreign.state`, cleared only by a healthy run.
+foreign_incident() {
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "$@"
+        return 0
+    fi
+    key=$(printf '%s' "$*" | cksum | tr -d ' ')
+    f=$(foreign_state_file)
+    mkdir -p "$(dirname "$f")" 2>/dev/null || true
+    if [ -f "$f" ] && [ "$(cat "$f" 2>/dev/null)" = "$key" ]; then
+        return 1
     fi
     printf '%s' "$key" > "$f" 2>/dev/null || true
     echo "$@"
@@ -418,9 +448,10 @@ EOF
 }
 
 # Clear the dedupe state on a healthy run, so a fault that recurs after a
-# good period is reported again rather than being suppressed forever.
+# good period is reported again rather than being suppressed forever. Both
+# slots: the guard's notice must come back if the label is reintroduced.
 clear_state() {
-    rm -f "$(state_file)" 2>/dev/null || true
+    rm -f "$(state_file)" "$(foreign_state_file)" 2>/dev/null || true
 }
 
 # Clearing the dedupe state is for a HEALTHY run only. A dark gate, a
@@ -546,6 +577,19 @@ $PART"
         continue
     fi
 
+    # --- 2b. the other lane's label family on this owner's open work -------
+    # Scanned HERE, per owner and with that owner's token — deliberately NOT
+    # after the loop. Everything after the loop can exit early on a
+    # credential fault (ORG CREDS MISSING), and that incident is DEDUPED, so
+    # the exit is silent: the guard would then be unreachable for EVERY owner
+    # whenever ONE owner's creds fail. Observed 2026-09-25, on this very
+    # guard: the 5-minute tick logged `empty stdout — silent run` while a
+    # misfiled label was live, because the developer profile's org creds were
+    # not resolvable in the first seconds after a container recreate and the
+    # deduped credential incident exited the script before the guard ran.
+    # Findings accumulate; the notice is emitted below.
+    audit_foreign_labels "$O"
+
     # --- 3. is anything even onboarded? -----------------------------------
     REPOS=$(ogh search repos --owner "$O" --topic "$TOPIC" --limit 100 \
                 --json fullName --jq '.[] | .fullName' 2>"$ERR")
@@ -577,6 +621,24 @@ if [ -n "$FILTER_FALLBACK" ]; then
   design." || true
 fi
 
+# --- 1b. foreign-family labels, reported before anything can exit ---------
+# Emitted BEFORE the credential exit below on purpose: that exit is deduped,
+# so once the fault is known the script goes silent, and anything after it
+# would never run again (see the scan's comment in the owner loop).
+#
+# Through its OWN dedupe slot, not the shared one. The shared slot holds a
+# single key per label set, so a standing unrelated incident — a dropped
+# author filter, a missing org token — would otherwise silence this notice,
+# or be silenced by it, on every alternating tick. A guard that stops
+# guarding because the queue happens to be complaining about something else
+# is the failure this whole script exists to avoid.
+if [ -n "$FOREIGN_LABEL" ]; then
+    foreign_incident "FOREIGN LABEL  a label of the wrong family is on an object:$FOREIGN_DETAIL
+  Each queue polls one family on one object kind, so a misfiled label makes
+  the item invisible to BOTH lanes while it still looks busy — undo it as the
+  line above says. Said once; it returns when the condition changes." || true
+fi
+
 if [ -n "$ORG_FAIL" ]; then
     if incident "ORG CREDS MISSING  org owner(s) with no usable App credentials:$ORG_FAIL
   The org queue is silently missing work: either the PEM is not installed
@@ -585,30 +647,6 @@ if [ -n "$ORG_FAIL" ]; then
         exit 6
     fi
     exit 0
-fi
-
-# --- 1b. is any label filed under the wrong family? -----------------------
-# Before the queue is assembled and after the credential exit above, so it
-# never runs without a working token and can never delay or suppress real
-# queue output — it adds lines to the delivery, it does not replace any.
-# Deliberately runs whether or not the queue turns out to be empty: the
-# misfiled item is usually INVISIBLE to this queue (that is the whole fault),
-# so waiting for it to be listed would be waiting for the symptom to fix
-# itself. Deduped like every other incident, so a standing fault wakes the
-# profile once instead of every tick.
-for O in $OWNER $ORGS; do
-    if [ "$O" = "$OWNER" ]; then SLUG=""; else SLUG=$(slug_of "$O"); fi
-    resolve_owner "$O" "$SLUG" >/dev/null 2>&1 || continue
-    CUR_TOKEN="$ORG_TOKEN"
-    audit_foreign_labels "$O"
-done
-CUR_TOKEN=""
-
-if [ -n "$FOREIGN_LABEL" ]; then
-    incident "FOREIGN LABEL  a label of the wrong family is on an object:$FOREIGN_DETAIL
-  Each queue polls one family on one object kind, so a misfiled label makes
-  the item invisible to BOTH lanes while it still looks busy — undo it as the
-  line above says. Said once; it returns when the condition changes." || true
 fi
 
 # --- one session per work item: drop what a live session already holds ----

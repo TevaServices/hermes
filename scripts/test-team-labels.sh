@@ -193,9 +193,13 @@ exit 0
 STUB
 chmod 0755 "$tmp/bin/gh"
 
-run_queue() {  # run_queue <foreign 0|1> [--verbose]
+run_queue() {  # run_queue <foreign 0|1|2> [--verbose] [TEAM_OWNER_ORGS]
+    # TEAM_* is set to empty on purpose: on the deployed host compose injects
+    # the stack environment into EVERY process (env_file:), so an unset-but-
+    # present TEAM_OWNER_ORGS would add an org owner with no credentials here
+    # — which is exactly how this test first failed in the container.
     HOME="$tmp/home" HERMES_HOME="$tmp/home" TEAM_OWNER=bcross \
-    STUB_FOREIGN="$1" PATH="$tmp/bin:/bin:/usr/bin" \
+    TEAM_OWNER_ORGS="${3:-}" STUB_FOREIGN="$1" PATH="$tmp/bin:/bin:/usr/bin" \
     sh "$tmp/queue/team-queue.sh" ${2:-}
 }
 
@@ -247,6 +251,18 @@ out=$(run_queue 0 --verbose)
 case "$out" in
     *"FOREIGN LABEL"*) bad "guard accused a clean repo state" ;;
     *) ok "clean state gets no FOREIGN LABEL notice" ;;
+esac
+
+# An owner whose credentials fail exits the script early (ORG CREDS MISSING) —
+# and THAT incident is deduped, so the exit is silent. Anything placed after it
+# never runs again, which is how the guard was unreachable on the live stack
+# while a misfiled label was sitting there. The notice must survive it.
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 1 --verbose "NoSuchOrg")
+case "$out" in
+    *"FOREIGN LABEL"*"bcross/mach#26"*)
+        ok "guard reports its finding even when an owner's creds fail" ;;
+    *)  bad "an unresolvable owner suppressed the guard (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))" ;;
 esac
 
 # --- summary ---------------------------------------------------------------
