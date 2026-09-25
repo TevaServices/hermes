@@ -1,7 +1,7 @@
 ---
 name: team-conventions
 description: Shared conventions for the agile SaaS team (GitHub-first workflow, identity, cross-referencing, repos)
-version: 1.0.0
+version: 1.1.0
 metadata:
   hermes:
     tags: [team, workflow, github, conventions]
@@ -220,8 +220,13 @@ instead of working around it (host-side check:
 
 ## Multi-installation tokens
 
-The team's GitHub Apps are installed per account/org. Token env vars
-are installation-keyed (`GH_TOKEN_<OWNER>`, `GH_TOKEN_<ORG>`, …); pick
-the token matching the repo's owner (see `team-github-token` in each
-role's profile skills). The stack entrypoint provisions these from the
-host env file; never read provider keys directly.
+The team's GitHub Apps are installed per account/org, and the `gh` shim
+picks the right installation token from the command's target owner — a
+`-R/--repo` argument, a `gh api repos/<owner>/…` path, or the cwd's git
+origin. There is no `GH_TOKEN_<OWNER>` variable to export: the org
+credentials are descriptor files in your tool-home that the shim reads
+on your behalf, and a call whose owner it cannot see is forced with
+`GH_TOKEN="$(gh-org-token <orgslug>)"`. A 403
+`Resource not accessible by integration` on an org repo means the
+PERSONAL token went out — not that a permission is missing. See
+`team-github-token`, and `hermes-stack-ops` for the full routing rules.

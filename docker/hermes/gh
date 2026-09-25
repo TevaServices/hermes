@@ -11,9 +11,11 @@
 #      token gets stored, and Hermes' skills-hub GitHubAuth reads it)
 #   2. GH_TOKEN is set          -> passthrough (explicit caller intent;
 #      the queue scripts use this to force their own token)
-#   3. resolve the target owner:
-#        -R/--repo owner/repo in the args (attached + separated forms)
-#        else the cwd git repo's origin URL
+#   3. resolve the target owner, in this order:
+#        a) -R/--repo owner/repo in the args (attached + separated forms)
+#        b) an owner-bearing `gh api` ENDPOINT PATH — repos/<owner>/… or
+#           orgs/<owner> (see "gh api carries no -R" below)
+#        c) the cwd git repo's origin URL
 #   4. owner has an org descriptor ($HOME/org-creds/<owner>.env)
 #        -> mint/reuse the org token and exec gh-real with GH_TOKEN
 #      (mint failure = hard error: a descriptor means the caller means
@@ -22,13 +24,39 @@
 #   5. anything else            -> exec gh-real unchanged (personal
 #      token from the tool-home's gh auth state — exactly as before)
 #
-# Scope: only -R/cwd detection, deliberately. Ambient-scope commands
-# (`gh search`, `gh api`) with no repo context use the personal token;
-# org-scoped ad-hoc calls should carry `-R <org>/<repo>` or an explicit
-# GH_TOKEN=$(gh-org-token <slug>). See the hermes-stack-ops skill.
+# gh api CARRIES NO -R — gh's own parser rejects it ("unknown shorthand
+# flag: 'R'"), so for `gh api` the endpoint path is the only owner signal
+# besides the cwd. An agent doing REST work writes its payload files to a
+# scratch dir, so its cwd is often NOT the worktree — and before step (b)
+# existed, `gh api repos/<org>/<repo>/…` from such a cwd silently used the
+# PERSONAL token and got
+#
+#   {"message":"Resource not accessible by integration", ... "status":"403"}
+#
+# on writes. That reads exactly like a missing App permission, and it is
+# not one: the personal App simply has no installation on the org. Check
+# what is actually granted with a USER token —
+#   gh api /orgs/<org>/installations --jq '.installations[]|{app_slug,permissions}'
+# (the App's own token cannot read it; 404 either way, which is its own
+# false lead). The probe that misleads is a PUBLIC repo:
+# `gh api repos/<org>/<public-repo> --jq .permissions` returns all-false
+# under the personal token (reads work, writes do not), so it "confirms"
+# a permission gap that isn't there. A PRIVATE repo is the honest probe:
+# 200 under the org token, 404 under the personal one.
+#
+# Scope: owner detection only, from (a)/(b)/(c) and nothing else.
+# Call shapes that name no owner anywhere still resolve from the cwd, and
+# from a scratch dir that means the personal token: `gh api graphql`,
+# `gh search` (its --owner is a filter, and one search can span owners),
+# and a `repos/{owner}/{repo}` endpoint there (gh expands those placeholders
+# from the cwd and fails outright without one). Force the org identity for
+# those with GH_TOKEN="$(gh-org-token <slug>)". See the hermes-stack-ops
+# skill.
 set -u
 
-GH_REAL=/usr/local/bin/gh-real
+# Overridable so the routing decision can be tested offline against a stub
+# (scripts/test-gh-shim.sh) — no network, no container.
+GH_REAL="${GH_REAL:-/usr/local/bin/gh-real}"
 [ -x "$GH_REAL" ] || { echo "gh shim: gh-real missing" >&2; exit 127; }
 
 # --- 1. gh auth * always passes through -------------------------------------
@@ -40,11 +68,12 @@ done
 [ -n "${GH_TOKEN:-}" ] && exec "$GH_REAL" "$@"
 
 # --- 3. target owner ---------------------------------------------------------
-# Scan ALL args (a -R can sit anywhere: `gh api x -R org/repo`), plus
-# `gh repo <view|clone|create|…> owner/repo` positional form. Value
-# confusion is the hazard of any argv scan; the only values taken here
-# are the ones following an exact `-R`/`--repo` token or attached
-# `-R=`/`--repo=` forms.
+# Scan ALL args: -R/--repo in every spelling gh accepts (separated,
+# `-R=owner/repo`, and attached `-Rowner/repo`), the
+# `gh repo <view|clone|create|…> owner/repo` positional form, and enough
+# flag-arity awareness to skip the VALUES of -R/--repo and --hostname so
+# neither can be mistaken for a subcommand. Value confusion is the hazard
+# of any argv scan; the only values consumed here are those two flags'.
 owner=""
 subcmd=""
 positional=""
@@ -52,6 +81,10 @@ prev=""
 for arg in "$@"; do
     case "$prev" in
         -R|--repo) owner="$arg"; prev=""; continue ;;
+        # --hostname takes a value too. Swallowing it keeps `subcmd` honest
+        # for `gh --hostname github.com api repos/…` — otherwise the value
+        # becomes the subcommand and the api-path scan below never runs.
+        --hostname) prev=""; continue ;;
     esac
     prev=""
     case "$arg" in
@@ -59,6 +92,11 @@ for arg in "$@"; do
         -R=*) owner="${arg#-R=}" ;;
         --repo=*) owner="${arg#--repo=}" ;;
         -R|--repo) prev="$arg" ;;
+        --hostname) prev="$arg" ;;
+        # Attached shorthand (`-Rowner/repo`), which gh's flag parser accepts.
+        # Without this arm it fell to `-*)` and the call silently used the
+        # personal token — the same failure this file's header describes.
+        -R?*) owner="${arg#-R}" ;;
         -*) ;;
         *)
             if [ -z "$subcmd" ]; then subcmd="$arg"; continue; fi
@@ -76,6 +114,39 @@ for arg in "$@"; do
     esac
 done
 [ -n "$owner" ] || owner="$positional"
+
+# --- 3b. `gh api` names the owner in the ENDPOINT PATH -----------------------
+# `gh api` defines no -R/--repo (see the header), so for it the path is the
+# only owner signal the invocation carries. Matching is deliberately STRICT
+# and anchored — `repos/<owner>/<repo>…` or `orgs/<owner>…`, with an
+# optional leading slash and/or query string — because this loop cannot know
+# which args are flag VALUES: `-f key=repos/a/b` and `--input out.json` must
+# keep falling through, and an anchored match cannot hit them. (Endpoint
+# first in argv is the normal spelling; a relative `--input repos/…` before
+# the endpoint would be read as the endpoint — accepted, since it needs a
+# directory literally named `repos/`.)
+if [ -z "$owner" ] && [ "$subcmd" = "api" ]; then
+    for arg in "$@"; do
+        ep="${arg%%\?*}"                          # a query string is not the path
+        case "$ep" in                             # gh accepts a full URL endpoint
+            https://*|http://*) ep="${ep#*://}"; ep="${ep#*/}" ;;
+        esac
+        ep="${ep#/}"                              # `gh api /repos/…` is valid
+        case "$ep" in
+            repos/*/*) seg="${ep#repos/}"; seg="${seg%%/*}" ;;
+            orgs/*)    seg="${ep#orgs/}";  seg="${seg%%/*}" ;;
+            *) continue ;;
+        esac
+        # GitHub owners are [A-Za-z0-9-]. Anything else is NOT an owner: it
+        # is gh's own {owner}/{repo} placeholder (gh expands those from the
+        # cwd — treating "{owner}" as a literal owner would drop a call that
+        # works today onto the personal token), or a percent-encoded
+        # spelling. Leave those to the cwd fallback below.
+        case "$seg" in ''|*[!A-Za-z0-9-]*) continue ;; esac
+        owner="$seg"
+        break
+    done
+fi
 
 if [ -z "$owner" ]; then
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1 \

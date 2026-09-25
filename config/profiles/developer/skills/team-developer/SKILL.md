@@ -27,12 +27,12 @@ report it as a credential problem.
 The planner routes by adding the label; you claim by moving it:
 
 ```bash
-# find routed work — run per installation/account with that account's
-# token (GH_TOKEN_<ACCOUNT>; see team-github-token)
+# find routed work — the owner comes from the repo/token routing the
+# shim and the queue script already do (see team-github-token)
 team-queue.sh
 
 # claim the issue you picked (same turn, BEFORE starting work)
-gh issue edit owner/repo#N --remove-label status/ready \
+gh issue edit <n> --repo owner/repo --remove-label status/ready \
   --add-label status/in-progress
 ```
 
