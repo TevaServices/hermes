@@ -481,6 +481,53 @@ repo owner.**
   `gh auth git-credential`. Prefer a fine-grained PAT scoped to the
   specific repos (Contents/Issues/Pull requests read+write).
 
+### Contribution requirements (DCO) — the gate a test run cannot see
+
+A target repo can require the **Developer Certificate of Origin**: every
+commit on a PR carries a `Signed-off-by:` line matching its author or
+committer, checked by a CI job. This stack produced exactly the failure
+that shape invites — a draft PR **green on lint, test and e2e and failing
+only the sign-off job** — because the rule is declared in `CONTRIBUTING.md`
+and `.github/workflows/`, two files an agent has no reason to open while
+implementing, and nothing mechanical added the trailer. A policy job is
+also the one gate a local `mise run test` cannot reproduce, so "I ran the
+suite" was never evidence of it. Compliance therefore has two halves, and
+the read alone is what failed before:
+
+1. **The read.** `team-developer` now says to read the repo's own rules —
+   `AGENTS.md`/`CLAUDE.md` *plus the contribution requirements*
+   (`CONTRIBUTING.md`, `LICENSE`, the jobs in `.github/workflows/`) — as
+   soon as the worktree exists and before implementing anything, and to
+   treat them as binding. It also says to read `gh pr checks <n>` for
+   **every** job, not only the ones a local run mirrors.
+2. **The hook.** `docker/hermes/git-hooks/prepare-commit-msg` (baked at
+   `/opt/hermes-git-hooks/`, chmod 0755) is installed by the entrypoint as
+   each tool-home's **global `core.hooksPath`**. Per-home global config is
+   the only scope that reaches every repo *and* every worktree: the repos
+   are cloned at runtime by `git-repo.sh`, and a worktree shares its common
+   dir's hooks, so a per-repo install could not cover one.
+
+The hook is deliberately **conditional** — it adds a sign-off only when the
+repo carries the evidence of a DCO rule (`Signed-off-by` /
+"Developer Certificate of Origin" in a `CONTRIBUTING*` file, or anywhere
+under `.github/`), so repos that never asked keep their commit messages
+byte-identical. It resolves the identity through `git var
+GIT_COMMITTER_IDENT` at commit time, which is why it signs as the **org
+bot** in an org worktree (`git-repo.sh` writes `user.name`/`user.email`
+into the worktree's own config) and as the profile's own App elsewhere —
+nothing is hardcoded. It skips merge commits (exempt from the checks it
+mirrors) and any message already carrying a sign-off, so `-s` and re-runs
+stay idempotent. **Every path exits 0**: a hook that aborts a commit to
+protect a trailer would be a worse bug than the missing trailer, and CI is
+the real enforcement.
+
+Three things it gives up, stated plainly: while `core.hooksPath` is set, a
+repo's own `.git/hooks` is bypassed (hooks are not cloned, so there is
+normally nothing there to bypass); `--no-verify` skips it like any other
+hook; and its detection is in-repo only, so a DCO requirement expressed
+solely as branch protection or an outside app is invisible to it — which is
+what the documented read is for.
+
 ### Security tuning (guard friction)
 
 This stack's agents live in `terminal`, and three guard behaviours blocked
@@ -1198,6 +1245,27 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${HERMES_DASHBOARD_HOS
 #   enabled: 30x redirect to the login page or 401. A 200 WITHOUT a
 #   session means the auth gate is NOT engaged — investigate immediately.
 docker logs hermes-main 2>&1 | grep -i '\[dashboard\]' | tail -5   # no auth-provider errors
+```
+
+DCO sign-off hook (installed per tool-home; signs off only where the repo asks):
+
+```bash
+# Each tool-home's GLOBAL config points at the image's hook dir — the
+# default home AND every profile's (the hook is useless without both):
+docker exec -e HOME=/opt/data/home hermes-main git config --global core.hooksPath
+docker exec -e HOME=/opt/data/profiles/developer/home hermes-main \
+  git config --global core.hooksPath          # -> /opt/hermes-git-hooks
+docker exec hermes-main ls -l /opt/hermes-git-hooks/prepare-commit-msg   # 0755
+# Functional probe, in a throwaway repo: a repo that declares DCO gets the
+# trailer, one that does not stays byte-identical. No network, no clone.
+docker exec -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
+  d=$(mktemp -d) && cd "$d" && git init -q -b main &&
+  printf "# Contributing\n\nSign your work (DCO): a Signed-off-by line is required.\n" > CONTRIBUTING.md &&
+  echo x > f && git add -A &&
+  git -c user.name=probe -c user.email=probe@localhost commit -qm probe &&
+  git log -1 --format=%B | grep -c "^Signed-off-by: "'
+#   -> 1; 0 means the hook is not found or not executable (check the two
+#      hooksPath values above before the hook itself).
 ```
 
 Org GitHub Apps (after landing the org env vars + PEMs):

@@ -207,6 +207,14 @@ COPY docker/hermes/claude-update.sh /usr/local/bin/claude-update.sh
 COPY docker/hermes/gh /usr/local/bin/gh
 COPY docker/hermes/gh-org-token /usr/local/bin/gh-org-token
 COPY docker/hermes/git-credential-hermes.sh /usr/local/bin/git-credential-hermes.sh
+# The DCO sign-off hook. Not a /usr/local/bin helper: the entrypoint
+# points every tool-home's global core.hooksPath here, so it applies to
+# every repo AND every worktree a profile commits in (a worktree cannot
+# carry its own hooks). It signs off only where the repo declares a DCO
+# rule and can never fail a commit — see the file's own header.
+COPY docker/hermes/git-hooks/ /opt/hermes-git-hooks/
+RUN chmod 0755 /opt/hermes-git-hooks/prepare-commit-msg
+
 RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/hermes-bootstrap-profiles.sh \
                /usr/local/bin/git-repo.sh \

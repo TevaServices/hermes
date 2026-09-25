@@ -402,6 +402,16 @@ configure_github_for_home() {  # <tool_home> [profile_name]
   # no path component, and without the path the router cannot see the
   # owner. (Verified against git 2.54: with the default false, the path
   # is not sent at all and per-owner routing is impossible.)
+  #
+  # core.hooksPath is the DCO sign-off hook (/opt/hermes-git-hooks): it
+  # adds a `Signed-off-by:` matching the commit's own identity, but only
+  # in repos that declare a DCO rule in CONTRIBUTING.md or a CI
+  # workflow. Per-HOME global config is the right scope, not per-repo:
+  # the repos are cloned at runtime (git-repo.sh), and a worktree shares
+  # its common dir's hooks — so pointing at an image path is the only
+  # way every repo and worktree gets it without a runtime install step.
+  # The trade-off is that a repo's own .git/hooks is bypassed; hooks are
+  # not cloned, so there is normally nothing there to bypass.
   "$S6_SETUIDGID" hermes /bin/sh -c '
     export HOME="$1"
     git config --global user.name  "$2"
@@ -409,6 +419,7 @@ configure_github_for_home() {  # <tool_home> [profile_name]
     git config --global credential.https://github.com.useHttpPath true
     git config --global credential.https://github.com.helper \
       "!/usr/local/bin/git-credential-hermes.sh"
+    git config --global core.hooksPath /opt/hermes-git-hooks
   ' sh "$tool_home" "$GIT_NAME" "$GIT_EMAIL"
 
   if [ -n "$APP_ID" ] && [ -n "$APP_INSTALLATION_ID" ] && [ -n "$APP_PEM" ]; then

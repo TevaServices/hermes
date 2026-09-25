@@ -1,0 +1,100 @@
+#!/bin/sh
+# prepare-commit-msg — add the DCO sign-off, but ONLY where the repo asks.
+#
+# WHY THIS EXISTS
+#
+# A target repo can require the Developer Certificate of Origin: every
+# commit carries a `Signed-off-by:` line matching its author or
+# committer, and CI fails the PR when one is missing. That rule is
+# declared in the repo's own `CONTRIBUTING.md` and its CI workflow — two
+# files an agent has no reason to open while implementing — so it stays
+# invisible right up until a policy job fails on a PR whose tests, lint
+# and e2e all pass. Observed exactly that way: a draft PR green
+# everywhere except the sign-off job.
+#
+# The developer's skill now says to read the repo's contribution
+# requirements before the first commit; this hook means the sign-off
+# does not depend on that read actually happening.
+#
+# WHY CONDITIONAL
+#
+# It signs off only when the repo carries the evidence of a DCO rule, so
+# repos that never asked for one get their commit messages left exactly
+# as written. Detection is deliberately narrow (the two places such a
+# rule is declared) and deliberately in-repo: a DCO requirement
+# expressed *only* as branch protection or an external app is not
+# visible here, which is what the documented pre-flight read is for.
+#
+# WHY IT NEVER FAILS
+#
+# Every path exits 0, including the unexpected ones. A hook that aborts
+# a commit to protect a trailer would be a worse bug than the missing
+# trailer — and the CI check is the real enforcement, so the worst case
+# here is a commit that CI rejects, not a commit nobody can make.
+#
+# INSTALLATION
+#
+# `docker/hermes/entrypoint.sh` points each tool-home's global
+# `core.hooksPath` at /opt/hermes-git-hooks, so every profile gets this
+# for every repo it commits in. Two consequences worth knowing: a
+# repo's own `.git/hooks` is then bypassed (hooks are not cloned, so a
+# repo rarely has any — but a hand-installed one would be), and
+# `--no-verify` skips this hook like any other.
+#
+# No identity is hardcoded: the sign-off is resolved through `git var`
+# at commit time, so it follows GIT_COMMITTER_*, the worktree-local
+# config `git-repo.sh worktree` writes for org work, and each profile's
+# own App identity.
+#
+# git calls this as: prepare-commit-msg <msg-file> [<source> [<sha>]]
+
+msgfile="${1:-}"
+[ -n "$msgfile" ] || exit 0
+[ -f "$msgfile" ] || exit 0
+
+# Merge commits are exempt from the checks this mirrors — the parents
+# carry their own sign-offs — so never touch them.
+if [ "${2:-}" = "merge" ]; then exit 0; fi
+
+# Already signed off: nothing to do. Keeps `git commit -s`, a message
+# template, and a re-run idempotent.
+if grep -q '^Signed-off-by: ' "$msgfile" 2>/dev/null; then exit 0; fi
+
+# Only sign where the repo declares the rule. Worktree root, not cwd:
+# a commit driven from a subdirectory must see the same files.
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -n "$root" ] || exit 0
+
+requires_dco=""
+for p in "$root/CONTRIBUTING.md" "$root/CONTRIBUTING.rst" \
+         "$root/CONTRIBUTING.txt" "$root/CONTRIBUTING"; do
+  [ -f "$p" ] || continue
+  if grep -qiE 'signed-off-by|developer certificate of origin' "$p" 2>/dev/null; then
+    requires_dco=1
+    break
+  fi
+done
+
+if [ -z "$requires_dco" ]; then
+  for d in "$root/.github/workflows" "$root/.github"; do
+    [ -d "$d" ] || continue
+    if grep -rqiE 'signed-off-by|developer certificate of origin' "$d" 2>/dev/null; then
+      requires_dco=1
+      break
+    fi
+  done
+fi
+[ -n "$requires_dco" ] || exit 0
+
+# Sign as the identity git is about to record. `git var` reads
+# GIT_COMMITTER_* and the worktree-local config; the committer ident is
+# what `git commit -s` itself uses, and the DCO checks accept the
+# committer as well as the author. Strip the trailing
+# "<epoch> <±hhmm>" that `git var` appends.
+who="$(git var GIT_COMMITTER_IDENT 2>/dev/null \
+       | sed -e 's/ [0-9][0-9]* [+-][0-9][0-9][0-9][0-9]$//')"
+[ -n "$who" ] || exit 0
+
+printf '\nSigned-off-by: %s\n' "$who" >>"$msgfile" 2>/dev/null || exit 0
+
+exit 0

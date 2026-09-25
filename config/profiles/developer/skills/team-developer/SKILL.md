@@ -1,7 +1,7 @@
 ---
 name: team-developer
 description: Developer role procedure — self-pull work discovery, worktree discipline, draft PRs, roadblock protocol
-version: 1.2.0
+version: 1.3.0
 metadata:
   hermes:
     tags: [team, developer]
@@ -120,9 +120,16 @@ git-repo.sh worktree https://github.com/<owner>/<repo> <default-branch>
   worktree.
 - Never commit in the bare repo, never clone privately, never push to
   `main`.
-- Read the repo's `AGENTS.md`/`CLAUDE.md` deliberately before the first
-  commit there and follow its rules (the stack's injection scanner may
-  false-positive on repo docs — a deliberate read is fine).
+- **Read the repo's own rules as soon as the worktree exists — before
+  you implement anything — and treat them as binding on you.** That is
+  `AGENTS.md`/`CLAUDE.md` (conventions, security invariants, testing)
+  *and the contribution requirements*: `CONTRIBUTING.md`, `LICENSE`,
+  and the jobs in `.github/workflows/`. They are what CI and the
+  reviewer hold the PR to, and a green test suite is not the whole
+  gate. A repo can require a DCO `Signed-off-by:` on every commit, a
+  license header on new files, or a security note updated in the same
+  PR. (The stack's injection scanner may false-positive on repo docs —
+  a deliberate read is fine.)
 
 ## Implementation = Claude Code (`claude`)
 
@@ -173,9 +180,20 @@ the target repo's conventions allow.
    post into the channel, not the item's thread.
 1. Open the draft PR EARLY (first meaningful commit):
    `gh pr create --draft --fill --base main`.
-2. Commit with your own identity; small, conventional commits.
+2. Commit with your own identity; small, conventional commits. Every
+   commit must also satisfy the repo's contribution policy — the DCO
+   sign-off above all, because it is the one CI job no local test run
+   can reproduce. The stack's `prepare-commit-msg` hook adds
+   `Signed-off-by:` for you, but only in repos that declare the rule,
+   and `--no-verify` skips it: `git commit -s` is the explicit
+   equivalent, and `git log -1 --format=%B` is the one look that
+   confirms it actually landed.
 3. Verify before marking ready: tests, lint, type checks — whatever the
-   repo's CI runs, run locally. If CI exists, watch it green.
+   repo's CI runs, run locally. If CI exists, watch it green — and read
+   `gh pr checks <n>` for **every** job, not only the ones your local
+   suite mirrors. A policy job (DCO sign-off, license header, commit
+   format) fails the PR exactly as hard as a red test, and it is
+   precisely the job a local run cannot tell you about.
 4. **Hand off to reviewer — the LABEL is the handoff, not a review
    request.** Bot identities cannot be requested as PR reviewers
    (`gh pr edit --add-reviewer 'hermes-reviewer[bot]'` fails with
