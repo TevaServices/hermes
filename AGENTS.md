@@ -157,6 +157,32 @@ echoed, or routed through a shell history or chat transcript.
   the provider fine), `DISCORD_BOT_TOKEN` + `DISCORD_ALLOWED_USERS`
   (gateway), GitHub App vars (below), and `PROFILE_<NAME>_*` lines for the
   team profiles.
+- **`hermes-main.env` is the LAUNCH profile's env, and Hermes deletes its
+  non-global names from every other profile's cron child.** A cron job's
+  child env is built as `strip_launch_profile_env(build_subprocess_env(...))`
+  (`cron/scheduler.py`), and that first step removes from the child every
+  name found in the LAUNCH profile's `.env` — here `/opt/data/.env` — unless
+  `_is_global_env` marks it global (`tools/environments/local.py`). A routed
+  profile's `no_agent` SCRIPT child then sees neither the launch `.env` nor
+  its own: nothing re-loads a script child's profile env (an agent child does
+  — `served_profile_child_env`). Concretely: `TEAM_OWNER`, `TEAM_OWNER_ORGS`
+  and `TEAM_ORG_DEV_BOT_<ORG>` sat in this file and were silently removed
+  from the reviewer's job, which died **71 consecutive times** with
+  `team-queue.sh: owner must not be empty` (exit 64) while the developer's
+  survived only by luck — the scheduler calls the strip WITHOUT passing the
+  job's own `profile_home`, so it keyed off whatever override the PREVIOUS
+  dispatch left behind (dev: 136 completed / 1 failed that day; reviewer:
+  95 / 71). A queue that fails this way looks exactly like a quiet one,
+  which is the failure the queue scripts' exit-code contract exists to
+  prevent. So the entrypoint FILTERS the `TEAM_*` family out of the root
+  `.env` copy — sufficient and complete, because compose injects the same
+  file as container env (`env_file:`), so the vars still reach every script;
+  they are simply no longer launch-profile residue.
+  **Rule for anything added later: a var read by a cron job's SCRIPT must
+  not live in this file.** Put it in the stack `environment:` (komodo
+  `resources.toml`, mirrored in `mise.toml`). The per-profile `.env` copies
+  KEEP their `TEAM_*` lines on purpose — those homes are not the launch
+  home.
 - `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`, `OPENAI_API_KEY` +
   `OPENAI_BASE_URL` (LiteLLM) + `MODEL_NAME=firecrawl` (LLM
   extract/generate).
@@ -1042,7 +1068,10 @@ it survives until the next boot, then the reconciler overwrites it.
 - `GH_TOKEN` is absent from a cron script's environment (subprocess env is
   credential-stripped by design) — that is fine, because the profile's `gh`
   is already logged in as its own App installation
-  (`/opt/data/profiles/<name>/home/.config/gh/hosts.yml`).
+  (`/opt/data/profiles/<name>/home/.config/gh/hosts.yml`). The same child-env
+  construction ALSO strips the launch profile's non-global `.env` names,
+  which is a sharper trap for script-read vars — see §Secrets
+  ("`hermes-main.env` is the LAUNCH profile's env").
 - **The queues are resume-first, and that is load-bearing.** The self-pull
   defaults to `status/in-progress` THEN `status/ready` (and
   `review/in-progress` THEN `review/ready`), because a cron job passes no
