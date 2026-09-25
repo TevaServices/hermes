@@ -27,6 +27,36 @@ read. Reading is cheap; redoing is not.
   something landed when it did not is worse than a failure: downstream,
   everything looks idle rather than broken, and nobody knows to look.
 
+## One session per work item
+
+A work item is worked in **one** session at a time. Two sessions on the same
+issue is not twice the progress: they edit the same worktree, clobber each
+other's patches, and the duplicate turns are the ones that get killed
+mid-flight.
+
+Before you start work on a GitHub issue or PR — and before you pick up
+anything from a queue — check whether someone is already on it:
+
+    python3 /usr/local/bin/team-session.py --gate any --item <owner>/<repo>#<n>
+
+Exit 0 prints the live session(s) holding it (`cli` is an unattended/cron
+turn, anything else is a chat session); exit 1 means it is free.
+
+- **You are a chat session and an unattended turn holds it** — confer for an
+  update instead of working. Read that session's recent activity for where it
+  has actually got to, tell the person what it found, and let the turn
+  finish. Do not start a second working pass and do not touch its worktree.
+  If the person wants it taken over, say so plainly and let the running turn
+  stop first — never race it.
+- **You are the unattended turn** — `team-queue.sh` already enforces this: an
+  item another session holds is never handed to you, so a cron session with
+  nothing routed to it exits without working. Never work an item the queue
+  did not hand you.
+
+The check is per item, and liveness is Hermes' own session activity, so a
+turn that stops stops being live within `TEAM_SESSION_TTL` (600s) — an
+interrupted turn does not fence its item forever.
+
 ## Turn count is the cost that matters
 
 Every turn re-sends this whole conversation to the model, so dripping one

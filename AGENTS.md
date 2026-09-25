@@ -457,8 +457,8 @@ repo owner.**
 
 ### Security tuning (guard friction)
 
-This stack's agents live in `terminal`, and two guard behaviours blocked
-the script-shaped work we *want* them to do, so both were loosened
+This stack's agents live in `terminal`, and three guard behaviours blocked
+the script-shaped work we *want* them to do, so all three were loosened
 deliberately.
 
 1. **`tools/approval_detection.py` source patch** (was
@@ -499,14 +499,48 @@ deliberately.
    and `sensitive_env_export` (reading credentials / exporting secrets stays
    gated), and hermes' own recursive-delete pattern (rm -rf prompts stay as
    the safety net; a prompt with an "Always" option is click-once-per-host).
-   Extend by hand from `tirith audit stats --format json` → `top_rules`. Note
-   `approvals.mode` is the default `smart`, so heredoc / `-e -c` patterns
-   already auto-approve; only Tirith's HIGH/CRITICAL findings were
-   demanding a human. Render.py also raises `auxiliary.approval.timeout`
+   Extend by hand from `tirith audit stats --format json` → `top_rules`. When
+   these were mined `approvals.mode` was the default `smart`, so heredoc /
+   `-e -c` patterns already auto-approved and only Tirith's HIGH/CRITICAL
+   findings demanded a human — **item 3 below supersedes that posture
+   entirely.** Render.py also raises `auxiliary.approval.timeout`
    to 60s stack-wide (upstream default 30s, retried once): smart approval's
    aux call goes through litellm → Ollama Cloud, and when that call times
    out twice the gate escalates to a human button even though the model
    would have approved — the model's latency, not its verdict, was deciding.
+   Inert while `mode: off` (the guardian never runs); kept as the value to
+   restore if the posture is dialled back.
+3. **The unattended lanes are opened right up** (`render.py` →
+   `STACK_APPROVAL_DEFAULTS`, merged into every profile and overridable via
+   `[config_extra.approvals]`). Upstream's defaults for the unattended lanes
+   are `deny`, and upstream's own comment on `single_query_mode` names the
+   failure this stack hit on 2026-09-25: an unanswered approval "just waits
+   the full timeout then fails closed, so **the agent is forced to work
+   around the block (often via `execute_code`)**". The developer profile's
+   cron lane runs in `-q`, so every dangerous-flagged command hard-blocked —
+   heredoc script execution, `SQL DELETE without WHERE`, Tirith HIGH "nested
+   executable body" — and the agent fell back to `execute_code` **102 times**
+   in one 33-minute turn; the profile's own memory had already recorded the
+   symptom ("AGENTS.md/CLAUDE.md writes are BLOCKED by write-gate when no
+   user is present"). So: `mode: off` (= `--yolo`) plus `cron_mode` /
+   `single_query_mode` / `unattended_mode: approve`, with `approvals.deny`
+   holding only the permanently-destructive set — root/home recursive
+   deletes, `--no-preserve-root`, block-device writes, force-push, and
+   docker volume/stack deletion.
+   **What this gives up, stated plainly:** Tirith still scans and still
+   logs, but with `mode: off` a finding no longer gates anything, so
+   `command_allowlist` is belt-and-braces rather than the control. Credential
+   *reads* stay permitted on purpose — this file's own verification checklist
+   reads `/etc/hermes/litellm.env`, so a glob on that path would break
+   documented work. The `deny` list is deliberately TIGHT: the stack's own
+   jobs delete things (mktemp dirs, pruned worktree session dirs under
+   `/opt/data/worktrees`), so a blanket `*rm -rf*` would break
+   `prune-repos.sh` and teach the next operator to delete the list. Dial back
+   with `mode: smart` in `STACK_APPROVAL_DEFAULTS` (or per profile), which
+   re-arms the guardian for HIGH/CRITICAL findings. `render.py` fails the
+   build on a `mode` or `*_mode` value the container would reject, and on a
+   `deny` entry that is empty (an empty glob blocks nothing while looking
+   like a guard).
 
 ### Dashboard + the memory-UI plugin (both shipped DISABLED)
 
@@ -994,13 +1028,17 @@ it survives until the next boot, then the reconciler overwrites it.
   the DEFAULT profile. `bot-chat:<name>` passes `-p <name>` **and drops
   `HERMES_HOME` from the child env**, so the turn really runs as the named
   profile.
-- **The bot-chat delivery timeout is raised to 3600s stack-wide**
+- **The bot-chat delivery timeout is 900s stack-wide**
   (`render.py` → `cron.bot_chat_delivery_timeout_seconds`). A bot-chat
   delivery runs a full agent turn synchronously inside the job's execution,
   and the upstream default of 600s does not merely warn — on expiry the
-  child is KILLED mid-turn. Holding the execution open also serialises the
-  5-minute poll against a running turn, so the next tick cannot stack a
-  second wake on work already in flight.
+  child is KILLED mid-turn. It was 3600s, which is unbounded against a `*/5`
+  self-pull: a delivery that runs an hour while its own job fires every 5
+  minutes stacks up to 12 overlapping wakes (observed 2026-09-25 — four
+  `bot_chat_pending` files for one issue, one of them a 3600s timeout). The
+  serialisation that paragraph used to claim is now done properly, per item,
+  by the one-session-per-item gate below; 900 clears the longest legitimate
+  turn this host runs while bounding the backlog to ~3 ticks.
 - `GH_TOKEN` is absent from a cron script's environment (subprocess env is
   credential-stripped by design) — that is fine, because the profile's `gh`
   is already logged in as its own App installation
@@ -1016,6 +1054,40 @@ it survives until the next boot, then the reconciler overwrites it.
   worktree makes that cheap: the session slug is stable across cron wakes,
   so the interrupted turn's branch and uncommitted changes are still on
   disk under `/opt/data/worktrees/`.
+- **One session per work item — the queue YIELDS, it does not compete**
+  (`docker/hermes/team-session.py`, called by `team-queue.sh`; documented in
+  its header). Resume-first is exactly what went wrong on 2026-09-25: the
+  issue sat at `status/in-progress` with no PR, so it matched on every tick
+  *forever*, and the 5-minute self-pull re-injected it into the `developer`
+  profile while a Discord thread session was mid-work on it. Because both
+  lanes resolved to the same worktree slug (`shared` — see `git-repo.sh`
+  `session_slug`, which falls back to that literal when `HERMES_SESSION_KEY`
+  is empty), two agent turns edited ONE checkout on branch
+  `26-approval-flow`; that is where the `patch` "could not find a match for
+  old_string" failures, the `AUTO_MERGE`, and the `mach2` escape-hatch
+  checkout came from. It took a manual container pause, because resume-first
+  had no way to ask "is someone already on this?".
+  So before `team-queue.sh` emits, every item is checked against the
+  profile's own live sessions and **dropped if a live session already holds
+  it** — and if that leaves nothing, the script prints nothing and exits 0,
+  so no bot-chat turn is spawned at all: **a cron session with nothing to do
+  exits without working.** `--gate any` means a previous delivery still in
+  flight also holds its item, which is what actually stops the next tick
+  stacking a second wake. The check is per ITEM, so a live session on one
+  issue never fences a newly-routable issue elsewhere.
+  Liveness is `sessions.last_activity_at`, which Hermes refreshes on every
+  stream chunk — deliberately NOT a claim file or a heartbeat, because a
+  heartbeat the agent must remember to send goes stale during exactly the
+  long turn it needs to cover, re-opening the collision. It expires after
+  `TEAM_SESSION_TTL` (default 600s), so an interrupted turn does not fence
+  its item forever. A missing/unreadable `state.db` is exit 2 = gate DARK:
+  items still flow and a deduped incident says so, because a guard that
+  silently stopped guarding looks exactly like a quiet week.
+  The other direction is the `SOUL_OPERATING.md` rule: a chat session that
+  finds a live unattended turn on an item **confers for an update** —
+  `python3 /usr/local/bin/team-session.py --gate agent --item owner/repo#N` —
+  and reports where that turn has got to instead of starting a competing
+  pass.
 - **Work-item Discord threads (`team-thread.sh`).** One thread per work
   item, in the calling profile's own channel, kept open until the PR is
   **merged**. Auto-threading only fires on inbound Discord messages, so the

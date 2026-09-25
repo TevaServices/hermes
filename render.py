@@ -65,8 +65,72 @@ CRON_SCRIPT_DIR = ROOT / "docker" / "hermes"
 # Merged into every rendered config (see render_profile) — a profile can
 # override any individual key via [config_extra.cron].
 STACK_CRON_DEFAULTS = {
-    # 600 (upstream) kills a real agent turn mid-flight; see render_profile.
-    "bot_chat_delivery_timeout_seconds": 3600,
+    # Upstream 600 kills a real agent turn mid-flight; see render_profile.
+    # 3600 was the first correction, but it is unbounded against a `*/5`
+    # self-pull: a delivery that runs an hour while its own job fires every
+    # 5 minutes stacks up to 12 overlapping wakes (observed 2026-09-25 —
+    # four bot_chat_pending files for one issue, one of them a 3600s
+    # timeout). 900 clears the longest legitimate turn this host runs while
+    # keeping the backlog bounded to ~3 ticks. The real fix for the
+    # stacking is the one-session-per-item gate in team-queue.sh; this is
+    # the backstop under it.
+    "bot_chat_delivery_timeout_seconds": 900,
+}
+# Approvals for EVERY profile — merged like STACK_CRON_DEFAULTS, and
+# overridable per profile via [config_extra.approvals].
+#
+# WHY THIS IS SO OPEN. The upstream defaults for the unattended lanes are
+# `deny`, and upstream's own comment on `single_query_mode` names the exact
+# failure that put this stack in a 33-minute loop on 2026-09-25: an
+# unanswered approval "just waits the full timeout then fails closed, so the
+# agent is forced to work around the block (often via execute_code)". The
+# developer profile's cron lane ran in `-q`, so EVERY dangerous-flagged
+# command hard-blocked — heredoc script execution, `SQL DELETE without
+# WHERE`, Tirith HIGH "nested executable body" — and the agent fell back to
+# `execute_code` 102 times. The stack's own memory had already recorded the
+# symptom ("AGENTS.md/CLAUDE.md writes are BLOCKED by write-gate when no
+# user is present").
+#
+# The operator's call (2026-09-25): Hermes runs inside a container on a
+# mostly dedicated host, so unintentional damage is not the primary risk —
+# but an agent that cannot act is. Hence: everything is auto-approved, and
+# STACK_APPROVAL_DENY keeps only the permanently-destructive commands shut.
+# `mode: off` (= --yolo) is what makes this true for the interactive lanes
+# too; the three unattended modes are what stop a cron turn timing out.
+#
+# WHAT THIS GIVES UP, stated plainly: Tirith still scans and still logs, but
+# with mode off a finding no longer gates anything, so `command_allowlist`
+# (TIRITH_PREAPPROVED_RULES) is now belt-and-braces rather than the control.
+# Credential READS stay permitted on purpose — AGENTS.md's own verification
+# checklist reads /etc/hermes/litellm.env, so a glob on that path would break
+# documented work. To dial this back: set `mode: smart` here (or per profile)
+# and the guardian gates HIGH/CRITICAL findings again.
+STACK_APPROVAL_DEFAULTS = {
+    "mode": "off",
+    "cron_mode": "approve",
+    "single_query_mode": "approve",
+    "unattended_mode": "approve",
+    "deny": [
+        # `deny` globs block even under --yolo / mode=off — the last line.
+        # Deliberately TIGHT: the stack's own jobs delete things (mktemp
+        # dirs, pruned worktree session dirs under /opt/data/worktrees), so
+        # a blanket "*rm -rf*" would break prune-repos.sh and teach the next
+        # operator to delete this list. Anchored to root/home, the paths a
+        # recursive delete cannot come back from, plus the explicit
+        # --no-preserve-root form.
+        "*rm -rf /", "*rm -rf / ", "*rm -rf /*",
+        "*rm -fr /", "*rm -fr / ", "*rm -fr /*",
+        "*rm -rf ~*", "*rm -fr ~*", "*--no-preserve-root*",
+        # Writing over a block device, or laying a filesystem on one.
+        "*dd *of=/dev/*", "*mkfs *", "*mkfs.*",
+        # Force-push. main is protected on this stack's own repos, but the
+        # org repos agents work in need not be, and a force-push is the one
+        # git operation that destroys commits outright.
+        "*git push --force*", "*git push -f*",
+        # Deleting the volumes that hold every profile's live state.
+        "*docker volume rm*", "*docker system prune*", "*docker stack rm*",
+        "*docker compose down -v*", "*docker compose down --volumes*",
+    ],
 }
 # Merged into every rendered config (see render_profile) — a profile can
 # override any individual key via [config_extra.delegation]. Top-level
@@ -368,8 +432,55 @@ def load_toml(path: Path) -> dict:
         return tomllib.load(fh)
 
 
+_APPROVAL_BINARY_KEYS = ("cron_mode", "single_query_mode", "unattended_mode")
+
+
+def validate_approvals(cfg: dict, where: str) -> None:
+    """Fail the build on an approval posture the container will reject.
+
+    Every value here decides whether an unattended turn can act at all, and
+    a wrong one fails at request time deep inside a cron run — where nobody
+    is watching — rather than at build time. The modes are a closed set in
+    hermes_cli/config_defaults.py DEFAULT_CONFIG["approvals"]:
+    `mode` is manual | smart | off (= --yolo), and the three unattended
+    switches are deny | approve.
+    """
+    mode = cfg.get("mode")
+    if mode not in ("manual", "smart", "off"):
+        raise ConfigError(
+            f"{where}: approvals.mode is {mode!r}, but the container accepts "
+            f"only 'manual', 'smart' or 'off' (off = --yolo)"
+        )
+    for key in _APPROVAL_BINARY_KEYS:
+        value = cfg.get(key)
+        # Absent is fine — the image's own default then applies; only a
+        # PRESENT but wrong value is a build error.
+        if value is None:
+            continue
+        if value not in ("deny", "approve"):
+            raise ConfigError(
+                f"{where}: approvals.{key} is {value!r}, but the container "
+                f"accepts only 'deny' or 'approve'"
+            )
+    deny = cfg.get("deny")
+    if deny is not None:
+        if not isinstance(deny, list) or any(
+            not isinstance(p, str) or not p.strip() for p in deny
+        ):
+            raise ConfigError(
+                f"{where}: approvals.deny must be a list of non-empty glob "
+                f"strings — it blocks commands even under --yolo, so an "
+                f"empty entry would block nothing while looking like a guard"
+            )
+
+
 def validate(models: dict, providers: dict, integrations: dict,
              gateway_names: set[str] | None = None) -> None:
+    # `--check` returns before render_profile runs, so the stack-wide
+    # posture is validated here; the per-profile merged result is validated
+    # in render_profile (the image build runs the full render, so a bad
+    # profile override still fails the build).
+    validate_approvals(STACK_APPROVAL_DEFAULTS, "STACK_APPROVAL_DEFAULTS")
     for alias, model in models.items():
         prov = model.get("provider")
         if prov not in providers:
@@ -755,6 +866,17 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     cron_cfg = dict(STACK_CRON_DEFAULTS)
     cron_cfg.update(config.get("cron") or {})
     config["cron"] = cron_cfg
+
+    # Approval posture for EVERY profile — see STACK_APPROVAL_DEFAULTS for
+    # the reasoning and for what this gives up. Merged (not replaced) so a
+    # profile may raise or lower its own posture via [config_extra.approvals].
+    # `deny` is a list, so a profile that sets it REPLACES the stack list
+    # rather than adding to it — stated because the opposite would be the
+    # natural guess.
+    approvals_cfg = dict(STACK_APPROVAL_DEFAULTS)
+    approvals_cfg.update(config.get("approvals") or {})
+    validate_approvals(approvals_cfg, f"profile '{name}' approvals")
+    config["approvals"] = approvals_cfg
 
     # Subagent delegation bounds for EVERY profile — see
     # STACK_DELEGATION_DEFAULTS. Merged (not replaced) so a profile may

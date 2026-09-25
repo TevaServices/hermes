@@ -40,6 +40,31 @@
 # only signal that the pipeline has stopped) rather than reporting "no
 # work".
 #
+# ONE SESSION PER WORK ITEM — the queue YIELDS, it does not compete.
+#
+# An item is worked in exactly one session. Before emitting, every item is
+# checked against the profile's own live sessions (team-session.py, reading
+# `state.db` — no claim file, no heartbeat to go stale) and any item a live
+# session is already on is DROPPED from the output. If that leaves nothing,
+# this script prints nothing and exits 0, so no bot-chat turn is spawned at
+# all — the cron lane simply exits without working. A live session also
+# fences its own predecessor: because the check is `--gate any`, a previous
+# delivery still in flight holds its item, which is what stops the next tick
+# stacking a second wake on running work.
+#
+# This is per ITEM, so a live session on one issue never fences a newly
+# routable issue elsewhere, and the fence lifts by itself when that turn
+# stops breathing (liveness is `sessions.last_activity_at`, refreshed on
+# every stream chunk, expiring after TEAM_SESSION_TTL, default 600s).
+# It exists because on 2026-09-25 this queue re-injected one in-progress
+# issue every 5 minutes while a Discord session was mid-work on it; both
+# edited the same worktree until the container had to be paused by hand.
+#
+# If team-session.py is missing or cannot read state.db the gate is DARK:
+# items are still emitted (work keeps flowing) and a deduped incident says
+# so, because a guard that silently stopped guarding is indistinguishable
+# from a quiet week.
+#
 # MULTI-OWNER: TEAM_OWNER is the PERSONAL owner (searched with the
 # profile's own gh auth state); TEAM_OWNER_ORGS (space-separated org
 # names) adds org owners, each searched with that org's own App
@@ -96,6 +121,8 @@
 #      developer bot login — author filter for org PR searches;
 #      provisioning's env-lines emits it), TEAM_QUEUE_LABEL, TEAM_TOPIC
 #      (default hermes-team), HERMES_HOME (for the dedupe state file),
+#      TEAM_SESSION_TTL (seconds of session silence before an item stops
+#      counting as held; default 600 — see team-session.py),
 #      ORG_CREDS_DIR (org descriptor dir override; default resolution:
 #      $HOME/org-creds, then <script_root>/home/org-creds for cron).
 
@@ -194,6 +221,18 @@ done
 if [ -n "$TEAM_THREAD_SH" ]; then
     "$TEAM_THREAD_SH" sweep >/dev/null 2>>"$ERR" || true
 fi
+
+# --- one session per work item -------------------------------------------
+# team-session.py answers "is a session in this profile already working on
+# this exact item?" — the question nothing could answer on 2026-09-25, when
+# this queue re-injected one in-progress issue every 5 minutes while a
+# Discord session was mid-work on it and both edited the same worktree.
+# Seeded next to this script (image /usr/local/bin, and the profile's
+# scripts dir); absent = the gate is off, which is the pre-fix behaviour.
+TEAM_SESSION_PY=""
+for c in /usr/local/bin/team-session.py "$(dirname "$0")/team-session.py" team-session.py; do
+    if [ -f "$c" ]; then TEAM_SESSION_PY="$c"; break; fi
+done
 
 count_lines() {
     if [ -z "$1" ]; then echo 0; else printf '%s\n' "$1" | wc -l | tr -d ' '; fi
@@ -426,6 +465,53 @@ if [ -n "$ORG_FAIL" ]; then
     exit 0
 fi
 
+# --- one session per work item: drop what a live session already holds ----
+# Per ITEM, not per profile: a live session on #26 must not fence a newly
+# routable issue in another repo, and a turn that is still running keeps
+# refreshing its own liveness — so the item it holds comes back the moment
+# that turn ends, without a blanket hold and without a heartbeat to go
+# stale. `--gate any` (not `user`): the unattended lane must stand down for
+# a live user session AND for its own previous delivery still in flight —
+# stacking a second wake on work already running is the same collision.
+GATE_DARK=""
+# --verbose is the "show me the real queue" mode, so the gate is bypassed
+# there: a human debugging wants to see the items, including the ones a live
+# session is holding.
+if [ -n "$TEAM_SESSION_PY" ] && [ "$VERBOSE" -eq 0 ]; then
+    for f in "$OUTDIR"/queue.*; do
+        [ -f "$f" ] || continue
+        : > "$f.kept"
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            item=$(printf '%s' "$line" | awk '{print $1}')
+            case "$item" in
+                # Not item-shaped (a stray line): keep it, it is not ours
+                # to interpret — the caller's own audit handles those.
+                */*'#'*) ;;
+                *) printf '%s\n' "$line" >> "$f.kept"; continue ;;
+            esac
+            python3 "$TEAM_SESSION_PY" --home "${HERMES_HOME:-/opt/data}" \
+                --gate any --item "$item" --quiet
+            case $? in
+                0) : ;;                       # live session holds it: drop
+                1) printf '%s\n' "$line" >> "$f.kept" ;;
+                # Unavailable: KEEP the item (work keeps flowing) but flag it.
+                # A gate that silently stopped protecting is indistinguishable
+                # from a quiet week — the same failure this script's exit
+                # codes exist to prevent.
+                *) GATE_DARK="yes"; printf '%s\n' "$line" >> "$f.kept" ;;
+            esac
+        done < "$f"
+        mv "$f.kept" "$f"
+    done
+    if [ -n "$GATE_DARK" ]; then
+        incident "SESSION GATE UNAVAILABLE  team-session.py could not read the profile's state.db.
+  The one-session-per-item guard is DARK: this queue will hand over work a
+  live session may already be working. Work is still flowing; investigate
+  ${HERMES_HOME:-/opt/data}/state.db before trusting the queue again." || true
+    fi
+fi
+
 QUEUE=$(cat "$OUTDIR"/queue.* 2>/dev/null | awk 'NF && !seen[$1]++')
 
 N=$(count_lines "$QUEUE")
@@ -433,7 +519,10 @@ QUEUE=$(cat "$OUTDIR"/queue.* 2>/dev/null | awk 'NF && !seen[$1]++')
 
 N=$(count_lines "$QUEUE")
 if [ "$N" -gt 0 ]; then
-    clear_state
+    # A DARK gate keeps its dedupe slot: clearing it would reprint the
+    # SESSION GATE UNAVAILABLE notice on every tick, which is the noise the
+    # dedupe exists to prevent.
+    [ -n "$GATE_DARK" ] || clear_state
     OWNERS_DISPLAY="$OWNER"
     for O in $ORGS; do OWNERS_DISPLAY="$OWNERS_DISPLAY $O"; done
     log "QUEUE OK  $N item(s) labelled $LABELS for $OWNERS_DISPLAY:"
@@ -620,7 +709,7 @@ for O in $OWNER $ORGS; do
     fi
 done
 
-clear_state
+[ -n "$GATE_DARK" ] || clear_state
 if [ "$VERBOSE" -eq 0 ]; then
     exit 0    # healthy + empty: SILENT (zero tokens — the cron default)
 fi
