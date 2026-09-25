@@ -37,10 +37,10 @@ services:
         # The FROM pin of the thin image (official base tag). Locally mise
         # exports it from mise.toml [env]; Komodo repeats it in the stack
         # environment (resources.toml).
-        HERMES_REF: ${HERMES_REF:-v2026.9.14}
+        HERMES_REF: ${HERMES_REF:-v2026.9.24}
     # Image name matches the Komodo Build resource's output tag (defined
     # in the <owner>/komodo control-plane repo) — do not rename here.
-    image: hermes-agent:${HERMES_REF:-v2026.9.14}
+    image: hermes-agent:${HERMES_REF:-v2026.9.24}
     container_name: hermes-main
     restart: unless-stopped
     environment:

@@ -250,7 +250,7 @@ def gateway_model_names() -> set[str] | None:
 # Config schema version used when the base image's own value can't be read
 # (local preview runs, where hermes_cli isn't installed). Keep in sync with
 # the HERMES_REF pin — the authoritative stamp is derived at build time.
-_FALLBACK_CONFIG_VERSION = 44
+_FALLBACK_CONFIG_VERSION = 46
 
 
 def latest_config_version() -> int:
