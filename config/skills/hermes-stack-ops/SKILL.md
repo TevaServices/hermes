@@ -162,8 +162,17 @@ baked helper — do NOT `git clone` into your own space:
 - `git-repo.sh worktree <git-url> [branch] [dest]` → prints your session's
   checkout path (idempotent central clone + worktree add).
 - If the branch is already checked out in another session's worktree, the
-  helper creates a session branch `s/<slug>` instead — push it with
-  `git push origin HEAD:<branch>`.
+  helper creates a session branch `s/<slug>` instead — publish it with
+  `git-publish.py` (see below), not `git push`.
+- **Publishing: `git-publish.py`, never `git push`.** A repo can require
+  signed commits, and a GitHub App's commits are only verified when
+  GitHub creates them server-side through the API — a pushed commit
+  never is, and unsigned commits block the MERGE even when every check
+  is green. `git-publish.py` replays the branch's commits as
+  API-created ones (same messages, same diffs, same file modes), so they
+  come back `verified: true`. It refuses anything it cannot prove and
+  never pushes the default branch. Repair an existing branch of unsigned
+  commits with `git-publish.py --replay-from origin/<base> --force`.
 - `git-repo.sh list` shows all repos + worktrees; `git-repo.sh prune
   --days 30` (weekly) removes worktrees that are CLEAN (no uncommitted
   or untracked changes) or DIRTY but idle > N days — dirty-but-recent

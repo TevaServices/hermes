@@ -1,7 +1,7 @@
 ---
 name: team-reviewer
 description: Reviewer gate set — fixed checklist (security, tests, style, testability), verdicts, merge protocol
-version: 1.2.0
+version: 1.3.0
 metadata:
   hermes:
     tags: [team, reviewer, review-gates]
@@ -113,9 +113,40 @@ Every command here is on the PR (`<PR#>` is the number
 - **Pass**: `gh pr review <PR#> --approve`, then
   `gh pr edit <PR#> --remove-label review/in-progress --add-label review/approved`,
   then request the user's review (`--add-reviewer <owner>` — a HUMAN, which
-  works) and post the verdict into the item's thread.
+  works) and post the verdict into the item's thread. **Before you call it
+  a pass, read back the two merge gates CI does not cover** — an approval
+  on a PR that cannot merge is a verdict nobody can act on:
+
+  ```bash
+  # CLEAN subsumes every required rule; BLOCKED is a rule unmet, UNSTABLE
+  # is only a check still running. Run this once CI has finished.
+  gh pr view <PR#> --repo owner/repo --json mergeable,mergeStateStatus \
+    --jq '"\(.mergeable) \(.mergeStateStatus)"'      # want MERGEABLE CLEAN
+  # which gate, when it is BLOCKED:
+  gh api repos/owner/repo/pulls/<PR#>/commits \
+    --jq '[.[].commit.verification.verified] | all'  # want true
+  gh api graphql -f query='{ repository(owner: "<owner>", name: "<repo>") {
+      pullRequest(number: <PR#>) { reviewThreads(first: 100) {
+        nodes { isResolved } } } } }' \
+    --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.isResolved == false)] | length'  # want 0
+  ```
+
+  `BLOCKED` is a finding, not a pass: **unsigned commits** mean the
+  developer published with `git push` instead of `git-publish.py`
+  (`team-developer` §Publishing — the repair is a rewrite, not a new
+  commit), and **unresolved threads** mean the developer still owes the
+  resolution for whatever it fixed. Name the specific gate in the
+  request-changes comment; "everything passes" and "cannot merge" are
+  both true at once here, and only one of them is useful.
 - **Fail**: `gh pr review <PR#> --request-changes -b '<issues explained>'`,
-  then swap `review/in-progress` → `review/changes`.
+  then swap `review/in-progress` → `review/changes`. Each finding is one
+  review thread; **you never resolve them** — resolving a thread is the
+  developer's, in the turn it fixes that finding (`team-conventions`
+  §Review threads). The one exception is a finding you raise with your
+  OWN approving verdict: a non-blocking nit the developer will never get
+  a turn to answer must not be left open, so either put it in the summary
+  comment or resolve it in the same turn you raise it.
 
 **The card is not yours to move.** Neither verdict writes a `status/*`
 label or touches the issue. The card follows from the verdict, so say
@@ -219,7 +250,12 @@ their comment — Discord approval must first be quoted into the issue by
 planner). Then:
 
 1. Final check: CI green (if repo has CI), no new commits since
-   approval.
+   approval, and the merge gates read back clean — `mergeStateStatus`
+   not `BLOCKED`, every commit verified, zero unresolved review threads
+   (the two queries in §"The verdict and the loop back"). A merge gate
+   that is unmet here is the reviewer's own miss: it means the verdict
+   was given without the read-back, so fix the state with the developer
+   rather than bypassing it.
 2. Merge per repo convention (registry: merge commit | squash) with
    your reviewer identity.
 3. `#reviews` post: merged, link. The merge closes the issue via
@@ -235,3 +271,14 @@ After developer pushes fixes: verify EVERY previous finding is actually
 resolved (re-run gates 1–5 on the new diff), then re-verdict. A fix
 that introduces new findings gets them as new comments — never silently
 pass an old finding to "clear it".
+
+**Check the threads, not just the code.** Read the developer's replies
+and the threads' resolved state; a thread the developer resolved without
+the finding actually being fixed is itself a finding — say so in a reply
+on that thread (a reply re-opens the conversation) rather than opening a
+duplicate. The reverse matters too: if a finding IS fixed and its thread
+is still open, the PR cannot merge, so name it in the verdict rather than
+discovering it at the merge button. A branch that comes back **rewritten
+rather than added to** (`--replay-from`, the signature repair) deserves a
+closer look at the diff being unchanged, not just re-verification of the
+findings.

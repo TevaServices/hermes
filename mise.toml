@@ -65,8 +65,8 @@ run = "python render.py --check"
 # purpose: that task gates the config render, and a routing bug in a shell
 # helper must not be able to block it (or vice versa).
 [tasks.test]
-description = "Run the repo's offline tests (gh shim owner routing, team label protocol)"
-run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-team-labels.sh"]
+description = "Run the repo's offline tests (gh shim owner routing, team label protocol, verified publish)"
+run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-team-labels.sh", "sh scripts/test-git-publish.sh"]
 
 [tasks.net]
 description = "Create the shared external docker network (idempotent)"

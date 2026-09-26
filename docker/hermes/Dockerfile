@@ -199,6 +199,11 @@ COPY docker/hermes/team-thread.sh /usr/local/bin/team-thread.sh
 COPY docker/hermes/team-session.py /usr/local/bin/team-session.py
 COPY docker/hermes/prune-repos.sh /usr/local/bin/prune-repos.sh
 COPY docker/hermes/refresh-repos.sh /usr/local/bin/refresh-repos.sh
+# The developer's publish path, replacing `git push`. A repo can require
+# signed commits, and a GitHub App's commits only carry a signature when
+# GitHub creates them server-side through the API; this replays the branch
+# as API-created commits so they verify (see the file's own header).
+COPY docker/hermes/git-publish.py /usr/local/bin/git-publish.py
 # claude-update.sh also lands here (not only in /opt/claude-hermes/) so
 # the reconciler can seed it as the default profile's daily job script.
 COPY docker/hermes/claude-update.sh /usr/local/bin/claude-update.sh
@@ -226,6 +231,7 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/expand-placeholders.py \
                /usr/local/bin/prune-repos.sh \
                /usr/local/bin/refresh-repos.sh \
+               /usr/local/bin/git-publish.py \
                /usr/local/bin/claude-update.sh \
                /usr/local/bin/gh \
                /usr/local/bin/gh-org-token \

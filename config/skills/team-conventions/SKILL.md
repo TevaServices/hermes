@@ -1,7 +1,7 @@
 ---
 name: team-conventions
 description: Shared conventions for the agile SaaS team (GitHub-first workflow, identity, cross-referencing, repos)
-version: 1.1.0
+version: 1.2.0
 metadata:
   hermes:
     tags: [team, workflow, github, conventions]
@@ -54,7 +54,11 @@ entrypoint from the profile env).
    request the user's review; fail = "Request changes" + `review/changes`
    with issues explained, back to developer. A developer fix re-adds
    `review/ready` — that re-add is what wakes the reviewer again, so
-   never merge a fix silently.
+   never merge a fix silently. Each finding is one review **thread**, and
+   the fix round that addresses a finding also RESOLVES its thread (see
+   "Review threads" below) — a repo can require every conversation
+   resolved before merge, and an open thread is then a merge gate no CI
+   job reports.
 6. **Human gate** → the user reviews → reviewer merges (only reviewer
    merges) or routes the user's flags back to developer.
 7. Issue auto-closes via `Closes #N` on merge; planner moves the card to
@@ -148,6 +152,60 @@ converse — a label of the *wrong family* for the object — is reported
 just as loudly by the queue guard (`!! FOREIGN LABEL`, see below), so a
 misfiled label is a thing you will be told about rather than a thing you
 have to remember to check.
+
+### Review threads (the reviewer opens, the developer resolves)
+
+A repo can require every review conversation resolved before merge
+(`required_review_thread_resolution` — GitHub's own doc: "This ensures
+that all comments are addressed or acknowledged before merge"). It is a
+MERGE gate, invisible to CI, and the state one PR sat in on 2026-09-26
+with every check green: the reviewer had opened nine threads across four
+rounds, verified every finding fixed, and approved — and every thread was
+still open, so nothing could merge.
+
+The ownership is one-writer-per-action, the same shape as the labels:
+
+| Action | Owner |
+|---|---|
+| open a thread (one per finding) | reviewer, with the verdict |
+| reply with what changed | developer |
+| resolve a thread | **developer**, in the turn it fixes that finding |
+
+**A fix is not complete until its thread is resolved.** The developer
+resolves the threads for the findings it fixed, in the same turn it
+publishes the fix, and leaves open only what it did not fix — with a
+reply saying why, because an open thread then means a disagreement
+rather than an oversight. The reviewer does not resolve the developer's
+work for it; it re-reads the threads and re-opens (replies on) any it
+finds were resolved without the finding being fixed.
+
+One residual is the reviewer's alone, because the developer never gets
+another turn: a finding the reviewer raises **with its own approving
+verdict** (a nit it will not block on) must not be left open — the
+reviewer either puts it in the summary comment or resolves it in the
+same turn it raises it.
+
+### Handoff read-back: the gates CI cannot see
+
+Green checks are not a mergeable PR. Two repo SETTINGS bypass CI
+entirely, and both produce the same symptom — `mergeStateStatus:
+BLOCKED` with every check green:
+
+- **Required signatures** — a repo that requires signed commits checks
+  every commit on the head branch at merge time. A GitHub App can only
+  produce a verified commit through the API, never by pushing, so the
+  developer publishes with `git-publish.py` and never `git push` (see
+  `team-developer` §Publishing).
+- **Required review-thread resolution** — the table above.
+
+Read the state back before claiming a handoff is ready, on both sides:
+
+```bash
+gh pr view <PR#> --repo owner/repo --json mergeable,mergeStateStatus \
+  --jq '"\(.mergeable) \(.mergeStateStatus)"'      # BLOCKED = a setting is unmet
+gh api repos/owner/repo/pulls/<PR#>/commits \
+  --jq '[.[].commit.verification.verified] | all'  # false = unsigned commits
+```
 
 ## Surfaces the team does NOT touch (user-owned)
 

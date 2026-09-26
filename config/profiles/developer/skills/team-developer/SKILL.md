@@ -1,7 +1,7 @@
 ---
 name: team-developer
 description: Developer role procedure — self-pull work discovery, worktree discipline, draft PRs, roadblock protocol
-version: 1.3.0
+version: 1.4.0
 metadata:
   hermes:
     tags: [team, developer]
@@ -142,7 +142,9 @@ git-repo.sh worktree https://github.com/<owner>/<repo> <default-branch>
 - Branch per issue: `git checkout -b <issue#>-<slug>` inside the
   worktree.
 - Never commit in the bare repo, never clone privately, never push to
-  `main`.
+  `main`. **Never `git push` at all — publish with `git-publish.py`**
+  (below); a pushed commit cannot be verified and a repo that requires
+  signatures will hold the PR hostage.
 - **Read the repo's own rules as soon as the worktree exists — before
   you implement anything — and treat them as binding on you.** That is
   `AGENTS.md`/`CLAUDE.md` (conventions, security invariants, testing)
@@ -180,6 +182,80 @@ under your own identity and follow the draft-PR flow below. If Claude
 Code adds "Generated with"/Co-Authored-By trailers, keep them only if
 the target repo's conventions allow.
 
+## Publishing: `git-publish.py`, never `git push`
+
+    git-publish.py [-C <worktree>] [-b <branch>] [--replay-from <ref>] [--force]
+
+**Why not `git push`.** A repo can require signed commits (`required_signatures`
+in a ruleset), and GitHub enforces it at MERGE time, not push time: it builds a
+test merge commit and checks every commit from the head branch, so unsigned
+commits block a squash merge even though GitHub signs the final squash commit.
+A GitHub App can never satisfy that by pushing. Bots have no account settings, so
+no signing key can be registered for `hermes-dev[bot]`; the ONLY commit GitHub
+verifies for an App is one it created itself through the API, authenticated as
+the App, with no author/committer/signature fields. `git-publish.py` does exactly
+that: it replays your local commits as API-created commits (blobs → trees →
+commits → ref), preserving each commit's message, diff, file modes and deletes,
+and re-points each `Signed-off-by:` at the bot GitHub actually stamps. The
+commits then report `verification.verified: true`.
+
+Run it from the worktree, on the branch checked out. First run creates the remote
+branch. It refuses to publish anything it cannot prove — the ref only moves after
+the App identity and the signature have been read back — and it never touches the
+default branch.
+
+**An existing branch of unsigned commits** (a PR already blocked, or one that
+predates this helper) is repaired by rewriting it:
+
+    git-publish.py --replay-from origin/main --force
+
+That replays the branch's own commits from the base as verified ones and
+force-updates the ref. It rewrites published history, so it needs `--force` and
+it invalidates standing approvals if the repo dismisses stale reviews — if the PR
+is already approved, re-hand it off (`review/ready`) in the same turn so the
+reviewer re-verifies the new head.
+
+## Resolving review threads
+
+A repo can require every review conversation resolved before merge
+(`required_review_thread_resolution`). **Resolving them is the developer's job
+and it is part of the work, not cleanup**: the reviewer opens a thread per
+finding, and the turn that fixes a finding is the turn that resolves its thread.
+A PR whose findings are all fixed but whose threads are all open is unmergeable
+with every check green.
+
+```bash
+# which threads are open, and what each one says
+gh api graphql -f query='
+  { repository(owner: "<owner>", name: "<repo>") {
+      pullRequest(number: <PR#>) {
+        reviewThreads(first: 50) { nodes {
+          id isResolved path line
+          comments(first: 1) { nodes { author { login } body } } } } } } }' \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+        | select(.isResolved == false)
+        | "\(.id)  \(.path):\(.line)  \((.comments.nodes[0].body // "")[0:80])"'
+
+# resolve the one you fixed — the mutation's own response is the read-back
+gh api graphql -f query='
+  mutation { resolveReviewThread(input: {threadId: "<thread id>"}) {
+      thread { id isResolved } } }'
+```
+
+**In an org repo, force the org token on these calls.** The `gh` shim routes by
+the owner it can see, and a `graphql` endpoint names no owner — so without this
+the PERSONAL App's token goes out instead, and that App has no installation on
+the org: the mutation fails in a way that reads exactly like a missing
+permission (`Resource not accessible by integration`, or the node simply not
+resolving). The slug is the descriptor filename in `$HOME/org-creds/`:
+
+    GH_TOKEN="$(gh-org-token <orgslug>)" gh api graphql -f query='…'
+
+Reply on the thread with what changed before resolving it (one line per finding
+is enough) — the reviewer re-reads the threads to re-verify, and a bare
+resolution tells it nothing. Leave a thread open when you did not fix it, and say
+why there: an open thread is a statement, so make it one.
+
 ## Draft PR flow
 
 0. **Open the work-item thread** the moment you claim the item, so the
@@ -201,22 +277,48 @@ the target repo's conventions allow.
    `team-thread.sh post` speaks as your own bot; use it for the status
    lines the conventions ask for instead of `hermes send`, which can only
    post into the channel, not the item's thread.
-1. Open the draft PR EARLY (first meaningful commit):
-   `gh pr create --draft --fill --base main`.
-2. Commit with your own identity; small, conventional commits. Every
+1. Commit with your own identity; small, conventional commits. Every
    commit must also satisfy the repo's contribution policy — the DCO
    sign-off above all, because it is the one CI job no local test run
    can reproduce. The stack's `prepare-commit-msg` hook adds
    `Signed-off-by:` for you, but only in repos that declare the rule,
    and `--no-verify` skips it: `git commit -s` is the explicit
    equivalent, and `git log -1 --format=%B` is the one look that
-   confirms it actually landed.
+   confirms it actually landed. (The publish below re-points that
+   trailer at the bot GitHub actually stamps the commit with, so a
+   worktree whose git identity has gone stale — a personal-App identity
+   in an org repo — still produces a green DCO job.)
+2. **Publish, then open the draft PR EARLY** (first meaningful commit):
+
+   ```bash
+   git-publish.py                       # NOT `git push` — see "Publishing"
+   gh pr create --draft --fill --base main
+   ```
+
+   `git-publish.py` creates the remote branch on its first run, so `gh pr
+   create` works straight after it, and it is the only publish path that
+   survives a repo requiring signed commits.
 3. Verify before marking ready: tests, lint, type checks — whatever the
    repo's CI runs, run locally. If CI exists, watch it green — and read
    `gh pr checks <PR#>` for **every** job, not only the ones your local
    suite mirrors. A policy job (DCO sign-off, license header, commit
    format) fails the PR exactly as hard as a red test, and it is
-   precisely the job a local run cannot tell you about.
+   precisely the job a local run cannot tell you about. Then read back
+   the two things a green CI cannot tell you, because they are repo
+   *settings* rather than jobs — `mergeStateStatus` must not be `BLOCKED`:
+
+   ```bash
+   gh pr view <PR#> --repo owner/repo --json mergeable,mergeStateStatus \
+     --jq '"\(.mergeable) \(.mergeStateStatus)"'      # want MERGEABLE, not BLOCKED
+   gh api repos/owner/repo/pulls/<PR#>/commits \
+     --jq '[.[].commit.verification.verified] | all'  # want true
+   ```
+
+   `BLOCKED` with everything green means a ruleset is unmet, and the two
+   that bite here are **unsigned commits** (fix: `git-publish.py
+   --replay-from origin/<base> --force`, and see "Publishing") and
+   **unresolved review threads** (fix below). Nothing about either one
+   shows up in `gh pr checks`.
 4. **Hand off to reviewer — the LABEL is the handoff, not a review
    request.** Bot identities cannot be requested as PR reviewers
    (`gh pr edit --add-reviewer 'hermes-reviewer[bot]'` fails with
@@ -243,10 +345,16 @@ the target repo's conventions allow.
    issues by `status/*`, the reviewer's polls PRs), which is the state
    `!! FOREIGN LABEL` reports.
 5. `review/changes` from reviewer → fix on the same branch (the PR
-   re-opens as draft), re-verify, then hand off AGAIN — the PR's labels
-   only (the issue is already In Review):
+   re-opens as draft), **resolve the threads whose finding you actually
+   fixed**, re-verify, then hand off AGAIN — the PR's labels only (the
+   issue is already In Review):
 
    ```bash
+   git-publish.py                       # publish the fixes (never `git push`)
+   # reply with what changed (the reviewer re-reads this), then resolve:
+   gh api graphql -f query='
+     mutation { resolveReviewThread(input: {threadId: "<thread id>"}) {
+       thread { id isResolved } } }'      # see "Resolving review threads"
    gh pr ready <PR#> --repo owner/repo
    gh pr edit <PR#> --repo owner/repo \
      --add-label review/ready --remove-label review/changes
@@ -256,6 +364,17 @@ the target repo's conventions allow.
    without it the fix sits invisible, because the reviewer's queue is
    the label and nothing else. Comment what changed per point if the fix
    is non-obvious.
+
+   **Resolving the threads is part of completing the work, not tidying.**
+   A repo can require every conversation resolved before merge, so a
+   fix round that leaves its findings open leaves the PR unmergeable
+   with every check green — verified findings, green CI, an approving
+   reviewer, and no merge button. The developer RESOLVES; the reviewer
+   only opens findings and verifies them. Resolve the ones you fixed, in
+   the same turn you fix them, and say per thread what changed. Leave a
+   thread open only when you did NOT fix it — and then say why on the
+   thread, because an open thread is a deliberate disagreement, not an
+   oversight.
 6. `review/approved` from reviewer → the human gate is next (reviewer
    requests the user). Do not merge — you never merge.
 
