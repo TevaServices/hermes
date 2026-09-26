@@ -69,7 +69,7 @@ services:
       # off the unreadable read-only mount into the runtime-owned home on every
       # boot); pointing at that file is configuration. See the komodo-ops skill.
       KOMODO_AUTH_HEADER: /opt/data/home/komodo-auth-header
-      # The TEVA control plane's auth header — a SEPARATE Komodo from the
+      # The alternate control plane's auth header — a SEPARATE Komodo from the
       # homelab one above (its own core, servers and secrets). Same shape and
       # the same reasoning: declared here because s6 services read the
       # container environment, never the entrypoint's exports; the entrypoint

@@ -334,21 +334,43 @@ fi
 # so the HOMELAB control-plane credential belongs to that profile alone —
 # the team profiles have no reason to drive THIS control plane, and each
 # extra copy is another place a credential can be read from. (The release
-# profile gets the TEVA control plane's header instead, in the block below:
+# profile gets the ALTERNATE control plane's header instead, in the block below:
 # a different control plane, and the only role that deploys.)
 KOMODO_MOUNT="${KOMODO_AUTH_HEADER_MOUNT:-/etc/komodo-auth-header}"
-if [ -r "$KOMODO_MOUNT" ]; then
-  mkdir -p "$HERMES_HOME/home"
-  KOMODO_DEST="$HERMES_HOME/home/komodo-auth-header"
-  cp -f "$KOMODO_MOUNT" "$KOMODO_DEST"
-  chown "$RUNTIME_UID:$RUNTIME_UID" "$KOMODO_DEST" "$HERMES_HOME/home"
-  chmod 600 "$KOMODO_DEST"
-  echo "hermes-stack: komodo auth header -> $KOMODO_DEST"
-else
-  echo "hermes-stack: warning: no readable komodo auth header at $KOMODO_MOUNT" >&2
-fi
+# Copy a credential file off its unreadable read-only mount into a
+# runtime-owned home. THE GUARD IS `-f`, NOT `-r`, and that distinction is
+# load-bearing: when the host file does not exist, Docker creates the mount
+# TARGET as a DIRECTORY, and a directory is perfectly readable — so `-r`
+# passes and `cp` then fails with "omitting directory". Under this script's
+# `set -euo pipefail` that killed the entrypoint and crash-looped the whole
+# container (observed: a 7-restart loop from an absent credential file,
+# which takes every profile offline, not just the one that credential was
+# for). A MISSING CREDENTIAL IS NOT A FATAL CONDITION — it degrades one
+# capability and must be reported, never fatal. Every path here returns 0.
+install_secret_file() {  # <src> <dest> <label>
+  if [ ! -e "$1" ]; then
+    echo "hermes-stack: warning: no $3 at $1 (skipped)" >&2
+    return 0
+  fi
+  if [ ! -f "$1" ]; then
+    echo "hermes-stack: warning: $3 at $1 is not a regular file (skipped)" >&2
+    return 0
+  fi
+  mkdir -p "$(dirname "$2")" 2>/dev/null || return 0
+  if cp -f "$1" "$2" 2>/dev/null; then
+    chown "$RUNTIME_UID:$RUNTIME_UID" "$2" 2>/dev/null || true
+    chmod 600 "$2" 2>/dev/null || true
+    echo "hermes-stack: $3 -> $2"
+  else
+    echo "hermes-stack: warning: could not install $3 from $1" >&2
+  fi
+  return 0
+}
 
-# --- 3d. the TEVA control plane's auth header (release profile only) -------
+install_secret_file "$KOMODO_MOUNT" "$HERMES_HOME/home/komodo-auth-header" \
+  "komodo auth header"
+
+# --- 3d. the ALTERNATE control plane's auth header (release profile only) ----
 # A SEPARATE Komodo from the one above: its own core, its own servers, its
 # own key. Same FILE-vs-CONFIG split and the same non-readable mount, so the
 # same treatment applies (copy it to the runtime-owned home; the var that
@@ -360,20 +382,12 @@ fi
 # this runs; if it does not exist yet (a first boot ordering surprise), say
 # so rather than failing, because the rest of the container is unaffected.
 KOMODO_ALT_MOUNT="${KOMODO_ALT_AUTH_HEADER_MOUNT:-/etc/komodo-alt-auth-header}"
-KOMODO_ALT_HOME="$HERMES_HOME/profiles/release/home"
-if [ -r "$KOMODO_ALT_MOUNT" ]; then
-  if [ -d "$HERMES_HOME/profiles/release" ]; then
-    mkdir -p "$KOMODO_ALT_HOME"
-    KOMODO_ALT_DEST="$KOMODO_ALT_HOME/komodo-alt-auth-header"
-    cp -f "$KOMODO_ALT_MOUNT" "$KOMODO_ALT_DEST"
-    chown "$RUNTIME_UID:$RUNTIME_UID" "$KOMODO_ALT_DEST" "$KOMODO_ALT_HOME"
-    chmod 600 "$KOMODO_ALT_DEST"
-    echo "hermes-stack: komodo alt auth header -> $KOMODO_ALT_DEST"
-  else
-    echo "hermes-stack: warning: release profile home missing; komodo alt header not copied" >&2
-  fi
+if [ -d "$HERMES_HOME/profiles/release" ]; then
+  install_secret_file "$KOMODO_ALT_MOUNT" \
+    "$HERMES_HOME/profiles/release/home/komodo-alt-auth-header" \
+    "alternate komodo auth header"
 else
-  echo "hermes-stack: warning: no readable komodo alt auth header at $KOMODO_ALT_MOUNT" >&2
+  echo "hermes-stack: warning: release profile home missing; alternate komodo header not copied" >&2
 fi
 
 # --- 4. git + gh for the runtime user, per tool-home -----------------------
