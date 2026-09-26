@@ -541,6 +541,81 @@ hook; and its detection is in-repo only, so a DCO requirement expressed
 solely as branch protection or an outside app is invisible to it — which is
 what the documented read is for.
 
+### The merge gates a green CI cannot see (signed commits, resolved threads)
+
+A ruleset can gate a merge on conditions **no workflow job reports**, so a
+PR can be green on every check, approved by the reviewer and by the user,
+and still be unmergeable. The `Main` ruleset of a repo the team works on
+requires both of the rules below, and a PR sat `BLOCKED` on them after
+four review rounds — `dco`, `lint`, `test` and `e2e` all passing. The read
+that catches it is `mergeStateStatus` (`gh pr view <PR#>
+--json mergeable,mergeStateStatus`): `BLOCKED` with everything green means
+a rule, not a test — and a `BLOCKED` PR looks exactly like a quiet queue
+from every other angle.
+
+- **`required_signatures` — and why the developer can never `git push`
+  past it.** GitHub evaluates signature requirements at merge time, on the
+  commits introduced by the test merge it builds, so unsigned commits on
+  the head branch block a squash merge *"even though GitHub would sign the
+  final squash commit"* (the docs say so explicitly; a squash-only repo
+  does not escape it). A GitHub App cannot satisfy this by pushing at all:
+  a bot user has no account settings, so no GPG/SSH key can be registered
+  against `hermes-dev[bot]`, and the only commit GitHub verifies for an App
+  is one it creates itself through the API, authenticated as the App, with
+  no author, committer or signature field ("Signature verification for
+  bots"). Observed: that PR's four commits were `verified=false,
+  reason=unsigned` — a fact no agent could have fixed by pushing harder.
+  So the developer's publish path is **`git-publish.py`**
+  (`docker/hermes/`), which replays the branch's local commits as
+  API-created ones — blobs → trees → commits → ref — preserving every
+  message, diff, file mode (100755), symlink and delete, and re-pointing
+  each `Signed-off-by:` at the identity GitHub actually stamps. That last
+  part is not cosmetic: the DCO hook's trailer names the WORKTREE's git
+  config, which can be a different bot from the token the push routes
+  through (those commits were signed off by the PERSONAL App's identity
+  while the PR belonged to the org App, and a replayed commit that kept
+  that trailer would fail the DCO job *while being signed*). Nothing moves
+  until it is proven: the ref updates only after the App identity has been
+  read back from the first created commit (a disagreement re-creates the
+  chain with the stamped identity and caches it, so the correction happens
+  once) and the commit reports `verified`.
+  An existing branch of unsigned commits is **repaired rather than
+  re-committed**: `git-publish.py --replay-from origin/main --force`,
+  which rewrites the branch in place (and so needs the same re-approval
+  any force-push does).
+- **`required_review_thread_resolution`.** Resolving a finding's thread is
+  part of fixing it, and belongs to the developer — in the same turn it
+  publishes the fix, with a reply saying what changed. The reviewer opens
+  threads and re-reads them; it never resolves the developer's work for
+  it. The one thread that is the reviewer's own is a finding raised
+  **with its own approving verdict** (a nit it chooses not to block on):
+  the developer never gets another turn for that, so the reviewer either
+  puts it in the summary comment or resolves it as it raises it — a nit
+  left open beside an approval is a merge gate nobody can clear.
+
+Two App capabilities carry both halves, and neither needs a code change to
+grant: creating the commit objects is `contents: write` (every team App
+already has it), and the thread mutation is accepted from an App that did
+NOT open the thread as long as it can write to the repo — verified
+2026-09-26 live, resolving nine threads the *reviewer's* bot had opened
+with the developer's ORG installation token. That token is the part that
+matters and the part that is easy to get wrong: a `graphql` endpoint names
+no owner, so the `gh` shim cannot route it and the PERSONAL token goes out
+instead — and the personal App has no installation on the org, so the
+mutation fails in a way that reads exactly like a missing permission.
+Force it: `GH_TOKEN="$(gh-org-token <orgslug>)" gh api graphql …`.
+
+Both halves are pinned offline by `scripts/test-git-publish.sh` (`mise run
+test`, no Docker, no network): a stubbed `gh` implements the git-data API
+against a REAL bare repo, so the published branch is checked with plain
+git — tree identity against the worktree, the preserved modes and symlink,
+the delete, the re-pointed trailer AND the commit that must not acquire
+one, the identity correction and its cache, and every refusal (default
+branch, merge commit, unforced rewrite) with nothing published. It also
+fails the run if any commit payload carries author/committer/signature —
+the omission is what makes the commit verifiable — and if a skill tells an
+agent to `git push`.
+
 ### Security tuning (guard friction)
 
 This stack's agents live in `terminal`, and three guard behaviours blocked
@@ -1381,6 +1456,9 @@ DCO sign-off hook (installed per tool-home; signs off only where the repo asks):
 docker exec -e HOME=/opt/data/home hermes-main git config --global core.hooksPath
 docker exec -e HOME=/opt/data/profiles/developer/home hermes-main \
   git config --global core.hooksPath          # -> /opt/hermes-git-hooks
+# The verified publish path is on PATH for every profile (the developer's
+# `git push` replacement — see §"The merge gates a green CI cannot see"):
+docker exec hermes-main test -x /usr/local/bin/git-publish.py && echo "publish ok"
 docker exec hermes-main ls -l /opt/hermes-git-hooks/prepare-commit-msg   # 0755
 # Functional probe, in a throwaway repo: a repo that declares DCO gets the
 # trailer, one that does not stays byte-identical. No network, no clone.
