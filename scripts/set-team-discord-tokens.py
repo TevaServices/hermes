@@ -41,7 +41,7 @@ ENV_DIR = os.environ.get("HERMES_ENV_DIR", "/etc/hermes")
 ENV_FILE = os.path.join(ENV_DIR, "hermes-main.env")
 # Group owning the env file on the host (640, root:<group>).
 HOST_GROUP = os.environ.get("HERMES_HOST_GROUP", "ubuntu")
-PROFILES = ["planner", "developer", "reviewer"]
+PROFILES = ["planner", "developer", "reviewer", "release"]
 # Your Discord server's name — only used in the printed instructions.
 GUILD_NAME = os.environ.get("DISCORD_GUILD_NAME", "your server")
 # The main bot's effective guild permission integer — read it from

@@ -1,6 +1,6 @@
 ---
 name: team-reviewer
-description: Reviewer gate set — fixed checklist (security, tests, style, testability), verdicts, merge protocol
+description: Reviewer gate set — fixed checklist (security, tests, style, testability), verdicts, handoff to release
 version: 1.3.0
 metadata:
   hermes:
@@ -112,10 +112,13 @@ Every command here is on the PR (`<PR#>` is the number
 
 - **Pass**: `gh pr review <PR#> --approve`, then
   `gh pr edit <PR#> --remove-label review/in-progress --add-label review/approved`,
-  then request the user's review (`--add-reviewer <owner>` — a HUMAN, which
-  works) and post the verdict into the item's thread. **Before you call it
-  a pass, read back the two merge gates CI does not cover** — an approval
-  on a PR that cannot merge is a verdict nobody can act on:
+  then request the **code owner's** review (`--add-reviewer <owner>` — a
+  HUMAN, which works) and post the verdict into the item's thread. Your
+  approval is not the release: `review/approved` means "approved by review,
+  awaiting a CODEOWNER's approval", and `release` merges only on the latter.
+  **Before you call it a pass, read back the merge gates CI does not
+  cover** — an approval on a PR that cannot merge is a verdict nobody can
+  act on:
 
   ```bash
   # CLEAN subsumes every required rule; BLOCKED is a rule unmet, UNSTABLE
@@ -197,6 +200,10 @@ Run ALL gates before any verdict. Cite evidence (file:line) per gate.
 8. **PR hygiene** — draft→ready flow followed; scope matches the
    linked issue (`Closes #N` present); no drive-by edits (flag them as
    separate-issue candidates); commit messages coherent.
+   **And the PR carries a `type/*`** — it is release metadata now, not
+   decoration: the version bump is inferred from it, and a PR with none
+   contributes only a patch. Missing → name it as a finding (a one-line fix
+   for developer: copy the issue's type onto the PR).
 9. **Perf sanity (this host is 1 CPU / 6 GB)** — no O(n²)-obvious hot
    loops on unbounded inputs, no unbounded in-memory buffers, no
    parallel build spikes in CI config.
@@ -235,32 +242,42 @@ never author a fix.
   gate (name the gate number), and what a correct fix looks like. Top
   comment summarizes, and names the card state in the same comment
   (`@hermes-planner` — back to In Progress). **Do not write the label.**
-- **Approve**: approve + `gh pr ready` + request the user's review
-  (`gh pr edit --add-reviewer <owner>` where possible; otherwise
-  cc @<owner> in a comment). Comment gates-passed summary (one line per
-  gate), naming the card state it implies (`@hermes-planner` — In
-  Review/human gate). Post verdict to `#reviews`. **Do not write a
-  `status/*` label and do not edit the issue** — the reviewer's writes
-  are `review/*` on this PR, nothing else.
+- **Approve**: approve + `gh pr ready` + `review/approved` + request the
+  **CODEOWNER's** review (`gh pr edit --add-reviewer <owner>` where
+  possible; otherwise cc @<owner> in a comment). Comment gates-passed
+  summary (one line per gate), naming the card state it implies
+  (`@hermes-planner` — In Review/human gate). Post verdict to `#reviews`.
+  **Do not write a `status/*` label and do not edit the issue** — the
+  reviewer's writes are `review/*` on this PR, nothing else — **and do not
+  merge**: the code owner's approval hands the PR to `release`, which owns
+  everything after the verdict (`team-release`).
 
-## Merge protocol (only after the user)
+## Handoff to release (you do NOT merge)
 
-Merge ONLY when the user's satisfaction is on record (GitHub approval or
-their comment — Discord approval must first be quoted into the issue by
-planner). Then:
+**You never merge.** Merge, tag, deploy and validate are `release`'s, end to
+end (`team-release`). Your last writes on a PR are your verdict, the label,
+and the code-owner review request.
 
-1. Final check: CI green (if repo has CI), no new commits since
-   approval, and the merge gates read back clean — `mergeStateStatus`
-   not `BLOCKED`, every commit verified, zero unresolved review threads
-   (the two queries in §"The verdict and the loop back"). A merge gate
-   that is unmet here is the reviewer's own miss: it means the verdict
-   was given without the read-back, so fix the state with the developer
-   rather than bypassing it.
-2. Merge per repo convention (registry: merge commit | squash) with
-   your reviewer identity.
-3. `#reviews` post: merged, link. The merge closes the issue via
-   `Closes #N`, which is the state change that counts; planner moves the
-   card to Done — ask in the same post rather than writing the label.
+1. On **Approve**: `gh pr ready`, add `review/approved`, and request the
+   **code owner's** review (`gh pr edit --add-reviewer <owner>` where
+   possible; otherwise cc them in a comment). `review/approved` means
+   "approved by review, awaiting a CODEOWNER's approval" — it is not a
+   release, and it is not yours to interpret as one.
+2. Say what you have left unmet, if anything: a `BLOCKED`
+   `mergeStateStatus`, an unresolved thread, a missing `type/*`, a red
+   check. Release reads those back before merging and a surprise there costs
+   a cycle — the read-back queries are in §"The verdict and the loop back".
+   A gate you know is unmet and did not name is your miss, not theirs.
+3. `#reviews` post: the verdict and the link. The merge (which release
+   performs) closes the issue via `Closes #N` — the state change that
+   counts; planner moves the card to Done. Ask in the same post rather than
+   writing the label.
+
+**Never merge on the human's behalf, and never merge because the human said
+so in Discord.** The release queue and the release agent both require a real
+GitHub approval from a code owner; anything else simply will not be picked
+up, and a merge you performed without it is the one act no later check can
+undo.
 
 If the user flags changes: convert each flag into review comments
 (explained like any Request-changes finding) → back to developer.
@@ -278,7 +295,7 @@ the finding actually being fixed is itself a finding — say so in a reply
 on that thread (a reply re-opens the conversation) rather than opening a
 duplicate. The reverse matters too: if a finding IS fixed and its thread
 is still open, the PR cannot merge, so name it in the verdict rather than
-discovering it at the merge button. A branch that comes back **rewritten
+discovering it in release's gate read-back. A branch that comes back **rewritten
 rather than added to** (`--replay-from`, the signature repair) deserves a
 closer look at the diff being unchanged, not just re-verification of the
 findings.

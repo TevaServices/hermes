@@ -190,10 +190,11 @@ BOOT_PLACEHOLDERS = {
     "DISCORD_HOME_CHANNEL",
     # #hermes — the default agent's unrouted channel.
     "DISCORD_CHANNEL_MAIN",
-    # The three team channels, one per profile.
+    # The four team channels, one per profile.
     "DISCORD_CHANNEL_PLANNER",
     "DISCORD_CHANNEL_DEVELOPER",
     "DISCORD_CHANNEL_REVIEWER",
+    "DISCORD_CHANNEL_RELEASE",
 }
 _PLACEHOLDER_RE = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 

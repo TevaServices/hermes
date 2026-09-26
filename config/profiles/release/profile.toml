@@ -1,0 +1,120 @@
+# "release" agent profile — merges approved PRs, cuts the release, deploys it
+# to the internal environment, and validates it against what is running there.
+
+# Renders into the image at /overlay/profiles/release/ and runs INSIDE the
+# same container as the default profile (official image's s6 supervision; the
+# default profile's multiplexed gateway routes Discord per channel via
+# gateway.profile_routes — named gateways are NOT started: do NOT run
+# `hermes -p release gateway start` while multiplexing).
+
+# This is EXECUTION-grade work, not judgment: read a gate back, follow a
+# deterministic procedure, parse a CI log, call an API, compare a digest. The
+# reviewer keeps `smartest` for the diff judgment a release turn never does.
+# `smarter` is chosen for the window: a release turn reads whole CI job logs,
+# a Komodo update record and a release's job list, which is where 256k starts
+# to be the binding constraint. Tier names come from config/models.toml; which
+# backend sits behind each one is config/litellm.yaml's business.
+model = "smarter"
+# The tier a failing primary moves to. render.py emits this as the
+# `fallback_providers` chain Hermes walks, in order, when the primary fails
+# with rate-limit, overload or connection errors (hermes_cli/fallback_config).
+# The entry is built FROM the tier, so it follows a backend swap automatically.
+fallback_model = "smartest"
+integrations = ["honcho", "firecrawl"]
+platforms = ["discord"]
+
+[config_extra]
+# Team-role toolset fence: the DOCUMENTED global-disable key
+# (agent.disabled_toolsets — applies after per-platform tool config and
+# always removes the listed toolsets). The release agent reads, runs and
+# posts (file/terminal/search/web/memory/skills/discord) but never writes
+# code and gets no media generation or computer_use/homeassistant.
+#
+# `browser` is disabled ON PURPOSE, and it is not an oversight to "fix": the
+# only check that wants a browser is the mach /ui login, and that needs an
+# INTERACTIVE Zitadel sign-in the agent cannot perform. Enabling it would add
+# a wide attack surface for a check that would still not complete. Live
+# validation is HTTP (`/healthz`, the `/ui` redirect status) plus the
+# container's image tag from Komodo.
+#
+# `delegation` and `cronjob` are ENABLED (full rationale in the planner
+# profile). A release turn waits on GitHub Actions, so a bounded background
+# wait is the natural shape.
+[config_extra.agent]
+disabled_toolsets = [
+    "browser",
+    "computer_use",
+    "image_gen",
+    "tts",
+    "video_gen",
+    "video",
+    "homeassistant",
+    "x_search",
+]
+
+# A release turn WAITS on a GitHub Actions release workflow that takes
+# minutes, and the stack-wide bot-chat delivery cap is 900s (render.py
+# STACK_CRON_DEFAULTS -> cron.bot_chat_delivery_timeout_seconds) whose expiry
+# KILLS the child mid-turn. merge -> 6-minute workflow -> deploy -> validate
+# does not fit in 900s, so this raises the ceiling for THIS profile. The
+# skill's wait stays bounded and resumable anyway (write RELEASE_STATE=tagged
+# and end the turn; the triage lane re-wakes on "tagged, not published"), so
+# a kill here costs a resumption rather than the run.
+[config_extra.cron]
+bot_chat_delivery_timeout_seconds = 1800
+
+# Discord: #releases ONLY, and no @mention needed there.
+#
+# NOTE THE FORM. These keys go in the NESTED `platforms.discord.extra`
+# block — NOT the public top-level `discord:` one. The public form's
+# require_mention is translated by the plugin hook
+# (plugins/platforms/discord/adapter.py _apply_yaml_config) into
+# PROCESS-GLOBAL os.environ["DISCORD_REQUIRE_MENTION"], first-writer-wins.
+# All five profiles share one gateway process under
+# GATEWAY_MULTIPLEX_PROFILES, so that write leaks: a profile whose extra
+# carries no require_mention lets adapter.py::_discord_require_mention fall
+# through to os.getenv, and the MAIN bot would answer every message in every
+# channel it can see. The nested form lands in PlatformConfig.extra
+# (config.py PlatformConfig.from_dict), which the adapter reads FIRST and
+# which is per-profile by construction — the same isolation rule as issue
+# #72348.
+#
+# require_mention = false skips the mention gate. Deliberately NOT
+# `free_response_channels`: a free-response channel sets is_free_channel,
+# which upstream ALSO uses to skip auto-threading (adapter.py:
+# `skip_thread = ... or is_free_channel`) — and a release belongs in a thread
+# per work item.
+#
+# allowed_channels is load-bearing, not decoration: require_mention is
+# profile-wide, so without the fence this bot would answer every message
+# in every channel it can see — #hermes and its teammates' channels
+# included. Threads stay reachable because the gate matches a thread's
+# parent channel too. Keep the two keys together. It does NOT widen
+# authorization: DISCORD_ALLOWED_USERS remains the gate (adapter
+# _is_allowed_user falls back to channel-scoped access only when no
+# user/role allowlist exists).
+[config_extra.platforms.discord.extra]
+allowed_channels = ["@@DISCORD_CHANNEL_RELEASE@@"]
+require_mention = false
+
+# Extra env placeholders rendered into .env.example (secrets arrive via
+# the host env file mapped by entrypoint.sh PROFILE_<NAME>_<VAR>).
+#
+# NOTE what is NOT here: the internal deployment's control-plane URL, stack
+# name, hostname or image-tag variable. This repo is PUBLIC, so none of that
+# belongs in git — it lives in the agent's own state file on the volume
+# (see the team-release skill's registry section), seeded once by the
+# operator. `KOMODO_ALT_AUTH_HEADER` (the path to the credential COPY) is
+# declared in compose, not here.
+[env]
+DISCORD_BOT_TOKEN = ""
+GITHUB_APP_ID = ""
+GITHUB_APP_INSTALLATION_ID = ""
+GITHUB_APP_PRIVATE_KEY_PATH = ""
+
+# Headless Chromium CDP sidecar — see config/profiles/default/profile.toml
+# (the s6 service chromium-cdp serves CDP on 127.0.0.1:9333; gated by
+# HERMES_CHROMIUM_CDP in compose). Declared for parity with the other
+# profiles; `browser` stays in disabled_toolsets above, so nothing uses it.
+[config_extra.browser]
+cdp_url = "http://127.0.0.1:9333"

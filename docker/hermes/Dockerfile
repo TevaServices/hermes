@@ -182,6 +182,7 @@ COPY docker/hermes/bootstrap-profiles.sh /usr/local/bin/hermes-bootstrap-profile
 COPY docker/hermes/git-repo.sh /usr/local/bin/git-repo.sh
 COPY docker/hermes/team-queue.sh /usr/local/bin/team-queue.sh
 COPY docker/hermes/review-queue.sh /usr/local/bin/review-queue.sh
+COPY docker/hermes/release-queue.sh /usr/local/bin/release-queue.sh
 # Cron job scripts are ALSO seeded per profile at boot
 # (cron-reconcile.py) — the scheduler requires a job's script to live
 # under <HERMES_HOME>/scripts/, so /usr/local/bin is the image-side
@@ -225,6 +226,7 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/git-repo.sh \
                /usr/local/bin/team-queue.sh \
                /usr/local/bin/review-queue.sh \
+               /usr/local/bin/release-queue.sh \
                /usr/local/bin/team-thread.sh \
                /usr/local/bin/team-session.py \
                /usr/local/bin/cron-reconcile.py \

@@ -69,6 +69,20 @@ services:
       # off the unreadable read-only mount into the runtime-owned home on every
       # boot); pointing at that file is configuration. See the komodo-ops skill.
       KOMODO_AUTH_HEADER: /opt/data/home/komodo-auth-header
+      # The TEVA control plane's auth header — a SEPARATE Komodo from the
+      # homelab one above (its own core, servers and secrets). Same shape and
+      # the same reasoning: declared here because s6 services read the
+      # container environment, never the entrypoint's exports; the entrypoint
+      # copies the file into the RELEASE profile's tool-home on every boot,
+      # and this points at that copy. The mount itself is 600 and unreadable
+      # by the agent, so `-H @$KOMODO_ALT_AUTH_HEADER` (the copy) is the form
+      # to use — see the team-release skill.
+      KOMODO_ALT_AUTH_HEADER: /opt/data/profiles/release/home/komodo-alt-auth-header
+      # Where the release agent keeps its per-repo deployment state. Explicit
+      # because a cron child's HERMES_HOME is not guaranteed to be the profile
+      # home; read by release-queue.sh, so it lives in the stack environment
+      # rather than the launch profile's env file (see AGENTS.md §Secrets).
+      TEAM_RELEASE_STATE_DIR: /opt/data/profiles/release/cache/release
       # Headless Chromium CDP sidecar for the browser tools — see
       # docker/hermes/s6-rc.d/chromium-cdp/ (binds 127.0.0.1 only; the
       # rendered browser.cdp_url points the agent at it).
@@ -137,6 +151,12 @@ services:
       # Use `-H @$KOMODO_AUTH_HEADER` (see the komodo-ops skill), never the
       # mount path directly.
       - ${KOMODO_AUTH_HEADER_MOUNT:-/home/ubuntu/.komodo-auth-header}:/etc/komodo-auth-header:ro
+      # The alternate control plane's header (see KOMODO_ALT_AUTH_HEADER above).
+      # Lives with the other runtime secrets in /etc/hermes (root-owned 640,
+      # root:<host-group>) rather than beside the older homelab header above.
+      # The entrypoint copies it into the release profile's home because this
+      # mount is 600 and not readable by the agent.
+      - ${KOMODO_ALT_AUTH_HEADER_MOUNT:-/etc/hermes/komodo-alt-auth-header}:/etc/komodo-alt-auth-header:ro
       # Uncomment to enable Hermes' "docker" terminal backend, letting
       # the agent run sibling containers on the host docker daemon.
       # This is a wide grant of host privilege — only do it for

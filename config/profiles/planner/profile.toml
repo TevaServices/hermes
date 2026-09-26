@@ -59,7 +59,7 @@ disabled_toolsets = [
 # require_mention is translated by the plugin hook
 # (plugins/platforms/discord/adapter.py _apply_yaml_config) into
 # PROCESS-GLOBAL os.environ["DISCORD_REQUIRE_MENTION"], first-writer-wins.
-# All four profiles share one gateway process under
+# All five profiles share one gateway process under
 # GATEWAY_MULTIPLEX_PROFILES, so that write leaks: the default profile's
 # extra carries no require_mention, adapter.py::_discord_require_mention
 # falls through to os.getenv, and the MAIN bot would answer every message
