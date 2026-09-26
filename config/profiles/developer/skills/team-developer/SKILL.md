@@ -36,9 +36,23 @@ gh issue edit <ISSUE#> --repo owner/repo --remove-label status/ready \
   --add-label status/in-progress
 ```
 
-**Two families, two objects.** `status/*` labels go on the **issue**
-(`gh issue edit`); `review/*` labels go on the **PR** (`gh pr edit`).
-They are different numbers for one work item — the queue prints issue
+**Bugs come first, and the queue enforces it.** The lanes are ordered so
+your own interrupted bug comes back before a new one, and any `type/bug`
+item ahead of a feature — `status/in-progress,type/bug`, then
+`status/ready,type/bug`, then the plain lanes. So the list is already in
+priority order: **work it top down, and do not reorder it yourself.**
+("Bugs before features" is a property of the poll, not something to
+remember at the start of a turn.)
+
+An item carrying no `type/*` is reported as `!! TYPE MISSING` and still
+flows — it simply is not hoisted, and it will contribute a patch to the
+next release. That line is describing the card, not your turn.
+
+**Three families, and one object rule each.** `status/*` labels go on the
+**issue** (`gh issue edit`); `review/*` labels go on the **PR**
+(`gh pr edit`); `type/*` goes on **either** — it classifies the change
+rather than handing it off, so both objects legitimately carry it. The
+first two are different numbers for one work item — the queue prints issue
 numbers, and the PR you open for an issue is a different number joined to
 it by `Closes #N`. Never write a `review/*` label to an issue, and never
 put a `status/*` label on a PR: each queue polls one family on one object
@@ -292,12 +306,20 @@ why there: an open thread is a statement, so make it one.
 
    ```bash
    git-publish.py                       # NOT `git push` — see "Publishing"
-   gh pr create --draft --fill --base main
+   gh pr create --draft --fill --base main \
+     --label "type/<the issue's type>"
    ```
 
    `git-publish.py` creates the remote branch on its first run, so `gh pr
    create` works straight after it, and it is the only publish path that
    survives a repo requiring signed commits.
+
+   **The PR carries the issue's `type/*`** (`type/bug`, `type/feature`,
+   `type/chore`, `type/security`) — add `type/breaking` as well when the
+   change is incompatible with what is already deployed. It is release
+   metadata, not decoration: the release agent infers the version bump from
+   it, so a PR with no type contributes only a patch. If the issue somehow
+   has none, say so in the PR rather than guessing silently.
 3. Verify before marking ready: tests, lint, type checks — whatever the
    repo's CI runs, run locally. If CI exists, watch it green — and read
    `gh pr checks <PR#>` for **every** job, not only the ones your local

@@ -331,9 +331,11 @@ fi
 # looked right, logged right, and was invisible to every service.)
 #
 # DEFAULT PROFILE ONLY, deliberately. komodo-ops is a default-profile skill,
-# so the control-plane credential belongs to that profile alone — the team
-# profiles have no reason to drive Komodo, and each extra copy is another
-# place a credential can be read from.
+# so the HOMELAB control-plane credential belongs to that profile alone —
+# the team profiles have no reason to drive THIS control plane, and each
+# extra copy is another place a credential can be read from. (The release
+# profile gets the TEVA control plane's header instead, in the block below:
+# a different control plane, and the only role that deploys.)
 KOMODO_MOUNT="${KOMODO_AUTH_HEADER_MOUNT:-/etc/komodo-auth-header}"
 if [ -r "$KOMODO_MOUNT" ]; then
   mkdir -p "$HERMES_HOME/home"
@@ -344,6 +346,34 @@ if [ -r "$KOMODO_MOUNT" ]; then
   echo "hermes-stack: komodo auth header -> $KOMODO_DEST"
 else
   echo "hermes-stack: warning: no readable komodo auth header at $KOMODO_MOUNT" >&2
+fi
+
+# --- 3d. the TEVA control plane's auth header (release profile only) -------
+# A SEPARATE Komodo from the one above: its own core, its own servers, its
+# own key. Same FILE-vs-CONFIG split and the same non-readable mount, so the
+# same treatment applies (copy it to the runtime-owned home; the var that
+# points here lives in compose).
+#
+# RELEASE PROFILE ONLY, deliberately — the release agent is the only role
+# that deploys, and each extra copy is another place a credential can be read
+# from. The named-profile home is created by bootstrap-profiles.sh before
+# this runs; if it does not exist yet (a first boot ordering surprise), say
+# so rather than failing, because the rest of the container is unaffected.
+KOMODO_ALT_MOUNT="${KOMODO_ALT_AUTH_HEADER_MOUNT:-/etc/komodo-alt-auth-header}"
+KOMODO_ALT_HOME="$HERMES_HOME/profiles/release/home"
+if [ -r "$KOMODO_ALT_MOUNT" ]; then
+  if [ -d "$HERMES_HOME/profiles/release" ]; then
+    mkdir -p "$KOMODO_ALT_HOME"
+    KOMODO_ALT_DEST="$KOMODO_ALT_HOME/komodo-alt-auth-header"
+    cp -f "$KOMODO_ALT_MOUNT" "$KOMODO_ALT_DEST"
+    chown "$RUNTIME_UID:$RUNTIME_UID" "$KOMODO_ALT_DEST" "$KOMODO_ALT_HOME"
+    chmod 600 "$KOMODO_ALT_DEST"
+    echo "hermes-stack: komodo alt auth header -> $KOMODO_ALT_DEST"
+  else
+    echo "hermes-stack: warning: release profile home missing; komodo alt header not copied" >&2
+  fi
+else
+  echo "hermes-stack: warning: no readable komodo alt auth header at $KOMODO_ALT_MOUNT" >&2
 fi
 
 # --- 4. git + gh for the runtime user, per tool-home -----------------------

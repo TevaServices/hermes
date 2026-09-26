@@ -377,7 +377,7 @@ next container restart.
   block, never the top-level `discord:` form — the nesting is
   load-bearing, not style.** The public top-level form is translated by the
   plugin hook (`adapter.py` `_apply_yaml_config`) into process-global
-  `os.environ` values, first-writer-wins, and all four profiles share one
+  `os.environ` values, first-writer-wins, and all five profiles share one
   gateway process under `GATEWAY_MULTIPLEX_PROFILES` — so a public-form
   write leaks to any profile that doesn't set the same key itself. The
   whole mention/threading family behaves this way (`require_mention`,
@@ -386,10 +386,12 @@ next container restart.
   env-bridged without the `_skip_env_bridge` guard #72348 added for the
   channel/allow gates); the nested key reaches `PlatformConfig.extra`,
   which `_discord_require_mention` reads FIRST.
-- Each team profile sets, in that nested block,
-  `allowed_channels = ["<its channel id>"]` + `require_mention = false`, so
-  its bot answers every message in its own channel with no @mention — and
-  nowhere else. The default profile sets the same pair for `#hermes` +
+- Each team profile (planner / developer / reviewer / release) sets, in that
+  nested block, `allowed_channels = ["<its channel id>"]` +
+  `require_mention = false`, so its bot answers every message in its own
+  channel with no @mention — and nowhere else. The release agent's is
+  `#releases` (`DISCORD_CHANNEL_RELEASE`). The default profile sets the same
+  pair for `#hermes` +
   `#hermes-home` (the unrouted channels; their ids come from
   `DISCORD_CHANNEL_MAIN` and `DISCORD_HOME_CHANNEL`). `allowed_channels` is load-bearing
   (require_mention is profile-wide, so without the fence the bot would
@@ -546,12 +548,27 @@ what the documented read is for.
 A ruleset can gate a merge on conditions **no workflow job reports**, so a
 PR can be green on every check, approved by the reviewer and by the user,
 and still be unmergeable. The `Main` ruleset of a repo the team works on
-requires both of the rules below, and a PR sat `BLOCKED` on them after
+requires all of the rules below, and a PR sat `BLOCKED` on them after
 four review rounds — `dco`, `lint`, `test` and `e2e` all passing. The read
 that catches it is `mergeStateStatus` (`gh pr view <PR#>
 --json mergeable,mergeStateStatus`): `BLOCKED` with everything green means
 a rule, not a test — and a `BLOCKED` PR looks exactly like a quiet queue
 from every other angle.
+
+These gates are not the reviewer's to clear; they are **release**'s, and the
+release lane reads them back before it emits a merge (§"Routing work to a
+profile"). The reviewer's job ends at the verdict plus a statement of what
+it left unmet.
+
+- **`required_code_owner_review` — the human gate, and the only thing that
+  releases a PR.** The gate is a real GitHub approval from a login in the
+  repo's `CODEOWNERS` — not the reviewer's `review/approved` label (which
+  arrives hours earlier), not a comment, not a relayed Discord message. This
+  is why `team-onboarding` now REQUIRES the rule per repo: without it
+  nothing makes a PR's approval a human owner's, and the release lane's own
+  CODEOWNERS check is only an approximation of a ruleset. App tokens cannot
+  set branch protection or rulesets (owner-only), so expect it to land as a
+  user checklist item — loudly, never silently.
 
 - **`required_signatures` — and why the developer can never `git push`
   past it.** GitHub evaluates signature requirements at merge time, on the
@@ -785,7 +802,7 @@ shipped but the defaults are inert.
 ### Steering the profiles' working style
 
 `config/SOUL_OPERATING.md` is appended to **every** rendered profile's
-`SOUL.md` by `render.py` — one source, all four profiles. SOUL.md rides the
+`SOUL.md` by `render.py` — one source, all five profiles. SOUL.md rides the
 system prompt on every turn, unlike a skill (lazily loaded), so always-on
 behaviour belongs there; the per-profile SOUL.md stays the role document.
 
@@ -819,7 +836,7 @@ relative to that baseline.
 
 ### Delegation + background jobs (enabled 2026-09-15)
 
-`delegation` and `cronjob` were removed from the three team profiles'
+`delegation` and `cronjob` were removed from the team profiles'
 `agent.disabled_toolsets`; the default profile already had both. Their
 fences said "teammates are dispatched via GitHub self-pull queues" and
 "digests run as scheduler jobs in the default profile" — which left the
@@ -954,6 +971,28 @@ the entrypoint. It can deploy stacks, run builds,
 and re-apply the resource sync — but NOT change control-plane resources
 (that's the komodo repo, human-reviewed via push).
 
+**A SECOND, separate control plane: `<org>/komodo`.** Its own core,
+servers and key (no shared state with the homelab one above). The release
+profile is the only role that drives it, and it gets its own credential with
+the identical plumbing — `KOMODO_ALT_AUTH_HEADER_MOUNT` on the host
+mounting `/etc/komodo-alt-auth-header`, the entrypoint copying it into the
+**release** profile's home (`$HERMES_HOME/profiles/release/home/
+komodo-alt-auth-header`, 600), and `KOMODO_ALT_AUTH_HEADER` declared in the
+container `environment:`. Use `-H @$KOMODO_ALT_AUTH_HEADER`; the mount is
+600 and unreadable to the agent, which reads as "the API key is broken" when
+it is not. The agent's boundary there is tighter than the homelab's: it
+writes **exactly one Komodo Variable** (the released image tag for the stack
+it is releasing) and runs `DeployStack` on that one stack. Everything else —
+declaring the stack, its compose file, its variables — is the komodo repo,
+human-reviewed.
+
+**`TEAM_RELEASE_*` is read by `release-queue.sh`, so it lives in the stack
+`environment:`** (`komodo/resources.toml` + `mise.toml`), never in
+`hermes-main.env` — the launch profile's non-global env is stripped from a
+cron child (see §Secrets, "`hermes-main.env` is the LAUNCH profile's env").
+`TEAM_RELEASE_STATE_DIR` is declared explicitly rather than derived, because
+a cron child's `HERMES_HOME` is not guaranteed to be the profile home.
+
 ### Central git repos + per-session worktrees
 
 All git repos live in ONE central store on the shared volume — a bare clone
@@ -993,6 +1032,7 @@ Inventory (one App and one Discord bot per profile):
 | planner | `hermes-planner` | Hermes Planner |
 | developer | `hermes-dev` | Hermes Developer |
 | reviewer | `hermes-reviewer` | Hermes Reviewer |
+| release | `hermes-release` | Hermes Release |
 
 The App names above are the DEFAULT (`<prefix>-<role>`); override per profile
 with `PROFILE_<NAME>_GH_APP_NAME` — GitHub App names are globally unique, so a
@@ -1039,7 +1079,7 @@ or a chat transcript.
   make the queues actually poll it). Run it ONCE PER ORG, any number of
   orgs. Pass `main` on the command line to include the default
   profile's org app — the org run for the full team is:
-  `python3 scripts/create-github-apps.py --org <ORG> main planner developer reviewer`
+  `python3 scripts/create-github-apps.py --org <ORG> main planner developer reviewer release`
 - **Bot token for a new team profile**
   (`scripts/set-team-discord-tokens.py`, run **on the host**): prompts for
   each team bot token with hidden input (`getpass`) and validates every
@@ -1060,10 +1100,16 @@ or a chat transcript.
 1. Create both identities with the scripts above.
 2. Land the credentials in `/etc/hermes/hermes-main.env`
    (`PROFILE_<NAME>_GITHUB_APP_ID`, `_GITHUB_APP_INSTALLATION_ID`,
-   `_GH_GIT_NAME`, `_GH_GIT_EMAIL`, `_DISCORD_BOT_TOKEN`).
+   `_GH_GIT_NAME`, `_GH_GIT_EMAIL`, `_DISCORD_BOT_TOKEN`). The `release`
+   profile additionally needs `/etc/hermes/komodo-alt-auth-header`
+   (root-owned 640) — see §Secrets.
 3. Point the profile's Discord channel at it: add a route under
    `[config_extra.gateway.profile_routes]` in the default profile's
    `profile.toml`. Unrouted channels keep the default agent's behavior.
+   A NEW channel id is also a new `DISCORD_CHANNEL_<NAME>` placeholder, and
+   `render.py`'s `BOOT_PLACEHOLDERS` must gain it or the build fails on an
+   unknown `@@VAR@@` (that failure is the point — a placeholder with no
+   declaration is a literal reaching a config).
 4. Commit + deploy, then verify in the logs — the entrypoint logs
    `gh authed via GitHub App (home=…, app id=…)` per profile, and the
    gateway logs `[Discord] Connected as <bot>` plus
@@ -1083,17 +1129,36 @@ machine user. Bots *authoring* issues/PRs works fine, which is why the
 reviewer leg (`gh search prs --author 'hermes-dev[bot]'`) was never
 affected.
 
-**The labels come in two families, and the OBJECT is half the rule.**
+**The labels come in three families, and the OBJECT is half the rule.**
 `status/*` (`status/backlog`, `status/ready`, `status/in-progress`,
 `status/in-review`, `status/blocked`, `status/done`) belongs on **issues**
-and is planner's and developer's; `review/*` (`review/ready`,
+and is planner's and developer's — plus `release`, in exactly one case: a
+bug the release pipeline finds is filed with `type/bug` **+ `status/ready`**
+so the developer's queue sees it immediately (a production bug must not wait
+for the planner to route it). `review/*` (`review/ready`,
 `review/in-progress`, `review/changes`, `review/approved`) belongs on
 **pull requests** — the developer adds `review/ready` as the handoff and
 drops `review/changes` on a re-handoff, and everything else in the family
-is the reviewer's. Each queue polls ONE family on ONE object kind, so a
+is the reviewer's. `type/*` (`type/bug`, `type/security`, `type/feature`,
+`type/chore`, `type/breaking`) is legal on **both objects by design**: it
+classifies the CHANGE rather than handing it off, which is why the
+foreign-label guard must never flag it. Planner sets an issue's type (a
+`type/*` is required on every issue it creates); the developer carries it
+onto the PR and adds `type/breaking` when the change is incompatible.
+
+`type/*` is not decoration — it is the release's version input (highest
+wins: `breaking`→major, `feature`→minor, everything else→patch) and it is
+the **bug-first** mechanism: the developer's queue lanes are
+`status/in-progress,type/bug` → `status/ready,type/bug` → the plain lanes,
+so a repeat comma-separated label lane means AND (`gh search --label` is an
+AND when repeated) and the lane order *is* the priority order. An item with
+no type still flows — it is simply not hoisted and contributes a patch,
+which `!! TYPE MISSING` says out loud.
+
+Each queue polls ONE family on ONE object kind, so a
 label of the wrong family is not untidiness — it takes the item out of
 BOTH lanes at once while it still looks busy. Observed 2026-09-25
-(`TevaServices/mach#26`): the *reviewer* ran a `gh issue edit` with
+(`<org>/mach#26`): the *reviewer* ran a `gh issue edit` with
 `status/in-progress` — the developer's own claim **and resume** label,
 because `team-reviewer`'s verdict steps said "Card → In Progress" and on a
 label-mechanism repo the card IS that label — while the *developer* put
@@ -1108,10 +1173,10 @@ Three things now hold, and each is enforced somewhere mechanical rather
 than by remembering it:
 
 - **Ownership is stated once**, in the shared `team-conventions` skill
-  ("The routing labels" — the ten labels with added-by/removed-by columns,
-  and the rule that a profile writes only its own family). The reviewer
-  never writes a `status/*` label and never runs `gh issue edit` at all: it
-  judges on the PR and names the card state it implies to planner
+  ("The routing labels" — the fifteen labels with added-by/removed-by
+  columns, and the rule that a profile writes only its own family). The
+  reviewer never writes a `status/*` label and never runs `gh issue edit` at
+  all: it judges on the PR and names the card state it implies to planner
   (`@hermes-planner` — the same intake channel the developer's roadblocks
   use), and the developer moves the issue to `status/in-review` at handoff.
   Commands in the skills name their object explicitly (`<ISSUE#>` for
@@ -1292,6 +1357,29 @@ it survives until the next boot, then the reconciler overwrites it.
   the DEFAULT profile. `bot-chat:<name>` passes `-p <name>` **and drops
   `HERMES_HOME` from the child env**, so the turn really runs as the named
   profile.
+- **The release lane (`release-queue.sh`, `--kind releases`) — and the bug
+  it avoids.** The lane polls `review/approved`, but the obvious way to gate
+  it is wrong: **`gh search prs --review approved` is NOT the human gate.** A
+  GitHub App's approval sets review state `APPROVED` too, and the reviewer
+  bot approves *before* the human looks — verified live on
+  `<org>/mach#27`, reviewer bot `APPROVED 23:00:59Z`, `bcross`
+  `APPROVED 08:22:50Z` the next morning. A lane gated on the search
+  qualifier alone would have merged on the bot's verdict. So the queue reads
+  the reviews BACK (`GET /pulls/{n}/reviews`, `user.type != "Bot"`) and
+  requires the MOST RECENT non-bot review to be `APPROVED` by a login in the
+  repo's `CODEOWNERS` (fetched with `Accept: application/vnd.github.raw`,
+  which needs no base64 decode). An item that fails is **dropped, never
+  emitted** — a PR waiting on a human must cost zero tokens, which is the
+  whole point of a 5-minute poll — and named only under `--verbose`
+  (`AWAITING HUMAN`). The `releases` kind searches PRs (`SEARCH_KIND`), and
+  the same script grew a per-repo **triage** pass: a `v*` tag with no
+  published release, a `release.yml` run that concluded badly, and a
+  published release that is not what the agent's own state file records as
+  deployed. A run still IN FLIGHT is deliberately not a finding — that is
+  the resumable "waiting on CI" state. Findings use their own dedupe slot
+  plus a first-seen epoch (`TEAM_RELEASE_RETRY_TTL`, 6h), because a stalled
+  release is unattended work and a delivery lost to a restart must not read
+  as a resolution.
 - **The bot-chat delivery timeout is 900s stack-wide**
   (`render.py` → `cron.bot_chat_delivery_timeout_seconds`). A bot-chat
   delivery runs a full agent turn synchronously inside the job's execution,
@@ -1392,6 +1480,22 @@ docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hermes|honcho|firecrawl|
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3002/v0/health/readiness   # 200
 docker exec hermes-main hermes mcp test honcho      # Connected, ~31 tools
 docker exec hermes-main hermes mcp test firecrawl   # tools discovered
+# The release agent: its bot + its own GitHub App identity, the alternate Komodo
+# header copied into ITS home, and its queue seeded. The queue run is the
+# real check — it must list nothing while no PR carries a code-owner
+# approval, and print NOTHING at all (that is the zero-token contract).
+docker logs hermes-main 2>&1 | grep -E 'profiles/release|komodo alt auth header|discord connected \(profile: release\)'
+docker exec -e HOME=/opt/data/profiles/release/home hermes-main \
+  ls -l home/komodo-alt-auth-header
+docker exec hermes-main grep -A3 'team: release self-pull' \
+  /opt/data/profiles/release/cron/jobs.json
+docker exec -e HOME=/opt/data/profiles/release/home hermes-main \
+  release-queue.sh --verbose          # names AWAITING HUMAN for anything unapproved
+docker exec -e HOME=/opt/data/profiles/release/home hermes-main release-queue.sh
+#   -> EMPTY stdout is the healthy answer. Anything else is work or a finding.
+# The type/* family exists on every onboarded repo, and the bug-first lanes
+# are in the shipped script (the offline suite pins the exact lane strings).
+gh label list -R <owner>/<repo> --json name --jq '.[].name' | grep '^type/'
 # Discord threads: every bot thread-capable in every routed channel (add
 # --probe to create + archive a real thread). Named problems say whether
 # the bit is missing at guild level or denied by a channel overwrite.
@@ -1434,7 +1538,7 @@ see §"Routing work to a profile"):
 mise run test
 # Live: is any open item carrying a label of the WRONG family? An issue with
 # review/* (or a PR with status/*) is invisible to BOTH queues — the state
-# that flip-flopped TevaServices/mach#26 on 2026-09-25. Empty output is the
+# that flip-flopped <org>/mach#26 on 2026-09-25. Empty output is the
 # healthy answer; the queue prints `!! FOREIGN LABEL` for whatever this finds.
 docker exec -e HOME=/opt/data/profiles/developer/home hermes-main \
   gh search issues --owner <owner> --state open --limit 100 \

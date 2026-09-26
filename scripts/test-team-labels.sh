@@ -3,37 +3,48 @@
 #
 # WHY THIS EXISTS
 #
-# The team routes work by LABEL, and the labels come in two families that
-# are scoped to different GitHub objects:
+# The team routes work by LABEL, and the labels come in three families:
 #
 #   status/*  -> ISSUES         (planner routes, developer claims/hands off)
 #   review/*  -> PULL REQUESTS  (developer hands off, reviewer judges)
+#   type/*    -> BOTH           (what the change IS: bug/feature/chore/
+#                                security/breaking — it classifies, it does
+#                                not hand off, so it is legal on either
+#                                object and must never be called foreign)
 #
-# Each queue polls ONE family on ONE object kind, so a label of the wrong
-# family does not just look untidy — it takes the item out of BOTH lanes at
-# once while it still looks busy. That happened on 2026-09-25: an issue
-# (TevaServices/mach#26) ended up carrying `review/ready` and no `status/*`
-# label, the developer's queue could not see it and neither could the
-# reviewer's, and the two profiles then traded the same issue every tick
-# (the reviewer's verdict steps said "Card -> In Progress", which on a
-# label-mechanism repo IS `status/in-progress` — the developer's own claim
-# AND resume label) until the container was paused by hand.
+# The first two are scoped to different GitHub objects, and each queue polls
+# ONE family on ONE object kind, so a label of the wrong family does not
+# just look untidy — it takes the item out of BOTH lanes at once while it
+# still looks busy. That happened on 2026-09-25: an issue (<org>/mach#26)
+# ended up carrying `review/ready` and no `status/*` label, the
+# developer's queue could not see it and neither could the reviewer's, and
+# the two profiles then traded the same issue every tick (the reviewer's
+# verdict steps said "Card -> In Progress", which on a label-mechanism repo
+# IS `status/in-progress` — the developer's own claim AND resume label)
+# until the container was paused by hand.
 #
-# So two things are pinned here, both deterministically:
+# So these things are pinned here, all deterministically:
 #
 #   1. THE COMMANDS. Every `--add-label` / `--remove-label` in the shipped
-#      skills and scripts targets the object its family belongs to:
-#      `gh pr …` may only carry review/*, `gh issue …` only status/*, and a
-#      label-writing command must name one of the two. This is the
+#      skills and scripts targets an object its family belongs to: `gh pr …`
+#      may carry review/* or type/*, `gh issue …` status/* or type/*, and a
+#      label-writing command must name one of the two objects. This is the
 #      mechanical version of the rule the docs state, so a future skill
 #      edit that reintroduces the collision fails here rather than in
 #      production.
-#   2. THE NAMES. Every `status/…` / `review/…` literal anywhere in the repo
-#      is one of the ten declared labels. A typo or a second spelling for
-#      one state is invisible work, not a variant.
+#   2. THE NAMES. Every `status/…` / `review/…` / `type/…` literal anywhere
+#      in the repo is one of the fifteen declared labels. A typo or a second
+#      spelling for one state is invisible work, not a variant.
 #   3. THE GUARD. team-queue.sh reports a misfiled label
-#      (`!! FOREIGN LABEL`) once per condition — it must fire on a repos
-#      state that has one and stay silent (and deduped) otherwise.
+#      (`!! FOREIGN LABEL`) once per condition — it must fire on a repo
+#      state that has one, stay silent on a clean one, and NOT fire on a
+#      `type/*` label, which is legal on both objects.
+#   4. THE QUEUES' PRECEDENCE AND GATES. The developer's queue polls BUG
+#      lanes before the plain ones (the two-label AND lanes are the bug
+#      hoist), and the release lane emits a PR only when the approval on
+#      record is a HUMAN's — a bot's approval sets review state APPROVED
+#      too, so `gh search --review approved` alone would merge on the
+#      reviewer bot's verdict hours before a human looked.
 #
 # Everything is offline: no Docker, no network, `gh` is stubbed on PATH, and
 # the queue script is run from a copy so the session gate and the thread
@@ -61,7 +72,7 @@ bad()  { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; }
 # --- the declared protocol --------------------------------------------------
 DECLARED="status/backlog status/ready status/in-progress status/in-review
 status/blocked status/done review/ready review/in-progress review/changes
-review/approved"
+review/approved type/bug type/feature type/chore type/security type/breaking"
 
 declared_has() {
     case " $(printf '%s' "$DECLARED" | tr '\n' ' ') " in
@@ -78,14 +89,15 @@ FILES=$(find "$here/config" "$here/docker/hermes" -type f \
         ; printf '%s\n' "$here/AGENTS.md" "$here/README.md")
 
 # --- 1. every label literal is declared ------------------------------------
-# Matches real label names only: `status/*` and `review/…` are prose for the
-# family and are deliberately not literals ([a-z-] excludes both).
+# Matches real label names only: `status/*`, `review/*` and `type/*` are
+# prose for the families and are deliberately not literals ([a-z-] excludes
+# the `*`).
 UNDECLARED=""
-for label in $(grep -ohE '(status|review)/[a-z][a-z-]*' $FILES | sort -u); do
+for label in $(grep -ohE '(status|review|type)/[a-z][a-z-]*' $FILES | sort -u); do
     declared_has "$label" || UNDECLARED="$UNDECLARED $label"
 done
 if [ -z "$UNDECLARED" ]; then
-    ok "every label literal is one of the ten declared"
+    ok "every label literal is one of the fifteen declared"
 else
     bad "undeclared label literal(s):$UNDECLARED"
 fi
@@ -98,23 +110,25 @@ function check(text, ln,    lab, v, tmp) {
     if (text !~ /--(add|remove)-label/) return
     # Which object does this command address?
     v = ""
-    if (text ~ /gh[ \t]+pr([ \t]|$)/)    v = "review"
+    if (text ~ /gh[ \t]+pr([ \t]|$)/)    v = "pr"
     if (text ~ /gh[ \t]+issue([ \t]|$)/) {
         if (v != "") { report(ln, "names BOTH gh pr and gh issue", text); return }
-        v = "status"
+        v = "issue"
     }
     tmp = text
-    while (match(tmp, /(status|review)\/[a-z][a-z-]*/)) {
+    while (match(tmp, /(status|review|type)\/[a-z][a-z-]*/)) {
         lab = substr(tmp, RSTART, RLENGTH)
         tmp = substr(tmp, RSTART + RLENGTH)
         if (v == "") {
             report(ln, "writes " lab " without naming the object (gh pr / gh issue)", text)
             continue
         }
-        if (v == "review" && lab !~ /^review\//)
-            report(ln, "gh pr may only carry review/*, not " lab, text)
-        if (v == "status" && lab !~ /^status\//)
-            report(ln, "gh issue may only carry status/*, not " lab, text)
+        # type/* is legal on EITHER object: it classifies the change rather
+        # than handing it off, so both sets include it.
+        if (v == "pr" && lab !~ /^(review|type)\//)
+            report(ln, "gh pr may only carry review/* or type/*, not " lab, text)
+        if (v == "issue" && lab !~ /^(status|type)\//)
+            report(ln, "gh issue may only carry status/* or type/*, not " lab, text)
     }
 }
 function report(ln, why, text) {
@@ -143,12 +157,35 @@ fi
 
 # --- 3. the queues poll one family per object kind -------------------------
 # The mapping is only real if the scripts search by it.
-grep -q 'issues) \[ -n "\$LABELS" \] || LABELS="status/in-progress status/ready"' "$queue" \
-    && ok "issue queue polls the status/* family" \
-    || bad "issue queue does not poll exactly status/in-progress + status/ready"
+grep -q 'issues) \[ -n "\$LABELS" \] || LABELS="status/in-progress,type/bug status/ready,type/bug status/in-progress status/ready"' "$queue" \
+    && ok "issue queue polls status/* with the BUG lanes first" \
+    || bad "issue queue does not hoist bugs — expected the pair lanes BEFORE the plain ones"
+# The hoist is positional, and pinning the literal above only proves the
+# string; this proves the ORDER does what the string claims. A pair lane that
+# came after the plain lane it overlaps would be dead: the plain lane already
+# claimed the item, and the dedupe is first-label-wins.
+pair_at=$(grep -o 'LABELS="status/in-progress,type/bug[^"]*"' "$queue" | head -1 \
+            | awk '{ n = index($0, "status/in-progress,type/bug"); print n }')
+plain_at=$(grep -o 'LABELS="status/in-progress,type/bug[^"]*"' "$queue" | head -1 \
+            | awk '{ print index($0, "status/in-progress status/ready") }')
+if [ "${pair_at:-0}" -gt 0 ] && [ "${plain_at:-0}" -gt "${pair_at:-0}" ]; then
+    ok "bug lanes precede the plain lanes they overlap (the hoist is real)"
+else
+    bad "bug lanes do not precede the plain lanes — the hoist would be dead"
+fi
 grep -q 'prs)    \[ -n "\$LABELS" \] || LABELS="review/in-progress review/ready"' "$queue" \
     && ok "PR queue polls the review/* family" \
     || bad "PR queue does not poll exactly review/in-progress + review/ready"
+# The release lane: review/approved is the REVIEWER's verdict; the human gate
+# is a separate read-back. Pinning the lane proves it polls the right label.
+grep -q 'releases) SEARCH_KIND="prs"; \[ -n "\$LABELS" \] || LABELS="review/approved"' "$queue" \
+    && ok "release queue polls review/approved" \
+    || bad "release queue does not poll exactly review/approved"
+# The release lane must SEARCH PRs. `releases` is a queue kind, not a gh
+# search kind — passing it to `gh search` would fail every call.
+grep -q 'ogh search "\$SEARCH_KIND"' "$queue" \
+    && ok "searches use SEARCH_KIND, not the queue kind" \
+    || bad "a search still uses \$KIND — \`--kind releases\` would break it"
 
 # --- 4. the guard fires, dedupes, and stays quiet when clean ---------------
 # Hermetic run: the script is executed from a copy, so `$(dirname $0)` has
@@ -164,6 +201,30 @@ cat > "$tmp/bin/gh" <<'STUB'
 #!/bin/sh
 args="$*"
 case "$args" in
+    # --- release lane: the HUMAN gate read-back ---------------------------
+    # gh's --jq has already picked the most recent non-bot review, so the
+    # stub prints "login|state" — the two fields the gate tests. Default is
+    # "no non-bot review at all", which is the state that must NOT merge.
+    *"pulls/27/reviews"*) printf '%s\n' "${STUB_HUMAN_REVIEW:-|NONE}" ;;
+    # CODEOWNERS, fetched with the RAW media type — so the body is the file.
+    *"contents/.github/CODEOWNERS"*|*"contents/CODEOWNERS"*)
+        printf '%s\n' "${STUB_CODEOWNERS:-* @bcross}" ;;
+    # --- release lane: the triage scan -----------------------------------
+    *"repos/bcross/mach/tags"*) printf '%s' "${STUB_TAGS:-}" ;;
+    "release list"*|*"release list -R"*) printf '%s' "${STUB_RELEASED:-}" ;;
+    "run list"*"--workflow release.yml"*) printf '%s' "${STUB_RUNS:-}" ;;
+    # the release lane's own search
+    *"--label review/approved"*)
+        printf '%s' "${STUB_APPROVED_PRS:-}"; ;;
+    # --- the issue lanes, incl. the bug-first AND pairs --------------------
+    # PAIR branches FIRST: a pair lane reaches gh as TWO --label flags, and
+    # its argument string therefore CONTAINS the plain lane's — `case` takes
+    # the first match, so a plain branch above these would swallow every pair
+    # lane and the hoist would silently stop being tested.
+    *"--label status/in-progress --label type/bug"*) printf '%s' "${STUB_LANE_INPROG_BUG:-}" ;;
+    *"--label status/ready --label type/bug"*)       printf '%s' "${STUB_LANE_READY_BUG:-}" ;;
+    # an emitted issue's labels, for the type notice
+    "issue view"*) printf '%s' "${STUB_ISSUE_LABELS:-status/ready}" ;;
     # An unresolvable author fails the WHOLE query ("Invalid search query …
     # The listed users cannot be searched"). The stub reproduces that exactly,
     # because the fallback it triggers is the thing under test.
@@ -179,8 +240,9 @@ case "$args" in
             2) printf 'bcross/mach#31|review/changes\nbcross/mach#26|review/ready\n' ;;
         esac
         ;;
-    # the queue search: nothing routed (the misfiled item is invisible)
-    *"--label status/in-progress"*|*"--label status/ready"*) ;;
+    # the queue search: by default nothing routed (the misfiled item is
+    # invisible to this lane), but configurable for the ordering tests.
+    *"--label status/in-progress"*|*"--label status/ready"*) printf '%s' "${STUB_LANE_PLAIN:-}" ;;
     # the PR queue search: one item, so a dropped filter is visible in output
     *"--label review/in-progress"*|*"--label review/ready"*)
         printf 'bcross/mach#27  Fix the thing  https://github.com/bcross/mach/pull/27\n' ;;
@@ -312,6 +374,157 @@ case "$out" in
     *"bcross/mach#27"*) ok "work still flows under a stale declared filter" ;;
     *)  bad "a stale declared filter emptied the queue" ;;
 esac
+
+# --- 6. bug-first: the AND lanes hoist bugs, deterministically -------------
+# Precedence here IS lane order (the queue runs one search per lane and
+# dedupes first-label-wins), so the hoist is "put the pair lane first". This
+# asserts the OUTCOME, not the mechanism: with all three lanes holding an
+# item, the bug items must come out before the feature one.
+export STUB_LANE_INPROG_BUG STUB_LANE_READY_BUG STUB_LANE_PLAIN STUB_ISSUE_LABELS
+STUB_LANE_INPROG_BUG='bcross/mach#40  interrupted bug  https://x/40'
+STUB_LANE_READY_BUG='bcross/mach#41  new bug  https://x/41'
+STUB_LANE_PLAIN='bcross/mach#42  new feature  https://x/42'
+STUB_ISSUE_LABELS='status/ready,type/bug'
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 --verbose "" issues)
+order=$(printf '%s\n' "$out" | grep -o 'bcross/mach#4[0-9]' | awk '!seen[$0]++' | tr '\n' ' ')
+if [ "$order" = "bcross/mach#40 bcross/mach#41 bcross/mach#42 " ]; then
+    ok "bugs are hoisted: interrupted bug, then new bug, then the feature"
+else
+    bad "bug-first ordering wrong (got: '$order')"
+fi
+
+# --- 7. the type/* family is legal on BOTH objects ------------------------
+# It classifies the change rather than handing it off, so a guard that called
+# it foreign would fire on every correctly-labelled item. Checked at the
+# SOURCE, because the stub stands in for gh's post-jq output and so cannot
+# exercise the guard's own selectors.
+if grep -q 'startswith("type/")' "$queue"; then
+    bad "the foreign-label guard scans type/* — it is legal on both objects"
+else
+    ok "the foreign-label guard does not treat type/* as foreign"
+fi
+for fam in 'startswith("review/")' 'startswith("status/")'; do
+    grep -q "$fam" "$queue" || bad "the foreign-label guard stopped scanning $fam"
+done
+
+# An emitted issue with no type/* is NAMED, not withheld: it still flows, it
+# is simply not hoisted by the bug lanes and its bump will default to patch.
+STUB_ISSUE_LABELS='status/ready'
+STUB_LANE_INPROG_BUG=""; STUB_LANE_READY_BUG=""
+STUB_LANE_PLAIN='bcross/mach#42  new feature  https://x/42'
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 "" "" issues)
+case "$out" in
+    *"TYPE MISSING"*"bcross/mach#42"*) ok "an untyped item still flows, and is named" ;;
+    *) bad "no TYPE MISSING notice for an item with no type/* label" ;;
+esac
+STUB_ISSUE_LABELS='status/ready,type/feature'
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 "" "" issues)
+case "$out" in
+    *"TYPE MISSING"*) bad "TYPE MISSING fired on a correctly typed item" ;;
+    *) ok "a typed item gets no notice" ;;
+esac
+
+# --- 8. the release lane: the gate is a HUMAN's approval ------------------
+# The bug this pins: a bot's approval sets review state APPROVED too, and the
+# reviewer bot approves BEFORE the human ever looks (live on mach#27:
+# reviewer bot 23:00:59Z, bcross 08:22:50Z). A lane gated on
+# `gh search --review approved` would merge on the bot's verdict.
+export STUB_APPROVED_PRS STUB_HUMAN_REVIEW STUB_CODEOWNERS STUB_TAGS STUB_RELEASED STUB_RUNS
+STUB_APPROVED_PRS='bcross/mach#27  Fix the thing  https://github.com/bcross/mach/pull/27'
+STUB_CODEOWNERS='* @bcross'
+STUB_TAGS=""; STUB_RELEASED=""; STUB_RUNS=""
+STUB_HUMAN_REVIEW='|NONE'          # only the bot has reviewed so far
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 "" "" releases)
+if [ -z "$out" ]; then
+    ok "release lane is SILENT while only a bot has approved (zero LLM calls)"
+else
+    bad "release lane emitted on a bot-only approval: $(printf '%s' "$out" | tr '\n' '|' | head -c 160)"
+fi
+out=$(run_queue 0 --verbose "" releases)
+case "$out" in
+    *"AWAITING HUMAN"*) ok "under --verbose it names what it is waiting for" ;;
+    *) bad "release lane did not explain why it emitted nothing" ;;
+esac
+
+STUB_HUMAN_REVIEW='bcross|APPROVED'
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"Fix the thing"*) ok "a human approval releases the PR" ;;
+    *) bad "release lane did not emit a human-approved PR (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))" ;;
+esac
+
+# Approved, but by someone who is not a code owner: still not releasable.
+# Asserted on the item's TITLE, not its `owner/repo#N`: the CODEOWNER
+# notice legitimately NAMES the item, so a key-based check would read its
+# own warning as a release and pass for the wrong reason.
+STUB_HUMAN_REVIEW='randomreviewer|APPROVED'
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"Fix the thing"*) bad "release lane emitted a PR approved by a non-code-owner" ;;
+    *) ok "a non-code-owner approval does not release the PR" ;;
+esac
+case "$out" in
+    *"CODEOWNER APPROVAL MISSING"*) ok "and it says so, rather than looking idle" ;;
+    *) bad "a non-code-owner approval was swallowed silently" ;;
+esac
+
+# A CODEOWNERS the token cannot read must not become a silent pass: the
+# non-bot approval still gates, and the run must not claim to have checked.
+STUB_HUMAN_REVIEW='bcross|APPROVED'
+STUB_CODEOWNERS=''
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"bcross/mach#27"*) ok "an unreadable CODEOWNERS falls back to the non-bot approval" ;;
+    *) bad "an unreadable CODEOWNERS blocked a legitimately approved PR" ;;
+esac
+STUB_CODEOWNERS='* @bcross'
+
+# --- 9. release triage: a stuck release is reported, once -----------------
+STUB_APPROVED_PRS=""; STUB_HUMAN_REVIEW='|NONE'
+STUB_TAGS='v0.9.0'
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"RELEASE TAGGED, NOT PUBLISHED"*"bcross/mach#v0.9.0"*)
+        ok "a tag with no release and no run in flight is reported" ;;
+    *) bad "stuck tag not reported (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))" ;;
+esac
+out=$(run_queue 0 "" "" releases)
+if [ -z "$out" ]; then
+    ok "the triage finding is deduped on the second run"
+else
+    bad "triage finding reprinted unchanged: $(printf '%s' "$out" | tr '\n' '|' | head -c 160)"
+fi
+
+# A run still IN FLIGHT is the resumable "waiting on CI" state, not a fault —
+# otherwise a 6-minute release workflow would wake the agent every tick.
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+STUB_RUNS='RUNNING v0.9.0'
+out=$(run_queue 0 "" "" releases)
+if [ -z "$out" ]; then
+    ok "a release run still in flight is not a finding"
+else
+    bad "an in-flight release run was reported as stuck"
+fi
+
+# A workflow that ENDED badly names the conclusion and the run URL.
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+STUB_RUNS='BAD v0.9.0 failure https://github.com/bcross/mach/actions/runs/1'
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"RELEASE WORKFLOW FAILED"*"bcross/mach#v0.9.0"*"failure"*)
+        ok "a failed release workflow is reported with its conclusion" ;;
+    *) bad "failed release workflow not reported (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))" ;;
+esac
+unset STUB_APPROVED_PRS STUB_HUMAN_REVIEW STUB_CODEOWNERS STUB_TAGS STUB_RELEASED STUB_RUNS
+unset STUB_LANE_INPROG_BUG STUB_LANE_READY_BUG STUB_LANE_PLAIN STUB_ISSUE_LABELS
 
 # --- summary ---------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

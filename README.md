@@ -72,17 +72,23 @@ scripts/                host setup + credential/diagnostic helpers
                         + container cron shims (prune-repos.sh, refresh-repos.sh)
 ```
 
-## The agile SaaS team (planner / developer / reviewer)
+## The agile SaaS team (planner / developer / reviewer / release)
 
-Three named Hermes profiles work as a GitHub-first agile team — **GitHub
+Four named Hermes profiles work as a GitHub-first agile team — **GitHub
 is the system of record, Discord is the discussion surface**. The
 `team-conventions` skill (config/skills/, shared by every profile)
-defines the workflow: idea → issue → routed developer (label
-`status/ready` — GitHub App bots cannot be assignees) → **draft PR** →
-reviewer gates (`team-reviewer`) → human gate (the user) → reviewer
-merges. Repos join the workflow via the planner's `team-onboarding`
-skill (adds the `hermes-team` topic tag, a per-repo board or status
-label set, branch protection, CI).
+defines the workflow: idea → issue (typed `type/*`) → routed developer
+(label `status/ready` — GitHub App bots cannot be assignees) → **draft
+PR** → reviewer gates (`team-reviewer`) → human gate (**a CODEOWNER's
+GitHub approval**) → **release** merges, cuts the version, deploys it to
+the internal environment through Komodo and validates it against what is
+running (`team-release`). Issues are typed so the release version bump can
+be inferred from the labels, and the developer's queue hoists `type/bug`
+items ahead of features. Repos join the workflow via the planner's
+`team-onboarding` skill (topic tag, board or status label set, the
+`type/*` labels, branch protection **including the code-owner review
+requirement**, CI, and — a hard requirement now — documented release
+instructions).
 
 Enforcement is identity-based, not trust-based: each role is its own
 GitHub App (least-privilege permission set, PEM at
@@ -90,8 +96,9 @@ GitHub App (least-privilege permission set, PEM at
 (`PROFILE_<NAME>_*` entries in hermes-main.env, mapped by the
 entrypoint into each profile's own `.env`). planner cannot push
 (Read-only code + issue/project writes); developer cannot merge
-(branch protection + no merge rights); reviewer merges only after
-the user's approval. The default profile's `gateway.profile_routes` sends
+(branch protection + no merge rights); the reviewer never merges — its
+authority ends at the verdict, and an approval by a non-bot CODEOWNER is
+what releases a PR. The default profile's `gateway.profile_routes` sends
 each team channel to its profile, and each role's channel is its **own**
 (per-profile `platforms.discord.extra`: `allowed_channels` +
 `require_mention = false`): the bot answers there without being @mentioned

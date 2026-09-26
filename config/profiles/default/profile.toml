@@ -112,6 +112,7 @@ cheap_model = "cheap"
 planning_channel = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_PLANNER@@", profile = "planner" }
 dev_channel      = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_DEVELOPER@@", profile = "developer" }
 reviews_channel  = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_REVIEWER@@", profile = "reviewer" }
+releases_channel = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_RELEASE@@", profile = "release" }
 
 # --- Discord: the main bot's own channels (no @mention needed) -------------
 # #hermes + #hermes-home are the UNROUTED channels (the team channels are
@@ -122,7 +123,7 @@ reviews_channel  = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_REVIEWER
 # block, NOT the public top-level `discord:` one: the plugin hook
 # (plugins/platforms/discord/adapter.py _apply_yaml_config) env-bridges the
 # public form's mention/threading keys into PROCESS-GLOBAL os.environ,
-# first-writer-wins — and all four profiles share one gateway process under
+# first-writer-wins — and all five profiles share one gateway process under
 # GATEWAY_MULTIPLEX_PROFILES. A profile that doesn't set require_mention
 # itself falls through to os.getenv and inherits another profile's value.
 # The nested form lands in PlatformConfig.extra, which
@@ -130,7 +131,7 @@ reviews_channel  = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_REVIEWER
 #
 # allowed_channels is load-bearing: require_mention is profile-wide, so
 # without the fence this bot would answer every message in every channel it
-# can see — including the three team channels, where their own bots already
+# can see — including the four team channels, where their own bots already
 # answer. It does NOT widen authorization: DISCORD_ALLOWED_USERS remains
 # the gate (adapter _is_allowed_user only falls back to channel-scoped
 # access when no user/role allowlist exists).

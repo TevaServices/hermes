@@ -8,11 +8,11 @@ metadata:
     category: devops
 ---
 
-# Team conventions (all roles — planner / developer / reviewer)
+# Team conventions (all roles — planner / developer / reviewer / release)
 
 The team is a GitHub-first agile pipeline: **GitHub is the system of
-record; Discord is for discussion.** Three Hermes profiles (planner,
-developer, reviewer) work as visible, distinct identities.
+record; Discord is for discussion.** Four Hermes profiles (planner,
+developer, reviewer, release) work as visible, distinct identities.
 
 ## Identities
 
@@ -20,11 +20,17 @@ developer, reviewer) work as visible, distinct identities.
 |---|---|---|---|
 | planner | `hermes-planner[bot]` | own bot, `#planning` | issues, boards, specs; Read-only code |
 | developer | `hermes-dev[bot]` | own bot, `#dev` | commits, **draft** PRs; never merges |
-| reviewer | `hermes-reviewer[bot]` | own bot, `#reviews` | reviews, marks ready, **merges** |
+| reviewer | `hermes-reviewer[bot]` | own bot, `#reviews` | reviews, marks ready; **never merges** |
+| release | `hermes-release[bot]` | own bot, `#releases` | **merges**, tags, deploys internally, validates |
 
 Never impersonate another role. Sign Discord updates with your role.
 Git commits carry the role's own git identity (configured by the
 entrypoint from the profile env).
+
+**Who merges: release, and only release.** The reviewer's authority ends at
+its verdict — approve + `review/approved` + requesting the code owner's
+review. Merging, tagging, deploying and validating are one pipeline and one
+role, which is why they are not split.
 
 ## The workflow
 
@@ -59,9 +65,17 @@ entrypoint from the profile env).
    "Review threads" below) — a repo can require every conversation
    resolved before merge, and an open thread is then a merge gate no CI
    job reports.
-6. **Human gate** → the user reviews → reviewer merges (only reviewer
-   merges) or routes the user's flags back to developer.
-7. Issue auto-closes via `Closes #N` on merge; planner moves the card to
+6. **Human gate** → the user reviews and **approves on GitHub**. Their
+   approval is the gate, and it must be a real GitHub review: a comment, a
+   Discord message, or a relayed "they said it's fine" does NOT release a
+   PR. If they flag changes, the reviewer converts each flag into review
+   comments → back to developer.
+7. **Release** → the release agent wakes on the approved PR, merges it,
+   cuts the version, deploys it internally and validates it against the
+   live deployment (see `team-release`). Issues in the release path become
+   `type/bug` issues labelled `status/ready`, so they land back in the
+   developer's queue.
+8. Issue auto-closes via `Closes #N` on merge; planner moves the card to
    Done. (The close is the state change that matters; the label is
    bookkeeping, and it is not the reviewer's to write.)
 
@@ -100,18 +114,49 @@ queue from re-serving the same item every tick:
 | `review/ready` | PR | developer (handoff) | reviewer (on claim) |
 | `review/in-progress` | PR | reviewer (on claim) | reviewer (on verdict) |
 | `review/changes` | PR | reviewer (verdict) | developer (on re-handoff) |
-| `review/approved` | PR | reviewer (verdict) | — (terminal) |
+| `review/approved` | PR | reviewer (verdict) | — (terminal; the RELEASE queue consumes it) |
 
-**Two families, two objects, and the object is half the rule.** The
-`status/*` family belongs to ISSUES and the `review/*` family to PULL
-REQUESTS — `gh issue edit` writes the first, `gh pr edit` the second,
-and the two numbers for one work item are *different* (the issue and the
-PR it is closed by). A `review/*` label on an issue and a `status/*`
-label on a PR are both faults, not untidiness: each queue polls one
-family on one object kind, so a misfiled label makes the work item
-invisible to *both* lanes while it still looks busy. That happened here
-(2026-09-25, an issue left carrying `review/ready` and no `status/*`),
-it flip-flopped for hours, and the guard below is what reports it.
+`status/*` may also be written by **release**, in exactly one case: a bug
+the release pipeline finds is filed with `type/bug` **+ `status/ready`** so
+the developer's queue picks it up immediately (and hoists it ahead of
+features). A bug found in production must not wait for the planner to route
+it. That is the whole exception — release writes no other `status/*` label
+and never edits a card.
+
+### The type labels (a third family — and it belongs to BOTH objects)
+
+`type/*` classifies **what the change is**, not who hands it to whom, so
+unlike the other two families it is legal on an issue AND on a PR:
+
+| Label | On | Added by | Bump |
+|---|---|---|---|
+| `type/bug` | issue, PR | planner (issue), developer (PR) | patch |
+| `type/security` | issue, PR | as above | patch |
+| `type/feature` | issue, PR | as above | minor |
+| `type/chore` | issue, PR | as above | patch |
+| `type/breaking` | issue, PR | as above | **major** |
+
+**Every issue the planner creates carries exactly one `type/*`** — an issue
+without one is incomplete, and the developer's queue says so
+(`!! TYPE MISSING`). The developer copies the issue's type onto its PR, and
+adds `type/breaking` when the change is incompatible. The release agent
+infers the version bump from these (highest wins) — a PR with no type is not
+blocked, it just contributes a patch and is named in the release
+announcement. `type/security` is a patch on purpose: it is a taxonomy of
+change class, and a security fix is a fix; a security change that also
+breaks compatibility carries `type/breaking` too.
+
+**Three families, and the object is half the rule.** The `status/*` family
+belongs to ISSUES and the `review/*` family to PULL REQUESTS — `gh issue
+edit` writes the first, `gh pr edit` the second, and the two numbers for one
+work item are *different* (the issue and the PR it is closed by). A
+`review/*` label on an issue and a `status/*` label on a PR are both faults,
+not untidiness: each queue polls one family on one object kind, so a misfiled
+label makes the work item invisible to *both* lanes while it still looks
+busy. That happened here (2026-09-25, an issue left carrying `review/ready`
+and no `status/*`), it flip-flopped for hours, and the guard below is what
+reports it. `type/*` is the exception that proves the rule: it is on both
+objects *by design*, so the guard must never call it foreign.
 
 ```bash
 # which object am I writing?
@@ -130,11 +175,18 @@ gh pr list --repo <owner>/<repo> --state open \
   developer adds `review/ready` and drops `review/changes`; everything
   else in the family — claim, verdict, and the `review/ready` removal on
   claim — is the reviewer's.
+- `type/*` is **planner's on issues and the developer's on PRs**, and
+  nobody else's: it is the issue's classification, carried onto the PR, and
+  the release agent only READS it (to pick the bump). A missing type is a
+  finding, not a label for someone else to add.
 - **The reviewer never writes a `status/*` label and never edits an
   issue.** A review is judged on the PR; the card is not the reviewer's
   to move. When a verdict implies a card change, say so to planner
   (`@hermes-planner` comment on the PR/issue) and let planner move it —
   the same intake channel the developer's roadblocks use.
+- **The reviewer never merges.** Its last write on a PR is its verdict
+  (`review/approved` or `review/changes`) plus the code-owner review
+  request. Merge, tag, deploy and validate are release's, end to end.
 
 That last rule is the one this team got wrong. The reviewer's verdict
 steps used to say "Card → In Progress / In Review / Done", and on a
@@ -197,6 +249,12 @@ BLOCKED` with every check green:
   developer publishes with `git-publish.py` and never `git push` (see
   `team-developer` §Publishing).
 - **Required review-thread resolution** — the table above.
+- **Required code-owner approval** — the human gate, and a real one: the
+  most recent non-bot review must be `APPROVED` by a login in the repo's
+  `CODEOWNERS`. `review/approved` is the REVIEWER's verdict and arrives
+  hours earlier, so it is never sufficient on its own. The release queue
+  reads this back before emitting a merge, and the release agent reads it
+  back again before merging.
 
 Read the state back before claiming a handoff is ready, on both sides:
 
@@ -248,7 +306,10 @@ exactly this state; if you see that line, it is describing your previous
 turn, not someone else's. It also prints `!! FOREIGN LABEL` when a label
 of the wrong family is sitting on an object (`review/*` on an issue, or
 `status/*` on a PR) — that one is a misfiled write, and the line names
-the object and the command to undo it.
+the object and the command to undo it — and `!! TYPE MISSING` when an
+emitted issue carries no `type/*`, which is a notice rather than a fault:
+the item still flows, it is just not hoisted by the bug lanes and its
+release bump will default to patch.
 
 Read back after each handoff, and compare with what you intended. Note
 the two different numbers: `gh issue view` takes the **issue** number,

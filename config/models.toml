@@ -63,10 +63,14 @@
 #   smart    — everyday work: the planner profile, and Honcho's REASONING
 #              lanes (dream deduction/induction, summaries, and the
 #              medium/high/max dialectic levels).
-#   smarter  — the workhorse: a 1M window at flash economics. The default
-#              and developer profiles, and context compression — which
-#              summarizes a potentially ~1M context, so it needs BOTH
-#              intelligence and the window.
+#   smarter  — the workhorse: a 1M window at flash economics. The default,
+#              developer and RELEASE profiles, and context compression —
+#              which summarizes a potentially ~1M context, so it needs BOTH
+#              intelligence and the window. (Release is here rather than on
+#              the top tier because its work is execution-grade, not
+#              judgement: read a gate back, follow a procedure, parse a CI
+#              job log, call an API — and a release turn reads whole job
+#              logs and update records, which is where the window binds.)
 #   smartest — judgment, and the top of the ladder. The reviewer profile,
 #              plus the opt-in escalation anyone reaches for with
 #              `/model smartest`. No vision: fine for diff review, but
@@ -89,7 +93,7 @@ description = "Gemma 4 via the gateway (256K, vision) — the everyday tier: the
 provider = "litellm"
 model = "smarter"
 context_length = 1048576
-description = "GLM 5.3 flash via the gateway (1M, vision, 18B active) — the workhorse: the default and developer profiles, and context compression"
+description = "GLM 5.3 flash via the gateway (1M, vision, 18B active) — the workhorse: the default, developer and release profiles, and context compression"
 
 [models.smartest]
 provider = "litellm"

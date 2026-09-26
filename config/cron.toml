@@ -144,6 +144,20 @@ script = "review-queue.sh"
 no_agent = true
 deliver = "bot-chat:reviewer"
 
+# Release self-pull: the merge lane (`review/approved` AND a HUMAN's — and a
+# code owner's — approval read back from the reviews), the stuck-release
+# triage, and the undeployed-release resume. Silent when idle, and silent
+# while a PR merely waits on a human: the approval read-back is inside the
+# script precisely so an approved-but-unapproved PR never wakes the agent.
+# See release-queue.sh for the three wake conditions.
+[[jobs]]
+profile = "release"
+name = "team: release self-pull"
+schedule = "*/5 * * * *"
+script = "release-queue.sh"
+no_agent = true
+deliver = "bot-chat:release"
+
 # ---------------------------------------------------------------------------
 # Housekeeping. These three are the stack's own plumbing — they report to
 # #hermes-home, NOT to a profile's bot chat: there is no decision for an

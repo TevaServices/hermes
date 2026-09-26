@@ -36,6 +36,20 @@ self-sufficient.>
 
 - Label `status/backlog` or add to the repo Project's Backlog column on
   creation.
+- **A `type/*` label is REQUIRED, every time** — `type/bug`,
+  `type/feature`, `type/chore` or `type/security` (and `type/breaking` when
+  the change is incompatible with what is already deployed). It is not
+  decoration: the release agent infers the version bump from it
+  (`breaking`→major, `feature`→minor, else patch), so an untyped issue
+  contributes only a patch and is named in the release announcement. The
+  developer copies the issue's type onto its PR, and the developer's queue
+  hoists `type/bug` items ahead of features — which is the whole mechanism
+  behind "bugs before features". An issue with no type is incomplete:
+
+  ```bash
+  gh issue create --repo <owner>/<repo> --title "<title>" \
+    --label status/backlog --label type/feature --body-file <file>
+  ```
 - the user's idea → issue link goes back to the Discord thread the same
   turn.
 

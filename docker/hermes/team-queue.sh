@@ -71,7 +71,7 @@
 # object kind. So a label of the wrong family is not untidiness: it takes
 # the item out of BOTH lanes at once while it still looks busy, and the
 # queue that would otherwise have listed it is the one that cannot see it.
-# Observed 2026-09-25 on TevaServices/mach#26 (an issue left carrying
+# Observed 2026-09-25 on <org>/mach#26 (an issue left carrying
 # `review/ready` and no `status/*`), where the two profiles then traded the
 # same issue every tick. A deduped `FOREIGN LABEL` incident names the item,
 # the label and the command that undoes it. It changes no exit code below:
@@ -89,7 +89,7 @@
 #           queue silently missing is the dual-owner version of exit 3.
 #
 # Usage:
-#   team-queue.sh [--kind issues|prs] [--label LABEL]... [--owner OWNER]
+#   team-queue.sh [--kind issues|prs|releases] [--label LANE]... [--owner OWNER]
 #                 [--author LOGIN] [--verbose] [--quiet]
 #
 #   --label may be repeated. Each label is one search and the results are
@@ -100,6 +100,20 @@
 #   offered anything new. Without this an interrupted item — claimed, so
 #   no longer `status/ready` — would never be surfaced again and the work
 #   would sit half-done forever.
+#
+#   A LANE may name MORE THAN ONE label, comma-separated, and the lane then
+#   means AND: `status/ready,type/bug` searches for items carrying both.
+#   That is a second precedence axis for free — the lane order already IS
+#   the priority order, and `gh search --label` is itself an AND when
+#   repeated — so the developer's queue hoists bugs by putting the
+#   bug lanes first, with no sorting code and no change to the item line
+#   format every consumer parses. Prefer the pair lanes BEFORE the plain
+#   ones that would also match them, or the pair wins nothing.
+#
+#   --kind releases is the release agent's lane: it searches PRs (like
+#   `prs`) but polls `review/approved`, and it adds two things the other
+#   kinds do not — a read-back that the approval on record is a HUMAN's
+#   (see "the release lane" below) and a per-repo release triage scan.
 #
 #   THE DEFAULT IS THE CRON CONTRACT, because that is how this runs in
 #   production and the scheduler gives no way to say so: a no_agent job
@@ -145,6 +159,10 @@
 set -u
 
 KIND="issues"
+# The gh search kind actually used. `releases` is a QUEUE kind, not a search
+# kind: it polls PRs. Anything branching on what to search or what an item
+# IS must use this, not $KIND.
+SEARCH_KIND=""
 LABELS=""
 OWNER="${TEAM_OWNER:-}"
 ORGS="${TEAM_OWNER_ORGS:-}"
@@ -181,14 +199,26 @@ case "$KIND" in
     # `status/in-progress` by an interrupted turn would otherwise never be
     # surfaced again — it is no longer `ready`, so nothing else would
     # return it, and the work would sit half-done forever.
-    issues) [ -n "$LABELS" ] || LABELS="status/in-progress status/ready" ;;
+    #
+    # BUGS FIRST, and that is the whole mechanism: a bug lane precedes the
+    # plain lane that would also match it, so an interrupted bug comes back
+    # before a new feature and a new bug before a new feature. See the
+    # --label note in the usage block for why this needs no sorting.
+    issues) [ -n "$LABELS" ] || LABELS="status/in-progress,type/bug status/ready,type/bug status/in-progress status/ready" ;;
     prs)    [ -n "$LABELS" ] || LABELS="review/in-progress review/ready" ;;
-    *) echo "team-queue.sh: --kind must be issues or prs" >&2; exit 64 ;;
+    # The release lane. `review/approved` is the reviewer's verdict; the
+    # HUMAN gate is a separate read-back (see the release-lane block below),
+    # because a bot's approval sets review state APPROVED too.
+    releases) SEARCH_KIND="prs"; [ -n "$LABELS" ] || LABELS="review/approved" ;;
+    *) echo "team-queue.sh: --kind must be issues, prs or releases" >&2; exit 64 ;;
 esac
+[ -n "${SEARCH_KIND:-}" ] || SEARCH_KIND="$KIND"
 # Normalise the accumulated list (leading/duplicate spaces from repeat flags).
 LABELS=$(printf '%s' "$LABELS" | tr -s ' ' | sed 's/^ *//; s/ *$//')
-# A single slug for state/cache filenames, stable regardless of order.
-LABEL_SLUG=$(printf '%s' "$LABELS" | tr ' ' '+' | tr -c 'a-zA-Z0-9.+-' '-')
+# A single slug for state/cache filenames, stable regardless of order. The
+# comma of an AND-pair folds into the same token space as a space, because
+# both separate lanes-worth of labels in a filename.
+LABEL_SLUG=$(printf '%s' "$LABELS" | tr ' ,' '+' | tr -c 'a-zA-Z0-9.+-' '-')
 
 log() { [ "$QUIET" -eq 1 ] || echo "$@"; }
 fail() { echo "$@" >&2; }
@@ -370,6 +400,16 @@ audit_handoffs() {
         repo=${key%#*}; num=${key##*#}
         labels=$(ogh issue view "$num" --repo "$repo" --json labels \
                     --jq '[.labels[].name]|join(",")' 2>/dev/null) || continue
+        # A NOTICE, not a withholding: an item with no type/* still flows —
+        # it is simply not hoisted by the bug lanes (the pair lanes above
+        # cannot match it) and its release bump will default to patch. Said
+        # here, deterministically, so "the bump came out vague" is not
+        # discovered at release time. Pre-family and dependabot items are
+        # the expected occupants of this line.
+        case ",$labels," in
+            *",type/"*) ;;
+            *) printf '    !! TYPE MISSING: %s carries no type/* label — the release bump will default to patch (team-conventions §Type labels)\n' "$key" ;;
+        esac
         case ",$labels," in *",status/in-progress,"*) ;; *) continue ;; esac
         pr=$(ogh pr list --repo "$repo" --state open --limit 50 \
                --json number,isDraft,labels,body \
@@ -395,7 +435,7 @@ audit_handoffs() {
 # `status/*` belongs on ISSUES and `review/*` on PULL REQUESTS, and each
 # queue polls ONE family on ONE object kind. So a label of the wrong family
 # does not merely look untidy — it takes the item out of both lanes at once
-# while it still looks busy. Observed 2026-09-25: TevaServices/mach#26 ended
+# while it still looks busy. Observed 2026-09-25: <org>/mach#26 ended
 # up carrying `review/ready` and no `status/*` label at all, so the
 # developer's queue (issues by status/*) could not see it and neither could
 # the reviewer's (PRs by review/*); the two profiles then traded the same
@@ -408,8 +448,14 @@ audit_handoffs() {
 # ONE unfiltered search per owner, with THAT owner's token, filtered here.
 # NOT one search per label: repeating `--label` means AND, not OR, so a
 # four-label check would quadruple the calls this 5-minute tick makes.
-audit_foreign_labels() {  # $1 = owner (for the message); uses $KIND, ogh()
-    case "$KIND" in
+#
+# `type/*` is deliberately NOT covered, and must not be added later: it is
+# legal on BOTH objects (it classifies the change, it is not a handoff), so
+# flagging it as foreign would be a false positive on every correctly
+# labelled item. The test suite pins that too. A future family that IS
+# object-scoped needs a third table here, not a widened one.
+audit_foreign_labels() {  # $1 = owner (for the message); uses $SEARCH_KIND, ogh()
+    case "$SEARCH_KIND" in
         issues)
             # `repository.nameWithOwner` (not `url`) because the item key must
             # match the queue's own `owner/repo#N`, and the remediation needs
@@ -432,7 +478,7 @@ audit_foreign_labels() {  # $1 = owner (for the message); uses $KIND, ogh()
     # A failed search is NOT this guard's to report: the blind/broken checks
     # own credential faults, and crying FOREIGN LABEL on a query error would
     # be a false accusation. Stay silent and let them speak.
-    FOUND=$(ogh search "$KIND" --owner "$1" --state open --limit 100 \
+    FOUND=$(ogh search "$SEARCH_KIND" --owner "$1" --state open --limit 100 \
               --json repository,number,labels --jq "$JQ" 2>/dev/null) || return 0
     [ -n "$FOUND" ] || return 0
     # Sorted again here (LC_ALL=C, so the cron env and a human shell agree) for
@@ -451,18 +497,260 @@ $(printf '%s\n' "$FOUND" | LC_ALL=C sort)
 EOF
 }
 
+# --- the release lane ----------------------------------------------------
+# `--kind releases` polls `review/approved`, which is the REVIEWER's verdict
+# — "approved, awaiting the human". The HUMAN gate is a separate fact, and
+# the obvious way to read it is wrong:
+#
+#   `gh search prs --review approved` is NOT the human gate.
+#
+# A GitHub App's approval sets review state APPROVED too. Verified live on
+# <org>/mach#27: <orgslug>-hermes-reviewer[bot] APPROVED at
+# 23:00:59Z, and bcross APPROVED only at 08:22:50Z the next morning. A lane
+# gated on that search qualifier alone would have merged on the BOT's
+# verdict, hours before a human looked — which is precisely the human gate
+# this lane exists to enforce.
+#
+# So the reviews are read BACK (one call per candidate, and only for
+# candidates already carrying the label), and two things must hold:
+#
+#   1. the MOST RECENT non-bot review is APPROVED — most-recent, not
+#      "any", so a later changes-requested re-closes the gate;
+#   2. its author is a CODEOWNER, when the repo's CODEOWNERS is readable.
+#
+# Rule 2 is the user's requirement ("a real, signed GitHub approval from a
+# CODEOWNER") made checkable. Where the repo's ruleset also sets
+# require_code_owner_review, GitHub's own reviewDecision enforces it and
+# this is the same answer arrived at independently; where a repo lacks that
+# rule, this is the only thing enforcing it at all — hence "approximated"
+# rather than skipped when CODEOWNERS cannot be read.
+#
+# An item that fails the gate is DROPPED, never emitted: a PR waiting on a
+# human must produce ZERO LLM calls. That is the whole reason the poll can
+# afford to run every 5 minutes. Under --verbose it prints `AWAITING HUMAN`
+# so a human debugging can see why nothing is listed.
+AWAITING=""
+CODEOWNER_MISSING=""
+RELEASE_FINDINGS=""
+RELEASE_DETAIL=""
+
+# The most recent non-bot review on a PR: "<login>|<state>", or "|NONE".
+latest_human_review() {  # $1 = repo, $2 = number
+    ogh api "repos/$1/pulls/$2/reviews" \
+        --jq '[.[] | select(.user.type != "Bot")]
+              | sort_by(.submitted_at) | last
+              | "\(.user.login)|\(.state)"' 2>/dev/null
+}
+
+# The CODEOWNERS owner logins for a repo. Sets two GLOBALS and prints
+# nothing — deliberately NOT called in a command substitution, because a
+# substitution is a subshell and CODEOWNERS_READ set inside it would never
+# reach the caller. (That is exactly how the first version of this shipped,
+# and it made the code-owner check silently unenforceable: every PR looked
+# like "CODEOWNERS unreadable" and took the fallback.)
+#
+#   CODEOWNER_LOGINS  space-separated logins, empty if unreadable
+#   CODEOWNERS_READ   1 when the file was read (even if it lists no logins)
+#
+# The raw media type, deliberately: the default JSON form base64-encodes the
+# body, so reading it would need `base64` plus a pipeline for no gain.
+CODEOWNER_LOGINS=""
+CODEOWNERS_READ=0
+codeowner_logins() {  # $1 = repo
+    CODEOWNER_LOGINS=""
+    CODEOWNERS_READ=0
+    for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+        body=$(ogh api "repos/$1/contents/$path" \
+                   -H 'Accept: application/vnd.github.raw' 2>/dev/null) || continue
+        [ -n "$body" ] || continue
+        CODEOWNERS_READ=1
+        # Comments stripped, each @token on its own line, teams (`@org/team`)
+        # dropped — a team is not a login and cannot be compared to a review
+        # author. Sorted so the same file always yields the same string.
+        CODEOWNER_LOGINS=$(printf '%s\n' "$body" | sed 's/#.*//' | tr ' \t' '\n\n' \
+            | sed -n 's/^@//p' | grep -v '/' | sort -u | tr '\n' ' ')
+        return 0
+    done
+    return 0
+}
+
+# Filter the queue file for this owner down to PRs whose human gate is
+# satisfied. Rewrites $1 in place.
+release_gate_filter() {  # $1 = queue file
+    [ -f "$1" ] || return 0
+    : > "$1.gated"
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        item=$(printf '%s' "$line" | awk '{print $1}')
+        case "$item" in
+            */*'#'*) ;;
+            *) printf '%s\n' "$line" >> "$1.gated"; continue ;;
+        esac
+        repo=${item%#*}; num=${item##*#}
+        HUMAN=$(latest_human_review "$repo" "$num")
+        HLOGIN=${HUMAN%%|*}; HSTATE=${HUMAN#*|}
+        if [ "$HSTATE" != "APPROVED" ]; then
+            AWAITING="$AWAITING $item(${HSTATE:-none})"
+            continue
+        fi
+        codeowner_logins "$repo"
+        if [ "$CODEOWNERS_READ" -eq 1 ]; then
+            case " $CODEOWNER_LOGINS " in
+                *" $HLOGIN "*) ;;
+                *) CODEOWNER_MISSING="$CODEOWNER_MISSING $item($HLOGIN)"
+                   AWAITING="$AWAITING $item(approved,not-a-codeowner)"
+                   continue ;;
+            esac
+        fi
+        printf '%s\n' "$line" >> "$1.gated"
+    done < "$1"
+    mv "$1.gated" "$1"
+}
+
+# Per-repo release triage: the states that mean "a release is stuck", which
+# nobody would otherwise be told about. Deterministic; needs no agent turn
+# to detect, and the finding rides the delivery the agent already reads.
+#
+# Runs INSIDE the owner loop, per owner with that owner's token, and right
+# after the topic search — the same reachability argument audit_foreign_labels
+# makes: everything after the loop can exit early on a deduped credential
+# fault, and anything after that exit would never run again for ANY owner.
+#
+# Only `gh`'s own --jq is used, never the jq BINARY: the container has no
+# jq (verified), which is why every other query in this script is written
+# the same way.
+release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
+    [ "$KIND" = "releases" ] || return 0
+    for R in $REPOS_TEXT; do
+        TAGS=$(ogh api "repos/$R/tags" --jq '.[].name' 2>/dev/null) || continue
+        [ -n "$TAGS" ] || continue
+        RELEASED=$(ogh release list -R "$R" --limit 30 \
+                     --json tagName,isDraft \
+                     --jq '.[] | select(.isDraft | not) | .tagName' 2>/dev/null) || RELEASED=""
+        # `conclusion` is null while a run is in flight and set once it ends,
+        # so ONE call answers both the failed and the still-running question.
+        RUNS=$(ogh run list -R "$R" --workflow release.yml --limit 30 \
+                 --json headBranch,conclusion,url \
+                 --jq '(.[] | select(.conclusion == null) | "RUNNING \(.headBranch)"),
+                       (.[] | select(.conclusion != null
+                                     and .conclusion != "success"
+                                     and .conclusion != "skipped"
+                                     and .conclusion != "neutral")
+                             | "BAD \(.headBranch) \(.conclusion) \(.url)")' 2>/dev/null) || RUNS=""
+        for T in $TAGS; do
+            case "$T" in v*) ;; *) continue ;; esac
+            key="$R#$T"
+            BAD=$(printf '%s\n' "$RUNS" | awk -v t="$T" \
+                    '$1 == "BAD" && $2 == t { print $3 " " $4; exit }')
+            if [ -n "$BAD" ]; then
+                RELEASE_FINDINGS="$RELEASE_FINDINGS $key(bad-run)"
+                RELEASE_DETAIL="$RELEASE_DETAIL
+  !! RELEASE WORKFLOW FAILED: $key — concluded ${BAD%% *} (${BAD#* }).
+     The tag exists and no release was published. Triage the run, fix the
+     cause, then cut a NEW tag: the Release tags ruleset forbids moving
+     this one, so 're-tagging' is not an available remedy."
+                continue
+            fi
+            # Still running is the resumable "waiting on CI" state, NOT a
+            # finding — that is what keeps a 6-minute release workflow from
+            # waking the agent on every tick while it runs.
+            case "$(printf '%s\n' "$RUNS" | awk -v t="$T" \
+                        '$1 == "RUNNING" && $2 == t { n++ } END { print n+0 }')" in
+                0) ;;
+                *) continue ;;
+            esac
+            case " $(printf '%s' "$RELEASED" | tr '\n' ' ') " in
+                *" $T "*) ;;
+                *) RELEASE_FINDINGS="$RELEASE_FINDINGS $key(tagged)"
+                   RELEASE_DETAIL="$RELEASE_DETAIL
+  !! RELEASE TAGGED, NOT PUBLISHED: $key — the tag exists, no GitHub
+     release was published for it, and no release run is in flight. Either
+     the workflow never triggered, or it was cancelled." ;;
+            esac
+        done
+        # Released vs DEPLOYED. Only where the release agent's own state file
+        # exists — which is itself the declaration that this repo has an
+        # internal deployment. Nothing is inferred about a repo nobody
+        # handed over, and the release agent's state is the only place that
+        # mapping lives (never the target repo).
+        STATE_FILE="$(release_state_dir)/$(repo_slug "$R").state"
+        [ -f "$STATE_FILE" ] || continue
+        NEWEST=$(printf '%s' "$RELEASED" | head -1)
+        DEPLOYED=$(sed -n 's/^DEPLOYED_VERSION=//p' "$STATE_FILE" 2>/dev/null | tail -1)
+        [ -n "$DEPLOYED" ] || continue
+        if [ -n "$NEWEST" ] && [ "v$DEPLOYED" != "$NEWEST" ]; then
+            RELEASE_FINDINGS="$RELEASE_FINDINGS $R#$NEWEST(undeployed)"
+            RELEASE_DETAIL="$RELEASE_DETAIL
+  !! RELEASE NOT DEPLOYED: $R#$NEWEST — the newest published release is not
+     the version the internal deployment records ($DEPLOYED). Resume the
+     deploy from the release agent's state: move the Komodo Variable,
+     DeployStack, then validate."
+        fi
+    done
+}
+
+# Where the release agent keeps its per-repo state: $TEAM_RELEASE_STATE_DIR
+# when declared (the reliable form — a cron child's HERMES_HOME is not
+# guaranteed to be the profile home), else under HERMES_HOME.
+release_state_dir() {
+    printf '%s' "${TEAM_RELEASE_STATE_DIR:-${HERMES_HOME:-/opt/data}/cache/release}"
+}
+
+repo_slug() {  # owner/repo -> one filename token
+    printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed 's/-*$//'
+}
+
+# The release findings keep their OWN dedupe slot, for the reason the
+# foreign-label guard has one: the shared slot holds a single key, so a
+# standing unrelated incident would silence this lane or be silenced by it.
+#
+# Unlike the other slots this one also carries a FIRST-SEEN epoch and
+# re-emits after TEAM_RELEASE_RETRY_TTL (default 6h). A stalled release is
+# unattended work: if the one delivery that announced it was lost to a
+# container restart, silence would be indistinguishable from resolution.
+release_state_file() {
+    printf '%s/team-queue-%s-release.state' \
+        "${HERMES_HOME:-/opt/data}/cache" "$LABEL_SLUG"
+}
+
+release_incident() {  # like incident(), plus the retry TTL
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "$@"
+        return 0
+    fi
+    key=$(printf '%s' "$*" | cksum | tr -d ' ')
+    f=$(release_state_file)
+    mkdir -p "$(dirname "$f")" 2>/dev/null || true
+    if [ -f "$f" ]; then
+        prev=$(head -1 "$f" 2>/dev/null)
+        first=$(sed -n '2p' "$f" 2>/dev/null)
+        case "${first:-}" in ''|*[!0-9]*) first=0 ;; esac
+        if [ "$prev" = "$key" ] \
+           && [ $(( $(date +%s) - first )) -lt "${TEAM_RELEASE_RETRY_TTL:-21600}" ]; then
+            return 1   # unchanged, and not yet due for a reminder
+        fi
+        [ "$prev" = "$key" ] || first=$(date +%s)
+    else
+        first=$(date +%s)
+    fi
+    { printf '%s\n%s\n' "$key" "$first"; } > "$f" 2>/dev/null || true
+    echo "$@"
+    return 0
+}
+
 # Clear the dedupe state on a healthy run, so a fault that recurs after a
-# good period is reported again rather than being suppressed forever. Both
-# slots: the guard's notice must come back if the label is reintroduced.
+# good period is reported again rather than being suppressed forever. Every
+# slot: the guard's notice must come back if the label is reintroduced.
 clear_state() {
-    rm -f "$(state_file)" "$(foreign_state_file)" 2>/dev/null || true
+    rm -f "$(state_file)" "$(foreign_state_file)" "$(release_state_file)" 2>/dev/null || true
 }
 
 # Clearing the dedupe state is for a HEALTHY run only. A dark gate, a
 # dropped author filter or a misfiled label must keep its slot, or its
 # notice reprints on every tick — the noise the dedupe exists to prevent.
 clear_state_unless_degraded() {
-    if [ -z "$GATE_DARK" ] && [ -z "$FILTER_FALLBACK" ] && [ -z "$FOREIGN_LABEL" ]; then
+    if [ -z "$GATE_DARK" ] && [ -z "$FILTER_FALLBACK" ] && [ -z "$FOREIGN_LABEL" ] \
+       && [ -z "$RELEASE_FINDINGS" ] && [ -z "$CODEOWNER_MISSING" ]; then
         clear_state
     fi
 }
@@ -492,14 +780,34 @@ clear_state_unless_degraded() {
 # perfectly healthy. So the search is retried WITHOUT the filter: a wider net
 # is recoverable, a dead queue is not. The notice below is what keeps the
 # widening visible instead of silent.
-if [ "$KIND" = "prs" ]; then
+if [ "$SEARCH_KIND" = "prs" ]; then
     AUTHOR="${AUTHOR:-${TEAM_OWNER_DEV_BOT:-}}"
 fi
 
-run_queue_search() {  # run_queue_search <owner> <label> <author_opt>
-    # $3 is a pre-split "flag value" pair (or empty) and MUST stay unquoted.
+# Split a LANE into its `--label` arguments. A lane is one label, or several
+# comma-separated ones meaning AND (`status/ready,type/bug`). Repeatable
+# `--label` IS the AND, which is what makes the pair lanes work without a
+# client-side filter.
+lane_label_args() {  # lane_label_args <lane> -> "--label a --label b …"
+    args=""
+    old_ifs="$IFS"; IFS=','
+    for _l in $1; do args="$args --label $_l"; done
+    IFS="$old_ifs"
+    printf '%s' "$args"
+}
+
+# The labels inside a lane, space-separated — for checks that need each
+# label individually rather than the lane as a search.
+lane_labels() {  # lane_labels <lane>
+    printf '%s' "$1" | tr ',' ' '
+}
+
+run_queue_search() {  # run_queue_search <owner> <lane> <author_opt>
+    # $3 is a pre-split "flag value" pair (or empty) and MUST stay unquoted;
+    # $2 expands to a pre-split list of --label pairs, deliberately unquoted
+    # for the same reason.
     # shellcheck disable=SC2086
-    ogh search "$KIND" --owner "$1" --label "$2" --state open \
+    ogh search "$SEARCH_KIND" --owner "$1" $(lane_label_args "$2") --state open \
         --limit 30 --json repository,number,title,url $3 \
         --jq '.[] | "\(.repository.nameWithOwner)#\(.number)  \(.title)  \(.url)"'
 }
@@ -534,7 +842,7 @@ for O in $OWNER $ORGS; do
 
     # Author per owner: org owners use their own bot if declared.
     OA="$AUTHOR"
-    if [ -n "$SLUG" ] && [ "$KIND" = "prs" ]; then
+    if [ -n "$SLUG" ] && [ "$SEARCH_KIND" = "prs" ]; then
         # The suffix convention is uppercase + non-[A-Z0-9] -> '_'
         # ("Acme Corp" -> ACME_CORP) — the same derivation provisioning's
         # env-lines uses, so the two can never drift.
@@ -570,6 +878,16 @@ $PART"
     OQ=$(printf '%s\n' "$OQ" | awk 'NF && !seen[$1]++')
     printf '%s\n' "$OQ" > "$OUTDIR/queue.$OSLUG"
 
+    # --- 2a. the release lane's HUMAN gate ---------------------------------
+    # `review/approved` is the reviewer's verdict, not the human's, and the
+    # two are hours apart in practice. The queue file is filtered here so
+    # only genuinely-releasable PRs survive — everything else is dropped,
+    # because a PR waiting on a human must cost ZERO tokens. See the
+    # release-lane block above for why the search qualifier is not enough.
+    if [ "$KIND" = "releases" ]; then
+        release_gate_filter "$OUTDIR/queue.$OSLUG"
+    fi
+
     # --- 2. empty: is it us or is it the world? --------------------------
     # The queue is filtered by label, so an empty result is only meaningful
     # if an UNFILTERED search can see anything at all. If it cannot, the
@@ -580,7 +898,7 @@ $PART"
     # would cry wolf constantly. Searching every state asks the question we
     # actually care about — "can this token see this owner's work at all?" —
     # and a brand-new empty account is covered by the onboarding check below.
-    BLIND=$(ogh search "$KIND" --owner "$O" --limit 1 \
+    BLIND=$(ogh search "$SEARCH_KIND" --owner "$O" --limit 1 \
                 --json number --jq '.[] | .number' 2>/dev/null)
     if [ "$(count_lines "$BLIND")" -eq 0 ]; then
         BLIND_OWNERS="$BLIND_OWNERS $O"
@@ -616,6 +934,14 @@ $O|topic|$rc|$(head -2 "$ERR" | tr '\n' ' ')"
         continue
     fi
     printf '%s\n' "$REPOS" > "$OUTDIR/repos.$OSLUG"
+
+    # --- 3a. is any RELEASE stuck? -----------------------------------------
+    # Per owner, with that owner's token, and before the loop's exit paths —
+    # same reachability reasoning as the guard above. Release findings are
+    # not queue items, so they survive the session gate untouched and need
+    # their own dedupe slot (see release_incident).
+    REPOS_TEXT="$REPOS"
+    release_triage "$O"
 done
 
 # A dropped author filter WIDENS the queue, which the operator has to know
@@ -647,6 +973,29 @@ if [ -n "$FOREIGN_LABEL" ]; then
   Each queue polls one family on one object kind, so a misfiled label makes
   the item invisible to BOTH lanes while it still looks busy — undo it as the
   line above says. Said once; it returns when the condition changes." || true
+fi
+
+# --- 1c. stuck releases, reported before anything can exit ---------------
+# Same placement and the same own-slot reasoning as the guard above: this
+# must be reachable even when a credential fault is about to exit, and it
+# must not share a dedupe key with the queue's own complaints. Unlike the
+# other notices it re-emits after TEAM_RELEASE_RETRY_TTL, because a stalled
+# release is unattended work and a lost delivery must not read as resolved.
+# The lane's dropped-but-waiting items are named too, once, so that "the
+# release queue is empty" is never mistaken for "someone already merged it".
+RELEASE_DETAIL_FULL="$RELEASE_DETAIL"
+if [ -n "$CODEOWNER_MISSING" ]; then
+    RELEASE_DETAIL_FULL="$RELEASE_DETAIL_FULL
+  !! CODEOWNER APPROVAL MISSING: approved, but not by a login in the repo's
+     CODEOWNERS:$CODEOWNER_MISSING
+     The gate is a CODEOWNER's approval. Where the repo's ruleset sets
+     require_code_owner_review GitHub should not have allowed this through,
+     so check the ruleset; otherwise ask a code owner to approve."
+fi
+if [ -n "$RELEASE_FINDINGS" ] || [ -n "$CODEOWNER_MISSING" ]; then
+    release_incident "RELEASE TRIAGE  a release or its deployment needs attention:$RELEASE_DETAIL_FULL
+  Said once, then again after the retry TTL: this is unattended work, and a
+  delivery lost to a restart must not look like a resolution." || true
 fi
 
 if [ -n "$ORG_FAIL" ]; then
@@ -732,6 +1081,14 @@ if [ "$N" -gt 0 ]; then
         done
     else
         printf '%s\n' "$QUEUE"
+        # Items the release lane DROPPED because the human gate is unmet.
+        # Named here only under --verbose: under cron the whole point is that
+        # a PR waiting on a human costs nothing, and the queue would
+        # otherwise look empty for no stated reason.
+        if [ "$VERBOSE" -eq 1 ] && [ -n "$AWAITING" ]; then
+            log ""
+            log "  AWAITING HUMAN (dropped from the queue — a human's wait must cost zero tokens):$AWAITING"
+        fi
     fi
     # A broken or blind owner NEXT TO a working one must still surface
     # (its items would otherwise silently vanish from the merge) — but
@@ -784,7 +1141,7 @@ if [ -n "$BLIND_OWNERS" ]; then
     done
     if [ -z "$(printf '%s' "$ALLOK" | tr -d ' ')" ]; then
         if incident "SEARCH BLIND  the queue is empty, and so is an unfiltered search.
-  gh search sees NO open $KIND at all for owner(s):$BLIND_OWNERS
+  gh search sees NO open $SEARCH_KIND at all for owner(s):$BLIND_OWNERS
   Suspect: expired/invalid token, lost scopes, or the App installation
   losing repo access — NOT an idle team."; then
             exit 3
@@ -874,14 +1231,22 @@ for O in $OWNER $ORGS; do
         # Every label this queue polls must exist, or the work routed
         # under it is invisible forever. A repo is only "good" when it
         # carries them ALL.
+        #
+        # Each label is checked INDIVIDUALLY, not each lane: a lane may be
+        # an AND-pair (`status/ready,type/bug`), and asking gh to `--search`
+        # the whole lane string would look for a label literally named
+        # "status/ready,type/bug". The requirement is still per lane's
+        # labels — both halves of a pair must exist for that lane to work.
         for R in $REPOS; do
             for L in $LABELS; do
-                FOUND=$(ogh label list -R "$R" --search "$L" --json name \
-                            --jq '.[] | .name' 2>/dev/null)
-                case "$FOUND" in
-                    *"$L"*) ;;
-                    *) MISSING="$MISSING $R:$L" ;;
-                esac
+                for C in $(lane_labels "$L"); do
+                    FOUND=$(ogh label list -R "$R" --search "$C" --json name \
+                                --jq '.[] | .name' 2>/dev/null)
+                    case "$FOUND" in
+                        *"$C"*) ;;
+                        *) MISSING="$MISSING $R:$C" ;;
+                    esac
+                done
             done
         done
         if [ -z "$MISSING" ]; then
@@ -910,5 +1275,6 @@ OWNERS_DISPLAY="$OWNER"
 for O in $ORGS; do OWNERS_DISPLAY="$OWNERS_DISPLAY $O"; done
 log "QUEUE EMPTY  query healthy: $NR_TOTAL onboarded repo(s), all labelled"
 log "  $LABELS, nothing routed to $OWNERS_DISPLAY right now."
+[ -z "$AWAITING" ] || log "  AWAITING HUMAN (routed, but the approval on record is not a human's):$AWAITING"
 [ -z "$BLIND_NOTE" ] || log "$BLIND_NOTE"
 exit 0

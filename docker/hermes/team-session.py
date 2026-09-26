@@ -5,7 +5,7 @@ WHY THIS EXISTS
 
 A work item must be worked in ONE session. On 2026-09-25 it was not:
 the 5-minute `team: dev self-pull` cron re-injected the same in-progress
-issue (`TevaServices/mach#26`) into the `developer` profile every tick
+issue (`<org>/mach#26`) into the `developer` profile every tick
 while a Discord thread session was mid-work on it. Because `team-queue.sh`
 is resume-first, the issue sat at `status/in-progress` with no PR, so it
 matched on every single tick, forever. Both sessions then worked the SAME
@@ -60,7 +60,7 @@ Options:
                 this on every stream chunk, so the TTL only needs to cover
                 the gap while a model call is in flight.
   --item ITEM   scope to sessions whose RECENT messages mention ITEM
-                (e.g. `TevaServices/mach#26`). Without it, any live session
+                (e.g. `<org>/mach#26`). Without it, any live session
                 in the profile matches.
   --quiet       print nothing; exit code only.
   --json        machine-readable one object per line.
@@ -174,8 +174,8 @@ def live_sessions(db_path, ttl):
 def mentions(con, session_id, item):
     """True when the session's recent messages mention `item`.
 
-    Matched case-insensitively on the literal item so `tevaservices/mach#26`
-    and `TevaServices/mach#26` both hit — the same item is written both ways
+    Matched case-insensitively on the literal item so `acmecorp/mach#26`
+    and `AcmeCorp/mach#26` both hit — the same item is written both ways
     across the issue, the branch and the thread name.
     """
     needle = item.lower()

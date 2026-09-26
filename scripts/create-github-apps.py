@@ -96,8 +96,8 @@ DEFAULT_APP_PREFIX = os.environ.get("HERMES_APP_PREFIX", "hermes")
 # identity the team knows is "<prefix>-dev[bot]".
 #
 # "main" is the default profile's App (the primary agent). It is opt-in —
-# DEFAULT_ORDER covers only the 3 team profiles; pass `main` on the
-# command line when you want it (the org run needs all four).
+# DEFAULT_ORDER covers the team profiles; pass `main` on the
+# command line when you want it (the org run needs all of them).
 APPS = {
     "main": {
         "app_suffix": "main",
@@ -131,7 +131,22 @@ APPS = {
     },
     "reviewer": {
         "app_suffix": "reviewer",
-        "description": "Hermes reviewer — review gates and merges after the human gate",
+        "description": "Hermes reviewer — review gates; hands off to release",
+        "permissions": {
+            "metadata": "read",
+            "contents": "write",
+            "issues": "write",
+            "pull_requests": "write",
+        },
+    },
+    "release": {
+        "app_suffix": "release",
+        # Merges the approved PR and files the bug issues a failed release
+        # produces. Deliberately WITHOUT the `workflows` permission, like
+        # every other team App: a workflow file runs arbitrary code with the
+        # repo's secrets, so granting it would widen what a confused agent
+        # could do. An item that needs CI changes is the user's to land.
+        "description": "Hermes release — merges approved PRs, cuts releases, deploys and validates",
         "permissions": {
             "metadata": "read",
             "contents": "write",
@@ -211,7 +226,7 @@ def owner_for(org):
     return gh_login() or "<owner>"
 
 
-DEFAULT_ORDER = ["planner", "developer", "reviewer"]
+DEFAULT_ORDER = ["planner", "developer", "reviewer", "release"]
 
 
 # --- tiny HTML helpers ------------------------------------------------------

@@ -48,8 +48,8 @@ config changes recreate the litellm container on deploy.
 **The models are four TIER NAMES, and they are what you send**: `cheap`
 (nemotron-3-nano:30b, 256k — the cheap-turn router, the light side tasks,
 and every Honcho consumer), `smart` (gemma4:cloud, 256k — the planner's
-everyday tier), `smarter` (glm-5.3-flash, 1M — the default and developer
-profiles, and compression), `smartest` (glm-5.3, 1M — judgment work and the
+everyday tier), `smarter` (glm-5.3-flash, 1M — the default, developer and
+release profiles, and compression), `smartest` (glm-5.3, 1M — judgment work and
 opt-in escalation; no vision). The tiers are defined in
 `config/models.toml` (name + TRUE context window); WHICH BACKEND SERVES
 EACH ONE is `config/litellm.yaml` alone, so pointing a tier at another
@@ -218,8 +218,8 @@ lanes, and `claude`.
 - Multi-turn / iterative: `tmux new-session -d -s cc …`, driven with
   send-keys / capture-pane.
 - A hard multi-step refactor may opt up a tier: `--model smartest` instead
-  of the profile's default (`smarter` for the default and developer
-  profiles).
+  of the profile's default (`smarter` for the default, developer and
+  release profiles).
 - In claude's shell, `claude_model` prints the active model;
   `/opt/data/tools/claude-hermes/claude-model-resolve.py <config.yaml>`
   prints provider + primary + cheap model for a given profile, and
