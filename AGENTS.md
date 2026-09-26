@@ -1158,7 +1158,7 @@ which `!! TYPE MISSING` says out loud.
 Each queue polls ONE family on ONE object kind, so a
 label of the wrong family is not untidiness — it takes the item out of
 BOTH lanes at once while it still looks busy. Observed 2026-09-25
-(`TevaServices/mach#26`): the *reviewer* ran a `gh issue edit` with
+(`<org>/mach#26`): the *reviewer* ran a `gh issue edit` with
 `status/in-progress` — the developer's own claim **and resume** label,
 because `team-reviewer`'s verdict steps said "Card → In Progress" and on a
 label-mechanism repo the card IS that label — while the *developer* put
@@ -1538,7 +1538,7 @@ see §"Routing work to a profile"):
 mise run test
 # Live: is any open item carrying a label of the WRONG family? An issue with
 # review/* (or a PR with status/*) is invisible to BOTH queues — the state
-# that flip-flopped TevaServices/mach#26 on 2026-09-25. Empty output is the
+# that flip-flopped <org>/mach#26 on 2026-09-25. Empty output is the
 # healthy answer; the queue prints `!! FOREIGN LABEL` for whatever this finds.
 docker exec -e HOME=/opt/data/profiles/developer/home hermes-main \
   gh search issues --owner <owner> --state open --limit 100 \

@@ -15,8 +15,8 @@
 # The first two are scoped to different GitHub objects, and each queue polls
 # ONE family on ONE object kind, so a label of the wrong family does not
 # just look untidy — it takes the item out of BOTH lanes at once while it
-# still looks busy. That happened on 2026-09-25: an issue (TevaServices/
-# mach#26) ended up carrying `review/ready` and no `status/*` label, the
+# still looks busy. That happened on 2026-09-25: an issue (<org>/mach#26)
+# ended up carrying `review/ready` and no `status/*` label, the
 # developer's queue could not see it and neither could the reviewer's, and
 # the two profiles then traded the same issue every tick (the reviewer's
 # verdict steps said "Card -> In Progress", which on a label-mechanism repo

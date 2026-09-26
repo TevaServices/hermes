@@ -71,7 +71,7 @@
 # object kind. So a label of the wrong family is not untidiness: it takes
 # the item out of BOTH lanes at once while it still looks busy, and the
 # queue that would otherwise have listed it is the one that cannot see it.
-# Observed 2026-09-25 on TevaServices/mach#26 (an issue left carrying
+# Observed 2026-09-25 on <org>/mach#26 (an issue left carrying
 # `review/ready` and no `status/*`), where the two profiles then traded the
 # same issue every tick. A deduped `FOREIGN LABEL` incident names the item,
 # the label and the command that undoes it. It changes no exit code below:
@@ -435,7 +435,7 @@ audit_handoffs() {
 # `status/*` belongs on ISSUES and `review/*` on PULL REQUESTS, and each
 # queue polls ONE family on ONE object kind. So a label of the wrong family
 # does not merely look untidy — it takes the item out of both lanes at once
-# while it still looks busy. Observed 2026-09-25: TevaServices/mach#26 ended
+# while it still looks busy. Observed 2026-09-25: <org>/mach#26 ended
 # up carrying `review/ready` and no `status/*` label at all, so the
 # developer's queue (issues by status/*) could not see it and neither could
 # the reviewer's (PRs by review/*); the two profiles then traded the same
@@ -505,7 +505,7 @@ EOF
 #   `gh search prs --review approved` is NOT the human gate.
 #
 # A GitHub App's approval sets review state APPROVED too. Verified live on
-# TevaServices/mach#27: tevaservices-hermes-reviewer[bot] APPROVED at
+# <org>/mach#27: <orgslug>-hermes-reviewer[bot] APPROVED at
 # 23:00:59Z, and bcross APPROVED only at 08:22:50Z the next morning. A lane
 # gated on that search qualifier alone would have merged on the BOT's
 # verdict, hours before a human looked — which is precisely the human gate
