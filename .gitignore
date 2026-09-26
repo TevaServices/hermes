@@ -28,3 +28,7 @@ __pycache__/
 # Claude Code local settings
 .claude/settings.local.json
 admin-api-key.txt
+# Backstop for other loose credential files dropped here by hand. The real
+# home for these is /etc/hermes on the host (root-owned, 640) — this only
+# stops a `git add -A` from committing one.
+komodo_creds.txt
