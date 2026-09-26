@@ -232,7 +232,7 @@ K read/ListVariables '{}'
 # 1. never fight a running operation
 K read/GetStackActionState '{"id":"<stack id>"}'   # busy -> wait 60-90s, retry
 # 2. move the pin
-K write/UpdateVariableValue '{"variable":"'"$KOMODO_VARIABLE"'","value":"'"$VER"'"}'
+K write/UpdateVariableValue '{"name":"'"$KOMODO_VARIABLE"'","value":"'"$VER"'"}'
 # 3. READ IT BACK — a status code is not evidence
 K read/ListVariables '{}'
 # 4. deploy, then follow it
@@ -240,11 +240,18 @@ K execute/DeployStack '{"stack":"'"$KOMODO_STACK"'"}'
 K read/GetUpdate '{"id":"<_id.$oid from the response>"}'
 ```
 
-Notes that will otherwise cost you a turn:
+Notes that will otherwise cost you a turn (all verified against Komodo 2.3.3):
 
-- `write/UpdateVariableValue` takes `{variable,value}`; some docs show
-  `{name,value}`. If the call errors naming the field, retry with `name` and
-  record whichever worked in your state file — once, not every release.
+- `write/UpdateVariableValue` takes **`{"name": …, "value": …}`**. The field is
+  `name`, not `variable` — a wrong guess comes back as `missing field 'name'`,
+  which reads like a malformed request rather than a typo'd key.
+- **Variables are ADMIN-ONLY.** Creating or updating one as a non-admin fails
+  with `Only Admins can create/update Variables`, and a scoped service user
+  that has not been granted the stack cannot even see it
+  (`User does not have required permissions on this Stack`, and
+  `read/ListStacks` returns `[]`). If you hit either, STOP and report it: it is
+  a credential/permission problem on the control plane, not something to retry,
+  and it is exactly the kind of thing a human must grant.
 - A `DeployStack` can collide with the komodo repo's own webhook-driven
   `DeployStackIfChanged` ("Resource is busy"). Check action state first, wait,
   never force.
