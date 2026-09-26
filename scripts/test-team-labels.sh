@@ -523,6 +523,21 @@ case "$out" in
         ok "a failed release workflow is reported with its conclusion" ;;
     *) bad "failed release workflow not reported (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))" ;;
 esac
+
+# ...but a PUBLISHED release ends the story. A failed run that was recovered
+# (a re-run, or a fixed workflow re-triggered) must NOT be reported forever:
+# observed live, v0.5.0 carries two failed runs AND a published release, and
+# checking the run before the release made a healthy tag look permanently
+# stuck — a wake every retry TTL, for a release that is fine.
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+STUB_RELEASED='v0.9.0'
+out=$(run_queue 0 "" "" releases)
+if [ -z "$out" ]; then
+    ok "a published release silences the earlier failed run for that tag"
+else
+    bad "a recovered failure still reports (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))"
+fi
+STUB_RELEASED=''
 unset STUB_APPROVED_PRS STUB_HUMAN_REVIEW STUB_CODEOWNERS STUB_TAGS STUB_RELEASED STUB_RUNS
 unset STUB_LANE_INPROG_BUG STUB_LANE_READY_BUG STUB_LANE_PLAIN STUB_ISSUE_LABELS
 

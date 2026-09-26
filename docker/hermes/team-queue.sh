@@ -640,15 +640,24 @@ release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
         for T in $TAGS; do
             case "$T" in v*) ;; *) continue ;; esac
             key="$R#$T"
+            # A PUBLISHED release ends the story for this tag. Any earlier
+            # failed run was recovered — a re-run, or a workflow fixed and
+            # re-triggered — and reporting it would wake the agent forever
+            # about a release that is fine. Observed live: v0.5.0 carries two
+            # failed runs AND a published release, and checking the run first
+            # made a healthy release look permanently stuck.
+            case " $(printf '%s' "$RELEASED" | tr '\n' ' ') " in
+                *" $T "*) continue ;;
+            esac
             BAD=$(printf '%s\n' "$RUNS" | awk -v t="$T" \
                     '$1 == "BAD" && $2 == t { print $3 " " $4; exit }')
             if [ -n "$BAD" ]; then
                 RELEASE_FINDINGS="$RELEASE_FINDINGS $key(bad-run)"
                 RELEASE_DETAIL="$RELEASE_DETAIL
   !! RELEASE WORKFLOW FAILED: $key — concluded ${BAD%% *} (${BAD#* }).
-     The tag exists and no release was published. Triage the run, fix the
-     cause, then cut a NEW tag: the Release tags ruleset forbids moving
-     this one, so 're-tagging' is not an available remedy."
+     No release was published for it. Triage the run, fix the cause, then
+     cut a NEW tag: the Release tags ruleset forbids moving this one, so
+     're-tagging' is not an available remedy."
                 continue
             fi
             # Still running is the resumable "waiting on CI" state, NOT a
@@ -659,14 +668,14 @@ release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
                 0) ;;
                 *) continue ;;
             esac
-            case " $(printf '%s' "$RELEASED" | tr '\n' ' ') " in
-                *" $T "*) ;;
-                *) RELEASE_FINDINGS="$RELEASE_FINDINGS $key(tagged)"
-                   RELEASE_DETAIL="$RELEASE_DETAIL
+            # Not published, not building, not failed: the workflow never
+            # triggered, or it was cancelled. (A published tag already
+            # `continue`d above, so reaching here IS the finding.)
+            RELEASE_FINDINGS="$RELEASE_FINDINGS $key(tagged)"
+            RELEASE_DETAIL="$RELEASE_DETAIL
   !! RELEASE TAGGED, NOT PUBLISHED: $key — the tag exists, no GitHub
      release was published for it, and no release run is in flight. Either
-     the workflow never triggered, or it was cancelled." ;;
-            esac
+     the workflow never triggered, or it was cancelled."
         done
         # Released vs DEPLOYED. Only where the release agent's own state file
         # exists — which is itself the declaration that this repo has an
