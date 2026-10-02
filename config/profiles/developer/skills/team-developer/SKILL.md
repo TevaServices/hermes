@@ -359,6 +359,10 @@ why there: an open thread is a statement, so make it one.
    gh pr edit <PR#> --repo owner/repo --add-label review/ready
    ```
 
+   If any of these label commands is refused with `gh shim: refused: …`,
+   do not retry or reword — the refusal names the wrong label and the
+   correct command shape, and applying the shape it names is the fix.
+
    Then READ THE LABELS BACK, both objects, in the same turn — the handoff
    is not done until the read-back matches. This is the check that catches
    the exact mistake the next paragraph warns about; knowing the rule does

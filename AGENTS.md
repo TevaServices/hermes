@@ -519,7 +519,21 @@ repo owner.**
   with a USER token (`gh api /orgs/<org>/installations`; the App's own
   token 404s regardless). `mise run test` covers this routing offline —
   `scripts/test-gh-shim.sh`, which stubs `gh-real` via the shim's
-  `GH_REAL` seam.
+  `GH_REAL` seam (and, since 2026-10, the shim's label gate too).
+  **The same shim also carries the team's label gate (2026-10).** A
+  `gh issue edit|create` that SETs a `review/*` label, or a `gh pr
+  edit|create` that SETs a `status/*` label, is refused with exit 1 and a
+  stderr message naming the undo (`--remove-label`) and the correct
+  command shape — the families' object rule (see §"Routing work to a
+  profile") enforced mechanically at the one hop every credentialed call
+  passes through, not only described in the skills. The gate sits ABOVE
+  the `GH_TOKEN` passthrough, so the queue scripts' forced-token calls are
+  fenced too; `type/*` is legal on both objects by design (the release
+  filing passes), `--remove-label` is never gated (the undo of a misfile
+  is itself a wrong-family remove), and `gh api` label writes remain the
+  declared NON-gate (the endpoint scanner cannot know which args are flag
+  values — the queues' `!! FOREIGN LABEL` guard stays the net for the REST
+  spelling).
   git's single credential helper is `git-credential-hermes.sh`
   (`credential.https://github.com.helper` + `useHttpPath=true`): org
   remote → org token; otherwise it replays the request into
@@ -1313,6 +1327,13 @@ than by remembering it:
     guard or be silenced by it — and this lane already carries one (see
     `AUTHOR FILTER DROPPED` below). Both slots are cleared by a healthy run,
     so a fault that returns is reported again.
+  - **The gh shim refuses the CLI edit spelling outright.** Since 2026-10
+    the `gh` shim (§"GitHub access") rejects `gh issue edit|create` that
+    sets a `review/*` label and `gh pr edit|create` that sets a
+    `status/*` label — exit 1, gh-real never runs, and the stderr names
+    the undo and the correct shape. The gate is profile-agnostic (a
+    preset `GH_TOKEN` does not route around it) and `gh api` label writes
+    remain its declared non-gate.
   - The misfile happens anyway — a handoff turn has skipped the read even
     where the skill stated the opposite — so guards that only REPORT are
     not the whole answer (the gh shim's label gate is now the prevention
