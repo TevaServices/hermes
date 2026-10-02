@@ -85,11 +85,14 @@ role, which is why they are not split.
   repo gets its own Project with the standard column set
   `Backlog → Ready → In Progress → In Review → Blocked → Done`.
 - **Personal-account repos** (App tokens cannot manage user-owned
-  Projects): use the **status label set** instead:
+  Projects): the **status label set** carries the lifecycle:
   `status/backlog`, `status/ready`, `status/in-progress`,
-  `status/in-review`, `status/blocked`, `status/done` — same lifecycle,
-  same semantics. The onboarding procedure creates the label set and
-  records which mechanism the repo uses.
+  `status/in-review`, `status/blocked`, `status/done`. **The label set
+  exists on org repos too** — board columns are planner's view, but the
+  self-pull queues are `gh search --label` filters, and a claim or
+  handoff recorded only as a column is invisible to them. Onboarding
+  creates the labels on every repo and the board additionally where it
+  can.
 - Moving items through columns/labels is planner's job. Developer moves
   its own card where a self-serve step is natural (it sets In Progress on
   claim, and In Review when it hands off). **Reviewer moves no card at
