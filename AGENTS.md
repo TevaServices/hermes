@@ -1046,6 +1046,23 @@ not secret, but **PEMs and bot tokens are**: never echo them, never commit
 them, and route them through the scripts below rather than a shell history
 or a chat transcript.
 
+Both provisioning scripts run **on your machine** — the one with the
+browser and the SSH key — not on the host, and they deploy their own
+secrets over SSH (`scripts/hostdeploy.py`, shared): content travels only
+by ssh stdin or scp, never in an ssh command line, and lands with `sudo
+install` as `root:<host-group> 640`, the previous file kept beside it as
+`<target>.hermes-deploy.bak`, and every push verified by reading the
+target back. When the host's sudo is passwordless (`sudo -n` — the
+typical cloud host), the whole deploy is automatic. When it needs a
+password, each script generates an `install-remote.sh` under gitignored
+`build/` that runs the same work through ONE `ssh -t` (one sudo prompt) —
+run that and nothing is done by hand. Point the scripts at the host with
+`--host` or `HERMES_SSH_HOST` (the ssh-config destination, e.g. in
+gitignored `mise.local.toml`); `--group` / `HERMES_HOST_GROUP` and
+`--env-dir` / `HERMES_DEPLOY_ENV_DIR` default to `ubuntu` and
+`/etc/hermes` (deliberately NOT `$HERMES_ENV_DIR`, which mise points at
+the local `secrets/` checkout).
+
 - **GitHub App for a new profile** (`scripts/create-github-apps.py`): GitHub
   has no API to create an App and `gh` cannot do it; the App Manifest flow
   is the only automatable path and needs the account owner's browser. The
@@ -1055,20 +1072,21 @@ or a chat transcript.
   catches the post-install redirect so the installation id is captured
   without anyone reading it off a URL. Two clicks per app: **Create GitHub
   App**, then **Install** with "All repositories". Run
-  `python3 scripts/create-github-apps.py [profile ...]` where the browser
-  is (default: the 3 team profiles). Artifacts land in gitignored
-  `build/github-apps/` (PEM mode 600, `results.json`, `env-lines.txt`,
-  `host-install.sh`); then on the host run `host-install.sh` (installs each
-  PEM as root:<host-group> 640 into `$HERMES_ENV_DIR/`) and append `env-lines.txt` to
-  `/etc/hermes/hermes-main.env`. Re-running is safe — an existing App name
+  `python3 scripts/create-github-apps.py [profile ...] --host <host>`
+  where the browser is (default: the 4 team profiles). Artifacts land in
+  gitignored `build/github-apps/` (PEM mode 600, `results.json`,
+  `env-lines.txt`); with `--host`, each PEM + the env lines are pushed
+  into `/etc/hermes/` and verified in the same run; without it (or with a
+  sudo that needs a password) an `install-remote.sh` is generated — one
+  command, one sudo prompt. Re-running is safe — an existing App name
   fails at GitHub's own name check before anything is created.
 - **Org Apps** (`create-github-apps.py --org <ORG>`): same flow, but the
   manifests POST to the org's settings URL (browser must be logged in
   with admin on the org) and EVERYTHING lands in
   `build/github-apps/<orgslug>/` with org-slug'd PEM names
-  (`github-app-<orgslug>-<profile>.pem`, `env-lines-<orgslug>.txt`,
-  `host-install-<orgslug>.sh`) — a second run can never clobber the
-  personal artifacts. The org App-NAME prefix defaults to
+  (`github-app-<orgslug>-<profile>.pem`, `env-lines-<orgslug>.txt`) — a
+  second run can never clobber the personal artifacts. The org App-NAME
+  prefix defaults to
   `<orgslug>-hermes` (e.g. `acmecorp-hermes-planner`) — deliberately
   different from the personal names, because App names are globally
   unique and the personal ones are taken; override with `--prefix` or
@@ -1081,36 +1099,48 @@ or a chat transcript.
   profile's org app — the org run for the full team is:
   `python3 scripts/create-github-apps.py --org <ORG> main planner developer reviewer release`
 - **Bot token for a new team profile**
-  (`scripts/set-team-discord-tokens.py`, run **on the host**): prompts for
-  each team bot token with hidden input (`getpass`) and validates every
-  token against Discord *before* writing. It refuses a token Discord
-  rejects, the main bot's token (which re-creates the
-  duplicate-credential refusal), a user token, or one already entered for a
-  different role. It rewrites the `PROFILE_<NAME>_DISCORD_BOT_TOKEN` lines
-  in `/etc/hermes/hermes-main.env` (idempotent) and prints each bot's
-  invite URL carrying the main bot's permission integer. Create the
-  applications first at https://discord.com/developers/applications and
-  enable **Message Content** AND **Server Members** (plus Presence, to
-  match the existing bots) on each one's Bot tab. A bot token works as soon
-  as the app exists, but the bot is not *in* the guild until someone
-  authorizes the invite URL.
+  (`scripts/set-team-discord-tokens.py`, run **locally**, like the App
+  script): prompts for each team bot token with hidden input (`getpass`)
+  and validates every token against Discord *before* writing, then pushes
+  the `PROFILE_<NAME>_DISCORD_BOT_TOKEN` lines into
+  `/etc/hermes/hermes-main.env` over SSH — same deploy contract as the
+  App script, including the read-back verification. The duplicate-token
+  checks: a token Discord rejects, the main bot's token (hashed from
+  `DISCORD_BOT_TOKEN` read off the host env file over SSH — without a
+  readable host file, or without `--host`, that check is SKIPPED with a
+  warning and only this run's own duplicates are caught), a user token,
+  or one already entered for another profile. Pass profile names to wire
+  just one (`reviewer`) — the merge touches only that profile's line.
+  `--set-var NAME=value` (repeatable) merges additional lines in the same
+  push — e.g. the NEW channel's placeholder value:
+  `--set-var DISCORD_CHANNEL_RELEASE=<channel id>` — which is the half
+  that would otherwise still need a host-side edit.
+  It prints each bot's invite URL carrying the main bot's permission
+  integer. Create the applications first at
+  https://discord.com/developers/applications and enable **Message
+  Content** AND **Server Members** (plus Presence, to match the existing
+  bots) on each one's Bot tab. A bot token works as soon as the app
+  exists, but the bot is not *in* the guild until someone authorizes the
+  invite URL.
 
 ### Activating a new profile
 
-1. Create both identities with the scripts above.
-2. Land the credentials in `/etc/hermes/hermes-main.env`
-   (`PROFILE_<NAME>_GITHUB_APP_ID`, `_GITHUB_APP_INSTALLATION_ID`,
-   `_GH_GIT_NAME`, `_GH_GIT_EMAIL`, `_DISCORD_BOT_TOKEN`). The `release`
-   profile additionally needs `/etc/hermes/komodo-alt-auth-header`
-   (root-owned 640) — see §Secrets.
-3. Point the profile's Discord channel at it: add a route under
+1. Create both identities with the scripts above. **Run them with
+   `--host`** so the PEMs, app/installation ids and the
+   `PROFILE_<NAME>_DISCORD_BOT_TOKEN` lines land in
+   `/etc/hermes/hermes-main.env` in the same run (verified by read-back);
+   with no passwordless sudo, run each script's generated
+   `install-remote.sh` right after it. The `release` profile additionally
+   needs `/etc/hermes/komodo-alt-auth-header` (root-owned 640) — see
+   §Secrets.
+2. Point the profile's Discord channel at it: add a route under
    `[config_extra.gateway.profile_routes]` in the default profile's
    `profile.toml`. Unrouted channels keep the default agent's behavior.
    A NEW channel id is also a new `DISCORD_CHANNEL_<NAME>` placeholder, and
    `render.py`'s `BOOT_PLACEHOLDERS` must gain it or the build fails on an
    unknown `@@VAR@@` (that failure is the point — a placeholder with no
    declaration is a literal reaching a config).
-4. Commit + deploy, then verify in the logs — the entrypoint logs
+3. Commit + deploy, then verify in the logs — the entrypoint logs
    `gh authed via GitHub App (home=…, app id=…)` per profile, and the
    gateway logs `[Discord] Connected as <bot>` plus
    `✓ discord connected (profile: <name>)`.

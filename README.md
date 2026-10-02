@@ -68,7 +68,8 @@ secrets/                *.env.example templates (real files never committed)
 komodo/                 Resource Sync definitions + setup guide
 scripts/                host setup + credential/diagnostic helpers
                         (bootstrap-host.sh, create-github-apps.py,
-                        set-team-discord-tokens.py, discord-thread-doctor.py)
+                        set-team-discord-tokens.py, hostdeploy.py — the
+                        shared ssh-push deploy, discord-thread-doctor.py)
                         + container cron shims (prune-repos.sh, refresh-repos.sh)
 ```
 
@@ -178,16 +179,20 @@ environment variable. This is the complete list — work through it once.
 everything around the manual click that no API can perform):
 
 ```bash
-python3 scripts/create-github-apps.py --org <your-org>   # or omit --org for user-owned
-sudo sh build/github-apps/host-install.sh                # installs the PEMs on the host
-sudo python3 scripts/set-team-discord-tokens.py          # hidden input, validated against Discord
+python3 scripts/create-github-apps.py --host <host>       # or --org <your-org> <host>; pushes PEMs + env lines itself
+python3 scripts/set-team-discord-tokens.py --host <host>  # hidden input, validated, pushed over ssh (verify by read-back)
+# Sudo on the host needs a password? Each script writes build/**/install-remote.sh —
+# sh it: one ssh -t sudo prompt does the same deploy. Without --host: HERMES_SSH_HOST.
 ```
 
-**Per-machine values:** `HERMES_ENV_DIR` (default `/etc/hermes`),
-`HERMES_HOST_GROUP` (default `ubuntu` — the group owning the env files),
-`TZ` (optional; the container runs UTC without it, which is what the cron
-schedules in `config/cron.toml` are written against), and the Komodo server
-name in `komodo/resources.toml`.
+**Per-machine values:** `HERMES_SSH_HOST` (the ssh destination the
+credential scripts push through), `HERMES_DEPLOY_ENV_DIR` (default
+`/etc/hermes` — the HOST-side secrets dir; distinct from `HERMES_ENV_DIR`,
+which below is the repo's local one), `HERMES_HOST_GROUP` (default
+`ubuntu` — the group owning the host env files), `TZ` (optional; the
+container runs UTC without it, which is what the cron schedules in
+`config/cron.toml` are written against), and the Komodo server name in
+`komodo/resources.toml`.
 
 `mise run validate` checks the config; `mise run render` shows exactly what
 the image will bake in.
