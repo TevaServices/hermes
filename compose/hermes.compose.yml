@@ -90,8 +90,11 @@ services:
       # restarting this container (a bind-mounted file's inode is fixed at
       # container create). The exec-scoped key is the grant by which this
       # agent reaches mach-enrolled machines per SECURITY-NOTES.md there.
-      MACH_STATE_DIR: /opt/data/mach-state
-      MACH_SERVER: https://mach.teva.services
+      # Values are the Komodo stack environment's to set (komodo repo
+      # resources.toml; same pattern as HERMES_REF) — these defaults match,
+      # so local `mise run up` works without a stack environment.
+      MACH_STATE_DIR: ${MACH_STATE_DIR:-/opt/data/mach-state}
+      MACH_SERVER: ${MACH_SERVER:-https://mach.teva.services}
       # Headless Chromium CDP sidecar for the browser tools — see
       # docker/hermes/s6-rc.d/chromium-cdp/ (binds 127.0.0.1 only; the
       # rendered browser.cdp_url points the agent at it).
