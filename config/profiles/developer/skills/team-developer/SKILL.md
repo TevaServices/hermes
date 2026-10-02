@@ -380,7 +380,11 @@ why there: an open thread is a statement, so make it one.
    move, and never puts a `review/*` label on the issue** — an issue
    carrying `review/ready` is invisible to both queues (yours polls
    issues by `status/*`, the reviewer's polls PRs), which is the state
-   `!! FOREIGN LABEL` reports.
+   `!! FOREIGN LABEL` reports. If the gateway ever REFUSES one of these
+   label commands, do not retry or reword it — the refusal means a
+   wrong-object edit and its message names the label and the command
+   shape that puts it on the right object (`team-conventions`); apply
+   that shape exactly.
 5. `review/changes` from reviewer → fix on the same branch (the PR
    re-opens as draft), **resolve the threads whose finding you actually
    fixed**, re-verify, then hand off AGAIN — the PR's labels only (the
