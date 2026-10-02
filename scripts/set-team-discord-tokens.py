@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Wire the team profiles' Discord bot tokens into /etc/hermes/hermes-main.env.
+"""Wire the team profiles' Discord bot tokens into the host's env file.
 
-Run this ON THE HOMELAB HOST. It prompts for each team bot's token with
-hidden input (getpass), so the token never lands in a shell history, a
-process list, or a terminal scrollback — and never in a chat transcript.
+Run this LOCALLY — the machine with your SSH key (the host never needs a
+checkout). It prompts for each team bot's token with hidden input
+(getpass), so nothing is typed as an argument or echoed; validates every
+token against Discord BEFORE wiring anything; and then installs the
+PROFILE_<NAME>_DISCORD_BOT_TOKEN lines into /etc/hermes/hermes-main.env on
+the host (see scripts/hostdeploy.py for the push/merge/backup/verify
+contract, which this script and create-github-apps.py share).
 
-Before writing anything it validates each token against Discord and
-refuses to proceed on:
-  * a token Discord rejects
+Before writing anything it refuses a token that is:
+  * rejected by Discord
   * the MAIN bot's token (would re-create the duplicate-credential
-    refusal that keeps the team gateways from starting)
-  * a token already entered for another profile
-
-It then rewrites the PROFILE_<NAME>_DISCORD_BOT_TOKEN lines in the host
-env file (idempotent — existing lines are replaced), preserving the
-file's mode, and prints the invite URL for each bot.
+    refusal that keeps the team gateways from starting) — checkable
+    without typing the main token anywhere: the script hashes
+    DISCORD_BOT_TOKEN read from the host env file over SSH
+  * already entered for another profile
 
 Why the invite URL matters: a bot token works as soon as the app exists,
 but the bot is not IN the guild until someone authorizes it. The URL
@@ -24,23 +25,32 @@ land with equivalent capability.
 The three privileged intents (Presence, Server Members, Message Content)
 must be toggled by hand in the Developer Portal — there is no API for it,
 and discord.py refuses to connect without them.
+
+Usage:
+  python3 scripts/set-team-discord-tokens.py                 # all 4 team bots
+  python3 scripts/set-team-discord-tokens.py reviewer        # just one
+  HERMES_SSH_HOST=<host> python3 scripts/...                 # or --host <host>
+
+Deploy paths (scripts/hostdeploy.py):
+  * sudo -n works over SSH  →  pushed + verified automatically, nothing
+    is written to disk here, nothing is run on the host by hand;
+  * sudo needs a password   →  artifacts land in build/discord-bots/ and
+    ONE command finishes it: sh build/discord-bots/install-remote.sh;
+  * no --host given         →  same artifacts, plus a warning that the
+    main-token duplicate check is skipped.
 """
 
+import argparse
 import getpass
 import hashlib
 import json
 import os
-import re
-import subprocess
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 
-ENV_DIR = os.environ.get("HERMES_ENV_DIR", "/etc/hermes")
-ENV_FILE = os.path.join(ENV_DIR, "hermes-main.env")
-# Group owning the env file on the host (640, root:<group>).
-HOST_GROUP = os.environ.get("HERMES_HOST_GROUP", "ubuntu")
+import hostdeploy
+
 PROFILES = ["planner", "developer", "reviewer", "release"]
 # Your Discord server's name — only used in the printed instructions.
 GUILD_NAME = os.environ.get("DISCORD_GUILD_NAME", "your server")
@@ -63,122 +73,193 @@ PRIVILEGED = {
 }
 
 
-def sh(*args, **kw):
-    return subprocess.run(args, capture_output=True, text=True, **kw)
-
-
 def api(path, token):
     req = urllib.request.Request(
-        API + path,
-        headers={"Authorization": "Bot " + token, "User-Agent": UA},
+        API + path, headers={"Authorization": "Bot " + token, "User-Agent": UA}
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.load(resp)
 
 
-def read_env():
-    out = sh("sudo", "cat", ENV_FILE)
-    if out.returncode != 0:
-        sys.exit(f"cannot read {ENV_FILE}: {out.stderr.strip()}")
-    return out.stdout
+def collect_token(profile, main_hash, seen):
+    """Prompt + validate one token. Returns (token, me, app), or None on EOF."""
+    while True:
+        token = getpass.getpass(f"  paste the {profile} bot token (hidden): ").strip()
+        if not token:
+            print("    empty — try again")
+            continue
+        digest = hashlib.sha256(token.encode()).hexdigest()[:12]
+        if main_hash and digest == main_hash:
+            print("    ✗ that is the MAIN bot's token — create a separate app")
+            continue
+        if digest in seen:
+            print(f"    ✗ already entered for {seen[digest]}")
+            continue
+
+        try:
+            me = api("/users/@me", token)
+        except urllib.error.HTTPError as exc:
+            # Discord normally returns a JSON body explaining the
+            # rejection, but never assume the body is readable — a
+            # missing one must not turn into a traceback.
+            try:
+                detail = exc.read().decode()[:120]
+            except Exception:
+                detail = str(exc.reason or "")
+            print(f"    ✗ Discord rejected it ({exc.code}): {detail}")
+            continue
+        except Exception as exc:
+            print(f"    ✗ could not reach Discord: {exc}")
+            continue
+
+        if not me.get("bot"):
+            print("    ✗ that is a user token, not a bot token")
+            continue
+
+        try:
+            app = api("/applications/@me", token)
+        except Exception:
+            app = {}
+        flags = app.get("flags", 0)
+        missing = [n for bit, n in PRIVILEGED.items() if not flags & bit]
+
+        seen[digest] = profile
+        print(f"    ✓ {me['username']} (app id {me['id']})")
+        if missing:
+            print(f"    ! privileged intents not detected: {', '.join(missing)}")
+            print("      enable them on the Bot tab or it will fail to connect")
+        return token, me, app
 
 
-def main_token_hash(env_text):
-    match = re.search(r"^DISCORD_BOT_TOKEN=(.*)$", env_text, re.M)
-    if not match:
-        sys.exit("no DISCORD_BOT_TOKEN in the env file — is the main bot wired?")
-    return hashlib.sha256(match.group(1).encode()).hexdigest()[:12]
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "profiles", nargs="*", default=PROFILES,
+        help=f"profiles to wire (default: {' '.join(PROFILES)})",
+    )
+    parser.add_argument(
+        "--host", default=None,
+        help="ssh destination of the docker host (else $HERMES_SSH_HOST)",
+    )
+    parser.add_argument(
+        "--group", default=None,
+        help="host group owning the env files (else $HERMES_HOST_GROUP, default ubuntu)",
+    )
+    parser.add_argument(
+        "--env-dir", default=None,
+        help="host env dir (else $HERMES_DEPLOY_ENV_DIR, default /etc/hermes)",
+    )
+    parser.add_argument(
+        "--set-var", action="append", default=[], metavar="NAME=VALUE",
+        help="merge one more env line in the same push (e.g. that profile's "
+        "--set-var DISCORD_CHANNEL_RELEASE=<channel id>) — repeatable",
+    )
+    args = parser.parse_args(argv)
 
+    unknown = [p for p in args.profiles if p not in PROFILES]
+    if unknown:
+        parser.error(f"unknown profile(s): {', '.join(unknown)} (have: {', '.join(PROFILES)})")
+    for extra in args.set_var:
+        if "=" not in extra or not hostdeploy.VAR_RE.match(extra):
+            parser.error(f"--set-var must be NAME=value (got: {extra!r})")
+    order = list(dict.fromkeys(args.profiles))
 
-def main():
-    env_text = read_env()
-    main_hash = main_token_hash(env_text)
-    print(f"main bot token on file (hash {main_hash}) — entered tokens must differ\n")
+    host, group, env_file = hostdeploy.resolve(args.host, args.group, args.env_dir)
+    env_text = None
+    pushed_channel = False
+    if host:
+        ok, why = hostdeploy.sudo_ok(host)
+        if ok:
+            try:
+                env_text = hostdeploy.read_remote_file(host, env_file)
+                pushed_channel = True
+            except hostdeploy.DeployError as exc:
+                print(f"could not read the host env file over SSH: {exc}")
+        if not pushed_channel:
+            print("→ artifact fallback (install-remote.sh)")
+    else:
+        print("no ssh host given (--host / $HERMES_SSH_HOST) — artifact fallback")
+
+    if env_text is not None:
+        match = None
+        for line in env_text.splitlines():
+            if line.startswith("DISCORD_BOT_TOKEN="):
+                match = line
+                break
+        if not match:
+            sys.exit("no DISCORD_BOT_TOKEN in the host env file — is the main bot wired?")
+        main_hash = hashlib.sha256(match.split("=", 1)[1].encode()).hexdigest()[:12]
+        print(f"main bot token on file (hash {main_hash}) — entered tokens must differ\n")
+    else:
+        main_hash = None
+        print(
+            "! cannot read the host env file for the main-token check —\n"
+            "  the duplicate check covers only what you enter in this run\n"
+        )
 
     tokens = {}
     seen = {}
-    for profile in PROFILES:
-        while True:
-            token = getpass.getpass(f"  paste the {profile} bot token (hidden): ").strip()
-            if not token:
-                print("    empty — try again")
-                continue
-            digest = hashlib.sha256(token.encode()).hexdigest()[:12]
-            if digest == main_hash:
-                print("    ✗ that is the MAIN bot's token — create a separate app")
-                continue
-            if digest in seen:
-                print(f"    ✗ already entered for {seen[digest]}")
-                continue
-
-            try:
-                me = api("/users/@me", token)
-            except urllib.error.HTTPError as exc:
-                # Discord normally returns a JSON body explaining the
-                # rejection, but never assume the body is readable — a
-                # missing one must not turn into a traceback.
-                try:
-                    detail = exc.read().decode()[:120]
-                except Exception:
-                    detail = str(exc.reason or "")
-                print(f"    ✗ Discord rejected it ({exc.code}): {detail}")
-                continue
-            except Exception as exc:
-                print(f"    ✗ could not reach Discord: {exc}")
-                continue
-
-            if not me.get("bot"):
-                print("    ✗ that is a user token, not a bot token")
-                continue
-
-            try:
-                app = api("/applications/@me", token)
-            except Exception:
-                app = {}
-            flags = app.get("flags", 0)
-            missing = [n for b, n in PRIVILEGED.items() if not flags & b]
-
-            tokens[profile] = (token, me, app)
-            seen[digest] = profile
-            print(f"    ✓ {me['username']} (app id {me['id']})")
-            if missing:
-                print(f"    ! privileged intents not detected: {', '.join(missing)}")
-                print("      enable them on the Bot tab or it will fail to connect")
-            break
+    for profile in order:
+        result = collect_token(profile, main_hash, seen)
+        if result is None:  # EOF on stdin (piped) — nothing half-wired
+            print("\ninput ended with nothing for " + profile + " — nothing was written")
+            return 1
+        tokens[profile] = result
         print()
 
-    # Rewrite the env file: drop any existing per-profile token lines,
-    # then append the fresh set. Keeps every other line untouched.
-    lines = [l for l in env_text.splitlines() if not re.match(r"^PROFILE_[A-Z0-9]+_DISCORD_BOT_TOKEN=", l)]
-    while lines and not lines[-1].strip():
-        lines.pop()
-    lines.append("")
-    lines.append("# Team profile Discord bots (each role its own bot identity).")
-    for profile in PROFILES:
+    lines = ["# Team profile Discord bots (each role its own bot identity)."]
+    for profile in order:
         lines.append(f"PROFILE_{profile.upper()}_DISCORD_BOT_TOKEN={tokens[profile][0]}")
-    new_text = "\n".join(lines) + "\n"
+    for extra in args.set_var:
+        lines.append(extra)
 
-    # Write via a root-owned temp file, then move into place — never widen
-    # the mode, never leave a partial file.
-    with tempfile.NamedTemporaryFile("w", delete=False, dir="/tmp") as fh:
-        fh.write(new_text)
-        tmp = fh.name
-    os.chmod(tmp, 0o600)
-    if sh("sudo", "install", "-o", "root", "-g", HOST_GROUP, "-m", "640", tmp, ENV_FILE).returncode:
-        sys.exit("failed to install the updated env file")
-    os.unlink(tmp)
+    deployed = False
+    if pushed_channel:
+        merged, names = hostdeploy.merge_env(env_text, lines)
+        try:
+            hostdeploy.push_remote_text(host, env_file, group, merged)
+            # Read back: a successful install is not evidence (mode, presence).
+            back = hostdeploy.read_remote_file(host, env_file)
+            for name in names:
+                hits = [l for l in back.splitlines() if l.startswith(name + "=")]
+                if len(hits) != 1:
+                    raise hostdeploy.DeployError(f"{name} appears {len(hits)}x")
+            mode = hostdeploy.remote_mode(host, env_file)
+        except hostdeploy.DeployError as exc:
+            sys.exit(f"push failed after validation — nothing was wired: {exc}")
+        deployed = True
+        print(f"wired+verified on {host}: {env_file} (mode {mode or 'UNKNOWN — check by hand'})")
+        if env_text is not None:
+            print(f"(previous content kept as {env_file}.hermes-deploy.bak)")
+    if not deployed:
+        outdir = os.path.join("build", "discord-bots")
+        script, _ = hostdeploy.write_fallback(
+            outdir, host or None, group, env_file, env_lines="\n".join(lines)
+        )
+        print(f"artifacts → {outdir}/  (env-lines.txt is 0600; contains the tokens)")
+        action = f"sh {script}"
+        print(f"now run:  {action}")
 
     print("=" * 68)
-    print("Wired into " + ENV_FILE + " — now invite each bot to the server")
+    print("Bot tokens wired — now invite each bot to the server")
     print("=" * 68)
-    for profile in PROFILES:
+    for profile in order:
         token, me, app = tokens[profile]
-        url = (f"https://discord.com/oauth2/authorize?client_id={me['id']}"
-               f"&scope=bot&permissions={PERMISSIONS}")
+        url = (
+            f"https://discord.com/oauth2/authorize?client_id={me['id']}"
+            f"&scope=bot&permissions={PERMISSIONS}"
+        )
         print(f"\n{profile}: {me['username']}")
         print(f"  {url}")
-    print(f"\nPick '{GUILD_NAME}' on each install screen, then tell Claude to deploy.")
+    print(f"\nPick '{GUILD_NAME}' on each install screen, then merge + deploy.")
+
+    if not deployed:
+        print(
+            "\nNOTE: nothing was pushed yet — run the install command printed"
+            " above\nbefore deploying, or the new token lines are nowhere."
+        )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

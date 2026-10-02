@@ -26,7 +26,13 @@ Artifacts land in build/github-apps/ (gitignored):
   github-app-<profile>.pem   private key, mode 600
   results.json               app id / installation id / slug per profile
   env-lines.txt              the PROFILE_* lines for hermes-main.env
-  host-install.sh            copies the PEMs into /etc/hermes on the host
+
+The PEMs and the env lines are PUSHED over ssh by this script itself
+(scripts/hostdeploy.py: sudo install as root:<group> 640, .bak of the
+previous content, read-back verified) when --host / $HERMES_SSH_HOST is
+set and the host's sudo is passwordless. Where it is not, the script
+writes install-remote.sh — run it (from here) and ONE `ssh -t` sudo step
+finishes the deploy. Secrets ride stdin/scp, never an ssh command line.
 
 ORG RUNS (--org) namespace everything into build/github-apps/<orgslug>/
 with org-slug'd PEM names (github-app-<orgslug>-<profile>.pem) and
@@ -72,6 +78,8 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+
+import hostdeploy
 
 OUTPUT_DIR = os.path.join("build", "github-apps")
 
@@ -380,16 +388,20 @@ def convert(code):
     raise RuntimeError(f"manifest conversion failed: {last}")
 
 
+def pem_name(profile, org=None):
+    """The PEM's filename — personal or org-slug'd (host target uses it too)."""
+    if org:
+        return f"github-app-{org_slug(org)}-{profile}.pem"
+    return f"github-app-{profile}.pem"
+
+
 def save_app(app, flow, profile):
     """Write the PEM and record the app's identity. Never logs the key."""
     pem = app.get("pem")
     if not pem:
         raise RuntimeError("conversion response carried no private key")
-    if flow.org:
-        pem_name = f"github-app-{org_slug(flow.org)}-{profile}.pem"
-    else:
-        pem_name = f"github-app-{profile}.pem"
-    path = os.path.join(flow.outdir, pem_name)
+    name = pem_name(profile, flow.org)
+    path = os.path.join(flow.outdir, name)
     # Create private from the start, then tighten — never a window where
     # the key is world-readable.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -632,7 +644,66 @@ def env_lines(order, results, org=None):
     return "\n".join(lines)
 
 
-def write_summary(flow):
+def deploy_to_host(flow, host, group, env_file):
+    """Push completed PEMs + merged env lines over SSH; None = pushed+verified.
+
+    Otherwise returns the (printed) reason — the caller turns that into the
+    install-remote.sh fallback. PEMs go first: a failure there leaves the
+    env file untouched (a token line pointing at a PEM that never landed
+    would break the profile at the next deploy). Every push is verified by
+    read-back, never by exit code (scripts/hostdeploy.py's contract).
+    """
+    env_dir = os.path.dirname(env_file)
+    done = [
+        (profile, r)
+        for profile, r in flow.results.items()
+        if r.get("installation_id") and r.get("pem_path")
+    ]
+    if not done:
+        return "nothing completed enough to deploy (no installation ids)"
+    ok, why = hostdeploy.sudo_ok(host)
+    if not ok:
+        return f"sudo over ssh is not passwordless ({why or 'password required'})"
+
+    try:
+        for profile, r in done:
+            target = os.path.join(env_dir, pem_name(profile, flow.org))
+            with open(r["pem_path"], encoding="utf-8") as fh:
+                hostdeploy.push_remote_text(host, target, group, fh.read())
+            if hostdeploy.remote_mode(host, target) != f"640 root:{group}":
+                raise hostdeploy.DeployError(
+                    f"{target} on the host is {hostdeploy.remote_mode(host, target)},"
+                    f" expected 640 root:{group}"
+                )
+            print(f"  pushed + verified: {target}")
+
+        lines = [
+            line
+            for line in env_lines(flow.order, flow.results, org=flow.org).splitlines()
+            if line.strip()
+        ]
+        if lines:
+            text = hostdeploy.read_remote_file(host, env_file)
+            merged, names = hostdeploy.merge_env(text, lines)
+            hostdeploy.push_remote_text(host, env_file, group, merged)
+            back = hostdeploy.read_remote_file(host, env_file)
+            broken = [
+                name
+                for name in names
+                if len([l for l in back.splitlines() if l.startswith(name + "=")]) != 1
+            ]
+            if broken:
+                raise hostdeploy.DeployError("verify failed for: " + ", ".join(broken))
+            print(f"  pushed + verified: {env_file} ({len(names)} vars merged)")
+    except hostdeploy.DeployError as exc:
+        return str(exc)
+    return None
+
+
+def write_summary(flow, deploy_note, host=None, group=None, env_file=None):
+    """Print results + either the pushed+verified note or the fallback
+    installer. host/group/env_file are the RESOLVED deploy values from
+    main() — the fallback must honor --group/--env-dir, not re-resolve."""
     outdir = flow.outdir
     done = {p: r for p, r in flow.results.items() if r.get("installation_id")}
     suffix = f"-{org_slug(flow.org)}" if flow.org else ""
@@ -643,28 +714,6 @@ def write_summary(flow):
 
     with open(os.path.join(outdir, f"env-lines{suffix}.txt"), "w") as fh:
         fh.write(env_lines(flow.order, flow.results, org=flow.org) + "\n")
-
-    env_dir = os.environ.get("HERMES_ENV_DIR", "/etc/hermes")
-    group = os.environ.get("HERMES_HOST_GROUP", "ubuntu")
-    script = os.path.join(outdir, f"host-install{suffix}.sh")
-    with open(script, "w") as fh:
-        fh.write("#!/bin/sh\n")
-        fh.write(f"# Run ON THE DOCKER HOST (the Komodo Periphery machine) from\n")
-        fh.write(f"# the repo checkout. Installs the App private keys into\n")
-        fh.write(f"# {env_dir} as root:{group} 640.\n")
-        fh.write("set -eu\n")
-        for profile in flow.order:
-            if profile not in done:
-                continue
-            if flow.org:
-                slug = org_slug(flow.org)
-                src = f"{OUTPUT_DIR}/{slug}/github-app-{slug}-{profile}.pem"
-                dst = f"{env_dir}/github-app-{slug}-{profile}.pem"
-            else:
-                src = f"{OUTPUT_DIR}/github-app-{profile}.pem"
-                dst = f"{env_dir}/github-app-{profile}.pem"
-            fh.write(f"sudo install -o root -g {group} -m 640 {src} {dst}\n")
-    os.chmod(script, 0o755)
 
     print("\n" + "=" * 68)
     print("GitHub Apps created")
@@ -683,14 +732,35 @@ def write_summary(flow):
         )
         print(f"               PEM: {r['pem_path']}")
 
-    print(f"\nEnv lines → {os.path.join(outdir, 'env-lines.txt')}")
-    print(env_lines(flow.order, flow.results))
-    print(
-        f"\nNext:\n"
-        f"  1. add those lines to hermes-main.env on the host\n"
-        f"  2. copy the PEMs in:  sh {os.path.join(outdir, 'host-install.sh')}\n"
-        f"  3. commit the env-file change if the templates need it, then deploy"
-    )
+    print(f"\nEnv lines → {os.path.join(outdir, f'env-lines{suffix}.txt')}")
+    print(env_lines(flow.order, flow.results, org=flow.org))
+
+    if deploy_note is None:
+        print(
+            f"\nDeployed + verified into /etc/hermes over ssh"
+            f" (backups kept as *.hermes-deploy.bak on the host).\n"
+            f"Next: finish onboarding (config/skills/team-onboarding), then deploy —"
+            f"\n  a config PR to main lands the changes via the Komodo webhook."
+        )
+        print(f"(host={host}, group={group}, env file={env_file})")
+    else:
+        # Push failed or was refused: stage the same work as artifacts so the
+        # run is completable without re-doing the browser flow.
+        if env_file is None:
+            _, group, env_file = hostdeploy.resolve()
+        script, _ = hostdeploy.write_fallback(
+            outdir, host or None, group, env_file,
+            pem_pushes=[
+                (r["pem_path"], os.path.join(os.path.dirname(env_file),
+                                             pem_name(p, flow.org)))
+                for p, r in done.items()
+            ],
+            env_lines=env_lines(flow.order, flow.results, org=flow.org),
+        )
+        print(f"\nNOT pushed: {deploy_note}")
+        print(f"Finish the deploy with the generated installer:")
+        print(f"  sh {script}")
+        print(f"(then deploy via the normal config PR → Komodo webhook path)")
 
 
 # --- entry point ------------------------------------------------------------
@@ -742,6 +812,18 @@ def main(argv=None):
         "--repo-url",
         help="the App's homepage URL (default: https://github.com/<owner>/hermes, "
         "where <owner> is --org if given, else your gh login)",
+    )
+    parser.add_argument(
+        "--host",
+        help="ssh destination of the docker host. When set (or $HERMES_SSH_HOST "
+        "is), the PEMs and env lines are pushed + verified over ssh after the "
+        "browser flow; otherwise install-remote.sh is generated for the manual step",
+    )
+    parser.add_argument(
+        "--group", help="host group owning the secrets (else $HERMES_HOST_GROUP, default ubuntu)"
+    )
+    parser.add_argument(
+        "--env-dir", help="host env dir (else $HERMES_DEPLOY_ENV_DIR, default /etc/hermes)"
     )
     args = parser.parse_args(argv)
 
@@ -795,7 +877,17 @@ def main(argv=None):
         print("\nTimed out waiting for the flow to finish.")
 
     missing = [p for p in order if not flow.results.get(p, {}).get("installation_id")]
-    write_summary(flow)
+
+    # Push what was created (PEMs + env lines) when an ssh destination is
+    # known; deploy_state is None ONLY on an actual pushed+verified deploy.
+    deploy_state = "no ssh host given (--host / $HERMES_SSH_HOST) — nothing pushed"
+    host = group = env_file = None
+    if args.host or os.environ.get("HERMES_SSH_HOST"):
+        host, group, env_file = hostdeploy.resolve(args.host, args.group, args.env_dir)
+        print(f"\nDeploying over ssh to {host} …")
+        deploy_state = deploy_to_host(flow, host, group, env_file)
+
+    write_summary(flow, deploy_state, host=host, group=group, env_file=env_file)
 
     if missing:
         print(f"\nIncomplete: {', '.join(missing)} — re-run for just those:")
