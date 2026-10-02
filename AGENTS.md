@@ -1278,6 +1278,19 @@ than by remembering it:
     guard or be silenced by it — and this lane already carries one (see
     `AUTHOR FILTER DROPPED` below). Both slots are cleared by a healthy run,
     so a fault that returns is reported again.
+  - The misfile happens anyway — a handoff turn has skipped the read even
+    where the skill stated the opposite — so the guard is not the whole
+    answer. Its undo line now also
+    names restoring the card (`status/ready`, an issue edit) for an issue left
+    with no `status/*` at all — removing the misfile alone leaves the item
+    laneless still — and `team-developer`'s handoff steps read the labels
+    back on BOTH objects in the same turn, because described commands are
+    not the fix. A manual probe run of `team-queue.sh` consumes the dedupe
+    slot like any other run: said once, it is silenced until the condition
+    changes — so a human running `--verbose` to check the guard has just
+    eaten the agent's wake for that incident. `mise run test` also asserts
+    the guard's card-restore output (interpolated per item — a repo slug
+    contains the `/` that breaks a naive sed), not merely its source.
 - **A guard nobody can reach is not a guard**, which is why the test suite
   covers reachability, not just logic: `sh scripts/test-team-labels.sh` is
   run under the container's own `/bin/sh` as well as locally, and one case
