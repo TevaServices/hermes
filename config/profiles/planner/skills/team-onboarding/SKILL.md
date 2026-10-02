@@ -1,7 +1,7 @@
 ---
 name: team-onboarding
-description: Onboard a repo into the team workflow — topic tag, board or labels, branch protection, CI, registry entry
-version: 1.0.0
+description: Onboard a repo into the team workflow — topic tag, label set, board, branch protection, CI, registry entry
+version: 1.1.0
 metadata:
   hermes:
     tags: [team, onboarding, github]
@@ -33,18 +33,33 @@ skips.
    `topic:manual`. The tag is what `gh search repos --topic hermes-team`
    uses to enumerate the team's repos everywhere (digests, sweeps).
 
-2. **Status mechanism.** Org repo → create a Project named
-   `<repo> board` with the standard columns
-   (`Backlog → Ready → In Progress → In Review → Blocked → Done`),
-   record its number. Personal-account repo → create the label set
-   (`status/backlog, status/ready, status/in-progress,
-   status/in-review, status/blocked, status/done`) — App tokens cannot
-   manage user-owned Projects; say so in the registry entry.
+2. **The label set — create it on EVERY repo, board or not.** The
+   self-pull queues are `gh search --label` filters: a claim or handoff
+   recorded only as a board column is invisible to them, so the
+   `status/*` set must exist on org and personal repos alike. Org repo →
+   additionally create a Project named `<repo> board` with the standard
+   columns (`Backlog → Ready → In Progress → In Review → Blocked →
+   Done`), record its number — the board is planner's view, the labels
+   are the queues. Personal-account repo → labels only (App tokens
+   cannot manage user-owned Projects); say so in the registry entry.
    ```bash
+   gh label create status/backlog --repo <owner>/<repo> \
+     --color E2E2E2 --description "Team workflow: backlog — waiting on planner"
    gh label create status/ready --repo <owner>/<repo> \
-     --color 0E8A16 --description "Ready for implementation"
-   # … repeat for the other five
+     --color 0E8A16 --description "Ready for implementation (developer's queue)"
+   gh label create status/in-progress --repo <owner>/<repo> \
+     --color 1D76DB --description "Developer working (claim label)"
+   gh label create status/in-review --repo <owner>/<repo> \
+     --color FBCA04 --description "Handed off for review"
+   gh label create status/blocked --repo <owner>/<repo> \
+     --color D93F0B --description "Blocked — roadblock filed by the profile"
+   gh label create status/done --repo <owner>/<repo> \
+     --color 5319E7 --description "Work item finished — planner closes"
    ```
+   Re-running or normalizing an already-onboarded repo: add `--force`,
+   which rewrites color/description for an existing name — worth doing,
+   since the queues poll exact names and a drifted label's name still
+   matches but a missing one takes the lane down.
    **Also create the routing labels for the PR side** — they are the
    reviewer's queue and the fix-loop signal, not decoration (see
    `team-conventions` → "The routing labels"):
