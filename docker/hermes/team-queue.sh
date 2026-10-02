@@ -455,6 +455,7 @@ audit_handoffs() {
 # labelled item. The test suite pins that too. A future family that IS
 # object-scoped needs a third table here, not a widened one.
 audit_foreign_labels() {  # $1 = owner (for the message); uses $SEARCH_KIND, ogh()
+    CARD_FMT=""
     case "$SEARCH_KIND" in
         issues)
             # `repository.nameWithOwner` (not `url`) because the item key must
@@ -466,12 +467,22 @@ audit_foreign_labels() {  # $1 = owner (for the message); uses $SEARCH_KIND, ogh
             OWN="PR-family label on an ISSUE"
             FIX="gh issue edit"
             HINT="the PR for it is the one whose body says Closes #<num>"
+            # The undo above REMOVES the misfile; if the misfile is all the
+            # issue has (no `status/*` at all — the observed handoff misfile,
+            # where `review/ready` went on the issue and the card state was
+            # lost with it), the removal alone
+            # leaves the item laneless still. The repair needs the card back:
+            # `status/ready` is planner's routing move, and it is what makes
+            # the developer's queue re-pick the item (fix rounds resume from
+            # whatever the session worktree still holds).
+            CARD_FMT=", also restore the card: gh issue edit <num> --repo <repo> --add-label status/ready (planner's routing move the developer's queue re-picks)"
             ;;
         prs)
             JQ='.[] | ([.labels[].name] | map(select(startswith("status/"))) | sort | join(",")) as $f | select($f != "") | "\(.repository.nameWithOwner)#\(.number)|\($f)"'
             OWN="ISSUE-family label on a PR"
             FIX="gh pr edit"
             HINT="the issue is the one this PR closes"
+            CARD=""
             ;;
         *) return 0 ;;
     esac
@@ -486,12 +497,16 @@ audit_foreign_labels() {  # $1 = owner (for the message); uses $SEARCH_KIND, ogh
     while IFS='|' read -r key labels; do
         [ -n "$key" ] || continue
         repo=${key%#*}; num=${key##*#}
+        CARD=""
+        case "$CARD_FMT" in
+            ?*) CARD=$(printf '%s' "$CARD_FMT" | sed "s|<num>|$num|g; s|<repo>|$repo|g") ;;
+        esac
         FOREIGN_LABEL="$FOREIGN_LABEL $key"
         FOREIGN_DETAIL="$FOREIGN_DETAIL
   !! FOREIGN LABEL: $key carries $labels — that is a $OWN.
      Fix: $FIX $num --repo $repo --remove-label $labels   ($HINT). Until it
      moves, the item is invisible to BOTH queues — each polls one family on
-     one object kind — while it still looks busy."
+     one object kind — while it still looks busy.$CARD"
     done <<EOF
 $(printf '%s\n' "$FOUND" | LC_ALL=C sort)
 EOF

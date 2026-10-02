@@ -359,6 +359,21 @@ why there: an open thread is a statement, so make it one.
    gh pr edit <PR#> --repo owner/repo --add-label review/ready
    ```
 
+   Then READ THE LABELS BACK, both objects, in the same turn — the handoff
+   is not done until the read-back matches. This is the check that catches
+   the exact mistake the next paragraph warns about; knowing the rule does
+   not guarantee following it, and a handoff turn that skips the read-back
+   can misfile the labels while believing it handled them:
+
+   ```bash
+   gh issue view <ISSUE#> --repo owner/repo --json labels \
+     --jq '[.labels[].name] | join(", ")'
+   #   want: status/in-review (+ type/*). NEVER a review/* label.
+   gh pr view <PR#> --repo owner/repo --json labels \
+     --jq '[.labels[].name] | join(", ")'
+   #   want: review/ready (review/changes gone). NEVER a status/* label.
+   ```
+
    Reviewer claims it by swapping the PR's label to `review/in-progress`,
    so a PR still carrying `review/ready` is unreviewed and untouched.
    **A handoff never touches the issue's `status/*` label beyond that
@@ -380,6 +395,18 @@ why there: an open thread is a statement, so make it one.
    gh pr ready <PR#> --repo owner/repo
    gh pr edit <PR#> --repo owner/repo \
      --add-label review/ready --remove-label review/changes
+   # read back BOTH objects — the re-handoff has the same two-numbers trap
+   # as the first handoff, and here you are juggling both at once:
+   gh pr view <PR#> --repo owner/repo --json labels \
+     --jq '[.labels[].name] | join(", ")'
+   #   want: review/ready; review/changes gone. NEVER a status/* label.
+   gh issue view <ISSUE#> --repo owner/repo --json labels \
+     --jq '[.labels[].name] | join(", ")'
+   #   want: the card at status/in-review, NOTHING from review/*. If the
+   #   fix round started from a claim (planner returned the card to
+   #   status/ready and you re-claimed it), also move the card:
+   gh issue edit <ISSUE#> --repo owner/repo \
+     --remove-label status/in-progress --add-label status/in-review
    ```
 
    The re-added label is what wakes the reviewer for the second pass —

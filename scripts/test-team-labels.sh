@@ -155,6 +155,29 @@ else
     printf '%s\n' "$violations" | sed 's/^/       /'
 fi
 
+# --- 2b. the handoff verifies itself ----------------------------------------
+# The guard above only REPORTS a misfile; the labels are applied correctly
+# only if the applying turn READS THEM BACK before it ends. That step can
+# fail silently even while the skill states the opposite — described
+# commands alone are not the fix. So the developer skill must carry the
+# two-object label read-back in BOTH handoff shapes — the first handoff and
+# the fix-round re-handoff — and the guard's undo must name the card restore
+# for an issue left with no status/* at all.
+dev_skill="$here/config/profiles/developer/skills/team-developer/SKILL.md"
+[ -f "$dev_skill" ] || { bad "team-developer SKILL.md not found"; exit 2; }
+for readback in 'gh issue view <ISSUE#> --repo owner/repo --json labels' \
+                'gh pr view <PR#> --repo owner/repo --json labels'; do
+    count=$(grep -cF "$readback" "$dev_skill" || true)
+    case "$count" in
+        [2-9]*) ok "handoff read-back present in both handoffs (x$count)" ;;
+        1)      bad "read-back appears once — the fix-round re-handoff needs it too" ;;
+        *)      bad "no label read-back in the handoff ('$readback')" ;;
+    esac
+done
+grep -q 'also restore the card' "$queue" \
+    && ok "guard's undo names the card restore for a status-less issue" \
+    || bad "guard does not tell how to restore a card lost to the misfile"
+
 # --- 3. the queues poll one family per object kind -------------------------
 # The mapping is only real if the scripts search by it.
 grep -q 'issues) \[ -n "\$LABELS" \] || LABELS="status/in-progress,type/bug status/ready,type/bug status/in-progress status/ready"' "$queue" \
@@ -286,6 +309,15 @@ case "$out" in
     *"gh issue edit 26 --repo bcross/mach --remove-label review/ready"*)
         ok "guard names the undo command" ;;
     *)  bad "guard does not name the undo command" ;;
+esac
+# The undo alone can leave the issue without any status/* — laneless still.
+# The guard must name the card restore, with the PER-ITEM repo and number
+# interpolated (a repo slug contains a slash, which a naive sed delimiter
+# collides with — hence asserting the output, not the source).
+case "$out" in
+    *"gh issue edit 26 --repo bcross/mach --add-label status/ready"*)
+        ok "guard names the card restore, interpolated per item" ;;
+    *)  bad "guard does not name the interpolated card restore" ;;
 esac
 
 # Same condition again: the notice is deduped, so a standing fault wakes the
