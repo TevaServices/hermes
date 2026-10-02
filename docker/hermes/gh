@@ -1,6 +1,5 @@
 #!/bin/sh
-# gh shim — owner-based token routing for the org GitHub Apps, plus one
-# mechanical label gate.
+# gh shim — owner-based token routing for the org GitHub Apps.
 #
 # The real CLI lives at /usr/local/bin/gh-real (renamed at image build).
 # gh keeps ONE active token per host, but every profile may hold TWO App
@@ -10,59 +9,43 @@
 #   1. args start with `auth `  -> passthrough (never second-guess auth
 #      commands; gh auth login/token/status are how the personal App
 #      token gets stored, and Hermes' skills-hub GitHubAuth reads it)
-#   2. argv scan (pure arg reading, no side effects): the target owner,
-#      the action positional, and any label-flag values — scan runs
-#      BEFORE the GH_TOKEN check so the label gate below cannot be routed
-#      around by a preset token (the queue scripts force GH_TOKEN, and
-#      gh-org-token spells forced calls that way)
-#   3. LABEL GATE (see "The label gate" below) — refuses wrong-object
-#      label edits before gh-real ever runs
-#   4. GH_TOKEN is set          -> passthrough (explicit caller intent;
-#      the queue scripts use this to force their own token)
-#   5. resolve the target owner, in this order:
+#   2. resolve the target owner from ARGV ONLY (a pure argv read, hoisted
+#      above the GH_TOKEN passthrough so the gate in step 2b sees even
+#      explicit-token calls — the queue scripts and the GH_TOKEN="$(gh-org-token …)"
+#      idiom cannot route around it):
 #        a) -R/--repo owner/repo in the args (attached + separated forms)
 #        b) an owner-bearing `gh api` ENDPOINT PATH — repos/<owner>/… or
 #           orgs/<owner> (see "gh api carries no -R" below)
 #        c) the cwd git repo's origin URL
-#   6. owner has an org descriptor ($HOME/org-creds/<owner>.env)
+#      the same scan also captures the subcommand/action and every
+#      --add-label/--remove-label/--label/-l value (comma-split),
+#      which the label gate reads
+#   2b. label gate — one mechanical fence at the one hop every
+#      credentialed call passes through (labels are the team's routing
+#      mechanism; a misfiled one takes the item out of BOTH queues):
+#        review/* SET on an issue, or status/* SET on a PR -> refuse
+#        (type/* is legal on both by design; --remove-label always passes)
+#        from the reviewer profile, ANY gh issue edit/close/reopen ->
+#        refused, routed to planner
+#        refusals exit 1 with the corrected command shape on stderr and
+#        gh-real is never exec'd — the message is the teaching moment
+#   3. GH_TOKEN is set          -> passthrough (explicit caller intent;
+#      the queue scripts use this to force their own token) — AFTER the
+#      gate, so preset-token calls are fenced too
+#   4. owner has an org descriptor ($HOME/org-creds/<owner>.env)
 #        -> mint/reuse the org token and exec gh-real with GH_TOKEN
 #      (mint failure = hard error: a descriptor means the caller means
 #      the ORG identity; silently using the personal token would
 #      attribute org work to the wrong bot)
-#   7. anything else            -> exec gh-real unchanged (personal
+#   5. anything else            -> exec gh-real unchanged (personal
 #      token from the tool-home's gh auth state — exactly as before)
-
-# The label gate — why it exists and what it does
-# --- -------------------------------------------------------------------------
-# Team work is routed by labels, and the label families are object-scoped
-# (config/skills/team-conventions): `status/*` lives on ISSUES, `review/*`
-# on PRs, `type/*` on both. Prose in the skills did not hold: hand-off
-# turns put `review/ready` on the issue and left the card at `status/ready`,
-# and the reviewer profile ran `gh issue edit` (mach#26 shape). Each queue
-# polls ONE family on ONE object kind, so a misfile makes the item
-# invisible to BOTH queues while it still looks busy. The gate refuses
-# those edits mechanically, with the corrective command in the refusal —
-# the error is the teaching moment, delivered at the moment of misuse.
-#
-# Scope, stated honestly:
-#   - only `gh issue edit|create` and `gh pr edit|create` are gated, on
-#     --add-label/--remove-label/--label/-l (comma lists included);
-#   - `gh api` label writes are NOT screened: the endpoint scanner cannot
-#     know which argv members are flag values, and a body may be a file —
-#     a REST-level misfile is what team-queue.sh's `!! FOREIGN LABEL`
-#     guard reports (it searches the real objects every tick);
-#   - the reviewer fence (no `gh issue edit|close|reopen` from the
-#     reviewer profile) is fail-open for every other profile and for any
-#     shell where the profile is not discoverable — it enforces a
-#     convention, and the family gate above already backstops its
-#     misfile shape profile-agnostically.
 #
 # gh api CARRIES NO -R — gh's own parser rejects it ("unknown shorthand
 # flag: 'R'"), so for `gh api` the endpoint path is the only owner signal
 # besides the cwd. An agent doing REST work writes its payload files to a
-# scratch dir, so its cwd is often NOT the worktree — and before the
-# endpoint scan existed, `gh api repos/<org>/<repo>/…` from such a cwd
-# silently used the PERSONAL token and got
+# scratch dir, so its cwd is often NOT the worktree — and before step (b)
+# existed, `gh api repos/<org>/<repo>/…` from such a cwd silently used the
+# PERSONAL token and got
 #
 #   {"message":"Resource not accessible by integration", ... "status":"403"}
 #
@@ -77,8 +60,13 @@
 # a permission gap that isn't there. A PRIVATE repo is the honest probe:
 # 200 under the org token, 404 under the personal one.
 #
-# Scope: owner detection from (a)/(b)/(c) and the label gate above.
-# Call shapes that name no owner anywhere still resolve from the cwd, and
+# Scope: owner detection from (a)/(b)/(c) plus ONE mechanical gate (2b).
+# The gate screens gh issue/pr edit|create label-writing flags by the
+# label families' object rule — it does NOT screen `gh api` label writes:
+# the endpoint scanner cannot know which args are flag values, so the
+# REST-level spelling stays covered only by the queues' FOREIGN LABEL
+# guard, which re-reads the real objects on every tick. Call shapes that
+# name no owner anywhere still resolve from the cwd, and
 # from a scratch dir that means the personal token: `gh api graphql`,
 # `gh search` (its --owner is a filter, and one search can span owners),
 # and a `repos/{owner}/{repo}` endpoint there (gh expands those placeholders
@@ -97,25 +85,42 @@ for arg in "$@"; do
     [ "$arg" = "auth" ] && exec "$GH_REAL" "$@"
 done
 
-# --- 2. argv scan: owner / action / label flags ------------------------------
+# --- 2. target owner + label capture (argv only) -----------------------------
 # Scan ALL args: -R/--repo in every spelling gh accepts (separated,
 # `-R=owner/repo`, and attached `-Rowner/repo`), the
 # `gh repo <view|clone|create|…> owner/repo` positional form, and enough
 # flag-arity awareness to skip the VALUES of -R/--repo and --hostname so
 # neither can be mistaken for a subcommand. Value confusion is the hazard
-# of any argv scan; the only values consumed here are those two flags'
-# plus the label flags' (which is the point — the gate needs them).
+# of any argv scan; the values consumed here are just those two flags'
+# plus the label flags' (see 2b).
 #
-# `action` is the first positional AFTER the subcommand (`gh issue edit 7`
-# -> subcmd=issue, action=edit): the gate keys on subcmd+action, not on
-# label flags alone — `gh issue list --label status/ready` is a FILTER,
-# not a write, and must pass.
+# This scan is a pure argv read and sits ABOVE the GH_TOKEN passthrough
+# (step 3) on purpose: the label gate in 2b must see preset-token calls
+# too — the queue scripts set GH_TOKEN on every gh call, so a gate below
+# the passthrough would fence nothing that matters.
+#
+# The same loop also captures, for 2b:
+#   action      — the first positional after the subcommand. gh's grammar
+#                 puts the verb directly after the subcommand
+#                 (`gh issue edit 7 …`), so this is reliable for
+#                 edit/create/close/reopen.
+#   add_labels  — --add-label/--label/-l values in every spelling gh
+#                 accepts (separated, `=`, attached), comma-split, stored
+#                 newline-separated (labels never word-split). NB: a
+#                 `--label` FILTER on list/view is captured too, but the
+#                 gate reads it only for edit/create — filters pass.
+#   rm_labels   — --remove-label values (captured, never gated: removing a
+#                 wrong-family label is the undo the FOREIGN LABEL guard
+#                 prints, and a removal can only improve the lane).
 owner=""
 subcmd=""
 action=""
+add_labels=""
+rm_labels=""
 positional=""
 prev=""
-gate_labels=""
+nl='
+'
 for arg in "$@"; do
     case "$prev" in
         -R|--repo) owner="$arg"; prev=""; continue ;;
@@ -123,7 +128,17 @@ for arg in "$@"; do
         # for `gh --hostname github.com api repos/…` — otherwise the value
         # becomes the subcommand and the api-path scan below never runs.
         --hostname) prev=""; continue ;;
-        --add-label|--remove-label|--label|-l) gate_labels="${gate_labels:+$gate_labels }$arg"; prev=""; continue ;;
+        # Label flags take values as well. Captured only for issue/pr — the
+        # families' rule is object-scoped (`gh label list` keeps its own
+        # meaning), and `gh search --label` is an AND of filters, not a set.
+        --add-label|--remove-label|--label|-l)
+            case "$subcmd" in issue|pr)
+                case "$prev" in
+                    --remove-label) rm_labels="$rm_labels${rm_labels:+$nl}$arg" ;;
+                    *) add_labels="$add_labels${add_labels:+$nl}$arg" ;;
+                esac ;;
+            esac
+            prev=""; continue ;;
     esac
     prev=""
     case "$arg" in
@@ -132,22 +147,28 @@ for arg in "$@"; do
         --repo=*) owner="${arg#--repo=}" ;;
         -R|--repo) prev="$arg" ;;
         --hostname) prev="$arg" ;;
-        --add-label|--remove-label|--label|-l) prev="$arg" ;;
-        # Attached/`=` forms of the label flags (gh's flag parser accepts
-        # all spellings; `-a` is --assignee, NOT a label shorthand).
-        --add-label=*) gate_labels="${gate_labels:+$gate_labels }${arg#--add-label=}" ;;
-        --remove-label=*) gate_labels="${gate_labels:+$gate_labels }${arg#--remove-label=}" ;;
-        --label=*) gate_labels="${gate_labels:+$gate_labels }${arg#--label=}" ;;
-        -l=*)  gate_labels="${gate_labels:+$gate_labels }${arg#-l=}" ;;
-        -l?*)  gate_labels="${gate_labels:+$gate_labels }${arg#-l}" ;;
         # Attached shorthand (`-Rowner/repo`), which gh's flag parser accepts.
         # Without this arm it fell to `-*)` and the call silently used the
         # personal token — the same failure this file's header describes.
         -R?*) owner="${arg#-R}" ;;
+        # Label flags in the attached spellings gh accepts (the separated
+        # forms are handled by the prev-arm above).
+        --add-label=*) add_labels="$add_labels${add_labels:+$nl}${arg#--add-label=}" ;;
+        --remove-label=*) rm_labels="$rm_labels${rm_labels:+$nl}${arg#--remove-label=}" ;;
+        --label=*) add_labels="$add_labels${add_labels:+$nl}${arg#--label=}" ;;
+        -l=*) add_labels="$add_labels${add_labels:+$nl}${arg#-l=}" ;;
+        -l?*) add_labels="$add_labels${add_labels:+$nl}${arg#-l}" ;;
+        --add-label|--remove-label|--label|-l) prev="$arg" ;;
         -*) ;;
         *)
             if [ -z "$subcmd" ]; then subcmd="$arg"; continue; fi
-            if [ -z "$action" ]; then action="$arg"; fi
+            # The action (first positional after the subcommand) — only
+            # meaningful for issue/pr, which is exactly where the gate
+            # reads it; leaving it uncaptured elsewhere keeps `gh repo
+            # clone owner/repo`'s positional-owner detection intact.
+            if [ -z "$action" ] && { [ "$subcmd" = issue ] || [ "$subcmd" = pr ]; }; then
+                action="$arg"; continue
+            fi
             # `gh repo <view|clone|create|…> owner/repo`: the positional
             # IS the target — but only when it carries the owner part
             # (`gh repo view proj` derives the owner from cwd itself and
@@ -163,78 +184,106 @@ for arg in "$@"; do
 done
 [ -n "$owner" ] || owner="$positional"
 
-# --- 3. the label gate -------------------------------------------------------
-# Refusals print the invariant + the corrective command and exit without
-# calling gh-real — hard block, never auto-correct (the shim cannot know
-# which PR closes which issue). Wording mirrors the FOREIGN LABEL guard
-# in docker/hermes/team-queue.sh.
-if [ "$subcmd" = "issue" ] || [ "$subcmd" = "pr" ]; then
-    # Reviewer fence first: the reviewer's verdict owns no card. Comments
-    # stay open (gh issue comment) — routing to planner IS the convention.
-    if [ "$subcmd" = "issue" ]; then
-        case "$action" in
-            edit|close|reopen)
-                gate_profile=""
-                case "${HERMES_HOME:-}" in
-                    */profiles/reviewer|*/profiles/reviewer/) gate_profile="reviewer" ;;
-                esac
-                case "${HOME:-}" in
-                    */profiles/reviewer/home|*/profiles/reviewer/home/) gate_profile="reviewer" ;;
-                esac
-                if [ "$gate_profile" = "reviewer" ]; then
-                    printf '%s\n' \
-"gh shim: refused — the reviewer never edits an issue. A verdict judged on" \
-"the PR does not own the card: planner moves it. Comment @hermes-planner on" \
-"the PR or the issue (comments are open) naming the card state you imply," \
-"and planner runs the gh issue edit." >&2
-                    exit 1
-                fi
-                ;;
+# --- 2b. the label gate ------------------------------------------------------
+# One mechanical fence at the one hop every credentialed GitHub call passes
+# through. Labels ARE the team's routing mechanism and each queue polls one
+# family on one object kind, so a misfiled label is not untidiness — it
+# takes the item out of BOTH queues at once while it still looks busy
+# (observed 2026-09-25: two profiles traded the same issue every 5-minute
+# tick). Refusals exit 1 with the corrected shape on stderr and gh-real is
+# never exec'd — hard block, never auto-correct (same precedent as the
+# org-fallback refusal); the message is the teaching moment.
+# NOT screened, stated honestly: `gh api` label writes — the endpoint
+# scanner cannot know which args are flag values; the REST spelling stays
+# covered by the queues' FOREIGN LABEL guard, which re-reads the real
+# objects on every tick.
+is_reviewer() {
+    case "$HERMES_HOME" in
+        */profiles/reviewer|*/profiles/reviewer/) return 0 ;;
+    esac
+    case "${HOME:-}" in
+        */profiles/reviewer/home|*/profiles/reviewer/home/) return 0 ;;
+    esac
+    return 1
+}
+if [ "$subcmd" = issue ] || [ "$subcmd" = pr ]; then
+    # Rule 1 (family/object, profile-agnostic): review/* SET on an issue,
+    # or status/* SET on a PR. type/* is legal on BOTH by design — it
+    # classifies the change, it does not hand it off; the release filing
+    # (`gh issue create --label type/bug --label status/ready`) passes.
+    if [ -n "$add_labels" ]; then
+        case "$subcmd" in
+            issue) case "$action" in edit|create) gate=yes ;; esac ;;
+            pr)    case "$action" in edit|create) gate=yes ;; esac ;;
         esac
+        [ "${gate:-}" = yes ] || gate=no
+    else
+        gate=no
     fi
-    # Family check. Delimiters are commas (gh's own label-list separator)
-    # and the capture separators — word-splitting here is a deliberate
-    # over-approximation: the family is just the label's slash prefix, so
-    # a multi-word label splits into slash-less words (never flagged) and
-    # a wrong family still shows before the split edge.
-    if [ -n "$gate_labels" ]; then
-        for lbl in $(printf '%s' "$gate_labels" | tr ',' ' '); do
-            [ -n "$lbl" ] || continue
-            fam="${lbl%%/*}"
-            case "$subcmd:$fam" in
-                issue:review)
-                    printf '%s\n' \
-"gh shim: refused — PR-family label on an ISSUE: '$lbl'." \
-"Families are object-scoped: review/* lives on the PR, status/* on the" \
-"issue, type/* on both. Each queue polls one family on one object kind," \
-"so this label would make the item invisible to BOTH queues while it" \
-"still looks busy. The PR is the one whose body says Closes #N." \
-"Fix:   gh pr edit <PR#> --repo <owner>/<repo> --add-label '$lbl'" \
-"Undo:  gh issue edit <ISSUE#> --repo <owner>/<repo> --remove-label '$lbl'" \
-"  (and if the issue ends with no status/* at all, restore the card:" \
-"   gh issue edit <ISSUE#> --repo <owner>/<repo> --add-label status/ready)" >&2
-                    exit 1
-                    ;;
-                pr:status)
-                    printf '%s\n' \
-"gh shim: refused — ISSUE-family label on a PR: '$lbl'." \
-"Families are object-scoped: status/* lives on the issue, review/* on the" \
-"PR, type/* on both. Each queue polls one family on one object kind," \
-"so this label would make the item invisible to BOTH queues while it" \
-"still looks busy. The issue is the one this PR closes (Closes #N)." \
-"Fix:   gh issue edit <ISSUE#> --repo <owner>/<repo> --add-label '$lbl'" \
-"Undo:  gh pr edit <PR#> --repo <owner>/<repo> --remove-label '$lbl'" >&2
-                    exit 1
-                    ;;
+    if [ "$gate" = yes ]; then
+        bad=""
+        # Values may be comma-joined ("type/bug,review/ready" — the exact
+        # shape the 2026-09-25 misfile took), so split every value at
+        # commas BEFORE the family match: a whole-value glob would only
+        # catch lists whose FIRST member is foreign.
+        all_labels=""
+        for v in $add_labels; do           # newline-separated first level
+            case "$v" in
+                *,*)
+                    oldIFS=$IFS; IFS=,
+                    for c in $v; do all_labels="$all_labels${all_labels:+$nl}$c"; done
+                    IFS=$oldIFS ;;
+                *) all_labels="$all_labels${all_labels:+$nl}$v" ;;
             esac
         done
+        for l in $all_labels; do           # newline-separated, never word-split
+            case "$subcmd:$l" in
+                issue:review/*|pr:status/*) bad="$bad $l" ;;
+            esac
+        done
+        if [ -n "$bad" ]; then
+            fixrem=""
+            for l in $bad; do fixrem="$fixrem --remove-label $l"; done
+            if [ "$subcmd" = issue ]; then
+                {
+                    echo "gh shim: refused: review/* is a PR-family label —$bad does not belong on an issue (an issue carrying it is invisible to BOTH queues)."
+                    echo "  Undo the misfile:   gh issue edit <ISSUE#> --repo <owner>/<repo>$fixrem"
+                    echo "  The handoff belongs on the PR; the PR for the issue is the one whose body says Closes #<ISSUE#>:"
+                    echo "    gh pr edit <PR#> --repo <owner>/<repo> --add-label review/ready"
+                    echo "  Also restore the card: gh issue edit <ISSUE#> --repo <owner>/<repo> --add-label status/ready (planner's routing move the developer's queue re-picks)."
+                } >&2
+            else
+                {
+                    echo "gh shim: refused: status/* is an ISSUE-family label —$bad does not belong on a PR (the PR lane reads review/* only)."
+                    echo "  Undo the misfile:   gh pr edit <PR#> --repo <owner>/<repo>$fixrem"
+                    echo "  The card state belongs on the issue this PR closes: gh issue edit <ISSUE#> --repo <owner>/<repo> --add-label status/…"
+                } >&2
+            fi
+            exit 1
+        fi
+    fi
+    gate=""
+    # Rule 2 (the reviewer fence): the reviewer does not edit issue cards.
+    # PR writes and issue COMMENTS stay open; the card is planner's. Fails
+    # open when the profile signal is absent (default home, human shells,
+    # cron children) — Rule 1 backstops label misfiles profile-agnostically.
+    if [ "$subcmd" = issue ] && is_reviewer; then
+        case "$action" in
+            edit|close|reopen)
+                {
+                    echo "gh shim: refused: the reviewer does not edit issues — labels are the routing mechanism and the card is planner's to move."
+                    echo "  Route it: comment @hermes-planner on the PR/issue naming the state the verdict implies."
+                    echo "  Your writes live on the PR (review/* labels, the verdict) — issue comments stay open to you."
+                } >&2
+                exit 1 ;;
+        esac
     fi
 fi
 
-# --- 4. explicit token wins --------------------------------------------------
+# --- 3. explicit token wins ---------------------------------------------------
 [ -n "${GH_TOKEN:-}" ] && exec "$GH_REAL" "$@"
 
-# --- 5. owner resolution (a): `gh api` names the owner in the ENDPOINT PATH --
+# --- 4. `gh api` names the owner in the ENDPOINT PATH -----------------------
 # `gh api` defines no -R/--repo (see the header), so for it the path is the
 # only owner signal the invocation carries. Matching is deliberately STRICT
 # and anchored — `repos/<owner>/<repo>…` or `orgs/<owner>…`, with an
@@ -267,7 +316,6 @@ if [ -z "$owner" ] && [ "$subcmd" = "api" ]; then
     done
 fi
 
-# --- 5. owner resolution (c): the cwd ----------------------------------------
 if [ -z "$owner" ]; then
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
        || git rev-parse --is-inside-git-dir >/dev/null 2>&1; then
@@ -283,7 +331,7 @@ fi
 owner="$(printf '%s' "$owner" | cut -d/ -f1 | tr -d '[:space:]')"
 [ -n "$owner" ] || exec "$GH_REAL" "$@"
 
-# --- 6. org descriptor? ------------------------------------------------------
+# --- 5. org descriptor? -------------------------------------------------------
 creds_dir="${ORG_CREDS_DIR:-}"
 [ -n "$creds_dir" ] || creds_dir="${HOME:-}/org-creds"
 owner_slug="$(printf '%s' "$owner" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"

@@ -1,10 +1,9 @@
 #!/bin/sh
-# Test the gh shim — owner routing and the label gate. Offline, no network,
-# no Docker.
+# Test the gh shim's owner routing AND its label gate — offline, no
+# network, no Docker.
 #
 # WHY THIS EXISTS: `docker/hermes/gh` decides *which* GitHub App identity a
-# command runs as, and whether an label-edit call is even legal, and
-# getting either wrong is silent. The routing failure that
+# command runs as, and getting it wrong is silent. The failure that
 # prompted this test (2026-09-25): the reviewer's REST calls ran as the
 # PERSONAL App instead of the org App, 403'd with "Resource not accessible
 # by integration", and were reported up as a missing App permission — which
@@ -17,6 +16,15 @@
 # at a stub that prints the token it was handed, stub `gh-org-token` to mint
 # a recognizable one, and the shim's decision becomes observable. Every case
 # below is a decision the shim makes on argv + cwd alone.
+#
+# The LABEL GATE has its own cases (`R1 …` = the families' object rule:
+# review/* refused SET on an issue, status/* refused SET on a PR —
+# --remove-label always passes; `R2 …` = the reviewer fence: gh issue
+# edit/close/reopen refused from the reviewer's tool-home). The reviewer
+# fixture home is shaped like the real one (`…/profiles/reviewer[/home]`)
+# with an EMPTY org-creds descriptor, so org routing stays inert and what
+# the cases pin is the fence itself. Refusals are asserted by exit code and
+# stderr marker — the stub must never be exec'd on a refused call.
 #
 #   $ mise run test-gh-shim      (or: sh scripts/test-gh-shim.sh)
 
@@ -66,6 +74,18 @@ mkdir -p "$tmp/wt-org" "$tmp/wt-personal"
 ( cd "$tmp/wt-personal" && git init -q -b main && \
   git remote add origin https://github.com/bcross/widget.git )
 
+# --- gate fixture homes ------------------------------------------------------
+# The reviewer fence keys on HOME/HERMES_HOME; give the case table real-shaped
+# homes. The reviewer's carries an org-creds descriptor (one EMPTY acme.env) so
+# "R1 ahead of org mint" proves the gate fires with org routing LIVE for the
+# same invocation — the refusal precedes any token mint. The default home is
+# what case_refused pins so an inherited HERMES_HOME cannot skew the matrix.
+mkdir -p "$tmp/homes/default"
+for h in reviewer; do
+    mkdir -p "$tmp/homes/profiles/$h/home/org-creds"
+    : > "$tmp/homes/profiles/$h/home/org-creds/acme.env"
+done
+
 # --- the case table ---------------------------------------------------------
 # name | expected token | cwd | preset GH_TOKEN ("" = unset) | args…
 case_run() {
@@ -84,6 +104,114 @@ case_run() {
     else
         printf 'FAIL %-34s expected %s, got %s\n' "$name" "$expect" "$out"
         fail=$((fail + 1))
+    fi
+}
+
+# Gate cases run as a profile home (both signals set from one path).
+case_run_as() {
+    name="$1"; expect="$2"; cwd="$3"; phome="$4"; shift 4
+    out=$(cd "$cwd" && env -u GH_TOKEN HOME="$phome/home" HERMES_HOME="$phome" \
+            GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+            GIT_CEILING_DIRECTORIES="$tmp" sh "$shim" "$@" 2>&1); rc=$?
+    if [ "$out" = "$expect" ]; then
+        printf 'ok   %-34s %s\n' "$name" "$out"
+        pass=$((pass + 1))
+    else
+        printf 'FAIL %-34s expected %s, got %s\n' "$name" "$expect" "$out"
+        fail=$((fail + 1))
+    fi
+}
+
+# Only HERMES_HOME points at the reviewer (HOME stays default) — the two
+# signals are OR'd, so each direction must fire alone.
+case_refused_hh_only() {
+    name="$1"; marker="$2"; cwd="$3"; rh="$4"; shift 4
+    out=$(cd "$cwd" && env -u GH_TOKEN HOME="$tmp/home" HERMES_HOME="$rh" \
+            GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+            GIT_CEILING_DIRECTORIES="$tmp" sh "$shim" "$@" 2>&1 1>"$tmp/ref-stdout"); rc=$?
+    stubhit=""
+    case "$out" in *TOKEN-LEAK*) stubhit=" (stub exec'd)";; esac
+    failmsg=""
+    case "$out" in *"$marker"*) ;; *) failmsg="expected stderr to contain '$marker'" ;; esac
+    if [ "$rc" -eq 0 ] || [ -n "$stubhit" ] || [ -n "$failmsg" ]; then
+        printf 'FAIL %-34s rc=%s%s%s\n' "$name" "$rc" "$stubhit" \
+            "${failmsg:+ — $failmsg (out: $(printf '%s' "$out" | head -2))}"
+        fail=$((fail + 1))
+    else
+        printf 'ok   %-34s refused\n' "$name"
+        pass=$((pass + 1))
+    fi
+}
+
+# Only HOME points at the reviewer.
+case_refused_home_only() {
+    name="$1"; marker="$2"; cwd="$3"; rh="$4"; shift 4
+    out=$(cd "$cwd" && env -u GH_TOKEN HOME="$rh/home" HERMES_HOME="$tmp/homes/default" \
+            GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+            GIT_CEILING_DIRECTORIES="$tmp" sh "$shim" "$@" 2>&1 1>"$tmp/ref-stdout"); rc=$?
+    stubhit=""
+    case "$out" in *TOKEN-LEAK*) stubhit=" (stub exec'd)";; esac
+    failmsg=""
+    case "$out" in *"$marker"*) ;; *) failmsg="expected stderr to contain '$marker'" ;; esac
+    if [ "$rc" -eq 0 ] || [ -n "$stubhit" ] || [ -n "$failmsg" ]; then
+        printf 'FAIL %-34s rc=%s%s%s\n' "$name" "$rc" "$stubhit" \
+            "${failmsg:+ — $failmsg (out: $(printf '%s' "$out" | head -2))}"
+        fail=$((fail + 1))
+    else
+        printf 'ok   %-34s refused\n' "$name"
+        pass=$((pass + 1))
+    fi
+}
+
+# The gate's refusals print a corrected shape (or a routing instruction) on
+# stderr and stop before gh-real. Assert exit != 0, the marker, and no exec.
+# stderr starts "gh shim:" on every refusal, so that prefix rides along.
+case_refused() {
+    name="$1"; marker="$2"; cwd="$3"; preset="$4"; shift 4
+    if [ -n "$preset" ]; then
+        out=$(cd "$cwd" && env HOME="$tmp/home" HERMES_HOME="$tmp/homes/default" \
+                GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+                GIT_CEILING_DIRECTORIES="$tmp" GH_TOKEN="$preset" \
+                sh "$shim" "$@" 2>&1 >/dev/null); rc=$?
+    else
+        out=$(cd "$cwd" && env -u GH_TOKEN HOME="$tmp/home" HERMES_HOME="$tmp/homes/default" \
+                GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+                GIT_CEILING_DIRECTORIES="$tmp" sh "$shim" "$@" 2>&1 1>"$tmp/ref-stdout"); rc=$?
+    fi
+    stubhit=""
+    case "$out" in *TOKEN-LEAK*) stubhit=" (stub exec'd)";; esac
+    failmsg=""
+    case "$out" in "gh shim:"*) ;; *) failmsg="expected stderr to start 'gh shim:'" ;; esac
+    case "$out" in *"$marker"*) ;; *) failmsg="${failmsg}${failmsg:+; }expected stderr to contain '$marker'" ;; esac
+    if [ "$rc" -eq 0 ] || [ -n "$stubhit" ] || [ -n "$failmsg" ]; then
+        printf 'FAIL %-34s rc=%s%s%s\n' "$name" "$rc" "$stubhit" \
+            "${failmsg:+ — $failmsg (out: $(printf '%s' "$out" | head -2))}"
+        fail=$((fail + 1))
+    else
+        printf 'ok   %-34s refused\n' "$name"
+        pass=$((pass + 1))
+    fi
+}
+
+# Same shape as case_refused but overrides the home env — HOME and
+# HERMES_HOME are the reviewer fence's two signals, so a case names both
+# explicitly. home_spec is the base path of a profile home (…/profiles/<p>).
+case_refused_as() {
+    name="$1"; marker="$2"; cwd="$3"; phome="$4"; shift 4
+    out=$(cd "$cwd" && env -u GH_TOKEN HOME="$phome/home" HERMES_HOME="$phome" \
+            GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+            GIT_CEILING_DIRECTORIES="$tmp" sh "$shim" "$@" 2>&1 1>"$tmp/ref-stdout"); rc=$?
+    stubhit=""
+    case "$out" in *TOKEN-LEAK*) stubhit=" (stub exec'd)";; esac
+    failmsg=""
+    case "$out" in *"$marker"*) ;; *) failmsg="expected stderr to contain '$marker'" ;; esac
+    if [ "$rc" -eq 0 ] || [ -n "$stubhit" ] || [ -n "$failmsg" ]; then
+        printf 'FAIL %-34s rc=%s%s%s\n' "$name" "$rc" "$stubhit" \
+            "${failmsg:+ — $failmsg (out: $(printf '%s' "$out" | head -2))}"
+        fail=$((fail + 1))
+    else
+        printf 'ok   %-34s refused\n' "$name"
+        pass=$((pass + 1))
     fi
 }
 
@@ -177,6 +305,110 @@ case_run "--hostname value skipped" \
     "$ORG" "$tmp/scratch" "" \
     --hostname github.com api repos/acme/widget/issues
 
+# --- the label gate (R1: family/object; R2: the reviewer fence) --------------
+# Rule 1 fires profile-agnostically on SET (the default home is pinned by
+# case_refused); refusals must precede org minting AND the GH_TOKEN
+# passthrough, which is why the gate sits above step 3. Org-repo cases
+# (acme) prove the gate coexists with live org routing — a passing acme
+# call still mints ORGTOKEN; bcross cases pin the personal passthrough.
+
+# Refused SETs — every gh-accepted spelling of the label flags, both objects.
+case_refused "R1 issue review/ready separated" \
+    "review/ready" "$tmp/scratch" "" \
+    issue edit 23 --repo acme/widget --add-label review/ready
+case_refused "R1 issue review/ready = form" \
+    "review/ready" "$tmp/scratch" "" \
+    issue edit 23 --repo=acme/widget --add-label=review/ready
+case_refused "R1 issue comma mix refuses" \
+    "review/ready" "$tmp/scratch" "" \
+    issue edit 23 -R acme/widget --add-label "type/bug,review/ready"
+case_refused "R1 issue -l attached form" \
+    "review/ready" "$tmp/scratch" "" \
+    issue edit 23 -Racme/widget -lreview/ready
+case_refused "R1 pr status/in-progress" \
+    "status/in-progress" "$tmp/scratch" "" \
+    pr edit 31 --repo acme/widget --add-label status/in-progress
+case_refused "R1 issue create --label" \
+    "review/ready" "$tmp/scratch" "" \
+    issue create --repo acme/widget --title t -l review/ready
+case_refused "R1 pr create -l" \
+    "status/ready" "$tmp/scratch" "" \
+    pr create --repo acme/widget --title t -l status/ready
+case_refused "R1 comma list whole-value" \
+    "status/ready" "$tmp/scratch" "" \
+    pr edit 31 -R acme/widget --add-label "status/ready,type/bug"
+case_refused "R1 under preset GH_TOKEN" \
+    "review/changes" "$tmp/scratch" "ghp_preset" \
+    issue edit 23 -R acme/widget --add-label review/changes
+case_refused "R1 fires before org mint" \
+    "review/ready" "$tmp/scratch" "" \
+    issue edit 23 --repo acme/widget --add-label review/ready
+case_refused_as "R1 as reviewer, org creds live" \
+    "review/ready" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    issue edit 23 --repo acme/widget --add-label review/ready
+
+# Pass — correct families, untouched shapes, filters, gh api.
+case_run "R1 pass: status on issue (org route)" \
+    "token=ORGTOKEN:acme" "$tmp/scratch" "" \
+    issue edit 23 --repo acme/widget --add-label status/in-review
+case_run "R1 pass: review on pr" \
+    "token=<none>" "$tmp/scratch" "" \
+    pr edit 31 --repo bcross/widget --add-label review/ready
+case_run "R1 pass: release filing shape" \
+    "token=<none>" "$tmp/scratch" "" \
+    issue create --repo bcross/widget --title t --label type/bug --label status/ready
+case_run "R1 pass: type/* on pr" \
+    "token=<none>" "$tmp/scratch" "" \
+    pr edit 31 --repo bcross/widget --add-label type/breaking
+case_run "R1 pass: comma all-legal" \
+    "token=ORGTOKEN:acme" "$tmp/scratch" "" \
+    issue edit 23 -R acme/widget --add-label "type/bug,status/in-progress"
+case_run "R1 pass: --remove-label foreign" \
+    "token=<none>" "$tmp/scratch" "" \
+    issue edit 26 --repo bcross/widget --remove-label review/ready
+case_run "R1 pass: --label as filter" \
+    "token=ORGTOKEN:acme" "$tmp/scratch" "" \
+    issue list --repo acme/widget --label status/ready
+case_run "R1 pass: label list subcmd" \
+    "token=<none>" "$tmp/scratch" "" \
+    label list --repo bcross/widget
+case_run "R1 pass: pr edit -l review" \
+    "token=<none>" "$tmp/scratch" "" \
+    pr edit 31 --repo bcross/widget -l review/changes
+case_run "R1 pass: gh api unscreened" \
+    "token=ORGTOKEN:acme" "$tmp/scratch" "" \
+    api repos/acme/widget/issues/23/labels -f labels[]=review/ready
+
+# Rule 2 — the reviewer fence. Fires on issue edit/close/reopen from the
+# reviewer home; PR work and reads pass; HERMES_HOME alone and HOME alone
+# each fire; the default home stays open (fail-open by design).
+case_refused_as "R2 reviewer issue edit refused" \
+    "@hermes-planner" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    issue edit 26 --repo acme/widget --add-label status/in-progress
+case_refused_as "R2 reviewer issue close refused" \
+    "@hermes-planner" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    issue close 26 --repo acme/widget
+case_refused_as "R2 reviewer issue reopen refused" \
+    "@hermes-planner" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    issue reopen 26 --repo acme/widget
+case_run_as "R2 pass: reviewer issue view" \
+    "token=<none>" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    issue view 26 --repo bcross/widget
+case_run_as "R2 pass: reviewer pr edit" \
+    "token=<none>" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    pr edit 31 --repo bcross/widget --add-label review/ready
+case_refused_hh_only "R2 HERMES_HOME-only fires" \
+    "@hermes-planner" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    issue edit 26 --repo bcross/widget --remove-label status/ready
+case_refused_home_only "R2 HOME-only fires" \
+    "@hermes-planner" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    issue edit 26 --repo bcross/widget --remove-label status/ready
+case_refused_hh_only "R2 trailing-slash HERMES_HOME fires" \
+    "@hermes-planner" "$tmp/scratch" "$tmp/homes/profiles/reviewer/" \
+    issue edit 26 --repo bcross/widget --remove-label status/ready
+case_run "R2 pass: default home issue edit" \
+    "token=<none>" "$tmp/scratch" "" \
+    issue edit 26 --repo bcross/widget --remove-label status/ready
 # Passthroughs, which must never be second-guessed.
 case_run "preset GH_TOKEN wins" \
     "token=ghp_explicit" "$tmp/wt-org" "ghp_explicit" \
@@ -184,133 +416,6 @@ case_run "preset GH_TOKEN wins" \
 case_run "gh auth * passthrough" \
     "$PERSONAL" "$tmp/wt-org" "" \
     auth status
-
-# --- the label gate ----------------------------------------------------------
-# The gate keyed on subcmd+action+label flags: families are object-scoped
-# (status/* issues, review/* PRs, type/* both), and the reviewer profile
-# may not edit issues at all. A refusal exits non-zero and never reaches
-# gh-real, with the corrective command in the message.
-#
-# run_shim is the flexible runner behind the new helpers: cwd as $1,
-# profile home as $SHIM_HOME (like every profile's tool-home env), optional
-# HERMES_HOME as $SHIM_HERMES_HOME (empty = the default profile's /opt/data
-# situation — the variable is set but empty, which the shim must treat as
-# no match), optional preset token as $2.
-
-SHIM_HOME="$tmp/home"
-SHIM_HERMES_HOME=""
-
-run_shim() { # cwd | preset-GH_TOKEN ("" = unset) | args…
-    cwd="$1"; preset="$2"; shift 2
-    if [ -n "$preset" ]; then
-        out=$(cd "$cwd" && env HOME="$SHIM_HOME" \
-                HERMES_HOME="${SHIM_HERMES_HOME:-}" \
-                GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
-                GIT_CEILING_DIRECTORIES="$tmp" GH_TOKEN="$preset" \
-                sh "$shim" "$@" 2>&1)
-    else
-        out=$(cd "$cwd" && env -u GH_TOKEN HOME="$SHIM_HOME" \
-                HERMES_HOME="${SHIM_HERMES_HOME:-}" \
-                GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
-                GIT_CEILING_DIRECTORIES="$tmp" \
-                sh "$shim" "$@" 2>&1)
-    fi
-    run_rc=$?
-}
-
-expect_pass() { # name | expected output
-    name="$1"; want="$2"
-    if [ "$run_rc" -eq 0 ] && [ "$out" = "$want" ]; then
-        printf 'ok   %-34s %s\n' "$name" "$out"
-        pass=$((pass + 1))
-    else
-        printf 'FAIL %-34s rc=%s expected %s, got %s\n' "$name" "$run_rc" "$want" "$out"
-        fail=$((fail + 1))
-    fi
-}
-
-expect_refuse() { # name | marker substring
-    name="$1"; marker="$2"
-    if [ "$run_rc" -ne 0 ] && printf '%s' "$out" | grep -qF -- "$marker"; then
-        printf 'ok   %-34s refused: %s\n' "$name" "$marker"
-        pass=$((pass + 1))
-    else
-        printf 'FAIL %-34s rc=%s expected refusal with %s, got %s\n' \
-            "$name" "$run_rc" "$marker" "$out"
-        fail=$((fail + 1))
-    fi
-}
-
-# Reviewer tool-home with an org descriptor (the fence must not stop the
-# reviewer's legitimate PR work or issue reads — those still route).
-mkdir -p "$tmp/profiles/reviewer/home/org-creds"
-: > "$tmp/profiles/reviewer/home/org-creds/acme.env"
-
-# Rule 1: foreign family -> refuse, on both objects and in every spelling.
-SHIM_HOME="$tmp/home"; SHIM_HERMES_HOME=""
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget --add-label review/ready
-expect_refuse "issue edit review/* refused" "PR-family label on an ISSUE"
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget --remove-label review/changes
-expect_refuse "issue edit --remove-label refused" "PR-family label on an ISSUE"
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget --add-label 'type/bug,review/ready'
-expect_refuse "comma list flagged member" "PR-family label on an ISSUE"
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget --add-label=review/ready
-expect_refuse "--add-label= attached form" "PR-family label on an ISSUE"
-run_shim "$tmp/scratch" "" pr edit 9 --repo acme/widget --add-label status/in-progress
-expect_refuse "pr edit status/* refused" "ISSUE-family label on a PR"
-run_shim "$tmp/scratch" "" pr create -R acme/widget --label status/ready
-expect_refuse "pr create status/* refused" "ISSUE-family label on a PR"
-run_shim "$tmp/scratch" "" issue create -R acme/widget -l review/ready
-expect_refuse "issue create -l shorthand" "PR-family label on an ISSUE"
-run_shim "$tmp/scratch" "" pr create -R acme/widget -lstatus/ready
-expect_refuse "pr create -l attached form" "ISSUE-family label on a PR"
-
-# Rule 1 pass-throughs: correct families, filters, reads, label/labels mgmt.
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget --add-label status/in-review
-expect_pass "issue edit status/* -> org" "$ORG"
-run_shim "$tmp/wt-org" "" pr edit 9 --add-label review/approved --remove-label review/changes
-expect_pass "pr edit review/* -> org" "$ORG"
-run_shim "$tmp/scratch" "" issue create -R acme/widget --label type/bug --label status/ready
-expect_pass "release issue filing -> org" "$ORG"
-run_shim "$tmp/scratch" "" issue create -R acme/widget --label 'type/bug,type/security'
-expect_pass "release type/* comma list" "$ORG"
-run_shim "$tmp/wt-personal" "" issue edit 1 --add-label status/ready
-expect_pass "personal repo correct family" "$PERSONAL"
-run_shim "$tmp/scratch" "" issue list -R acme/widget --label status/ready
-expect_pass "--label as filter -> org" "$ORG"
-run_shim "$tmp/scratch" "" label list -R acme/widget
-expect_pass "gh label list -> org" "$ORG"
-run_shim "$tmp/scratch" "" search prs --label review/approved
-expect_pass "search label filter -> personal" "$PERSONAL"
-run_shim "$tmp/scratch" "" api -X PUT repos/acme/widget/issues/1/labels --input p.json
-expect_pass "api labels PUT (non-gate) -> org" "$ORG"
-
-# Rule 2: the reviewer fence — fail-closed only where the profile is known.
-SHIM_HERMES_HOME=""
-SHIM_HOME="$tmp/profiles/reviewer/home"
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget --add-label status/ready
-expect_refuse "reviewer issue edit refused" "the reviewer never edits an issue"
-run_shim "$tmp/scratch" "" issue close 7 --repo acme/widget
-expect_refuse "reviewer issue close refused" "the reviewer never edits an issue"
-run_shim "$tmp/scratch" "" issue view 7 --repo acme/widget
-expect_pass "reviewer issue view -> org" "$ORG"
-run_shim "$tmp/scratch" "" pr edit 9 --repo acme/widget --add-label review/approved
-expect_pass "reviewer pr edit -> org" "$ORG"
-# HERMES_HOME alone identifies the profile too (the gateway drops HERMES_HOME
-# from cron children while the tool-home HOME may be ambiguous).
-SHIM_HOME="$tmp/home"
-SHIM_HERMES_HOME="$tmp/profiles/reviewer"
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget
-expect_refuse "HERMES_HOME-only fence" "the reviewer never edits an issue"
-# Default profile: unset-signal HERMES_HOME must fail open...
-SHIM_HERMES_HOME=""
-run_shim "$tmp/scratch" "" issue edit 7 --repo acme/widget --add-label status/ready
-expect_pass "default profile issue edit" "$ORG"
-# ...and a preset GH_TOKEN must not route around the gate (the gate sits
-# above the GH_TOKEN passthrough on purpose).
-SHIM_HOME="$tmp/profiles/reviewer/home"; SHIM_HERMES_HOME=""
-run_shim "$tmp/scratch" "ghp_explicit" issue edit 7 --repo acme/widget
-expect_refuse "fence above GH_TOKEN passthrough" "the reviewer never edits an issue"
 
 # --- summary ----------------------------------------------------------------
 echo
