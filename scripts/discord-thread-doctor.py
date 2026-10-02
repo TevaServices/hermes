@@ -37,7 +37,10 @@ MANAGE_THREADS — that one only governs renaming/archiving/deleting
 
 Channels come from the profile routes in
 config/profiles/default/profile.toml (the single source of truth), so
-this script does not keep its own copy of the channel IDs.
+this script does not keep its own copy of the channel IDs — the table's
+chat_ids are @@VAR@@ placeholders, expanded from the env's DISCORD_CHANNEL_*
+values exactly as render.py expands them; an unset one is reported and
+skipped, not an API error.
 
 Usage:
     python3 scripts/discord-thread-doctor.py
@@ -54,6 +57,7 @@ Exit status: 0 when every checked bot/channel pair can create threads,
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -132,9 +136,19 @@ def read_env():
     return env
 
 
-def load_routes():
-    """profile -> [channel_id] from the default profile's route table."""
-    path = Path(__file__).resolve().parent.parent / ROUTES_FILE
+# Route table chat_ids are @@VAR@@ PLACEHOLDERS, not channel ids (the
+# config/render system made profile.toml the template, with the real ids in
+# hermes-main.env as DISCORD_CHANNEL_*). This doctor must expand them the
+# same way render.py does — a placeholder passed to the API verbatim is an
+# invalid snowflake, so every check would 400 with a misleading "cannot view
+# it". An UNSET placeholder (the var is not in the env yet) is not an error:
+# it means that channel is not wired yet, which is reported and skipped.
+PLACEHOLDER_RE = re.compile(r"@@([A-Z0-9_]+)@@")
+
+
+def load_routes(env, path=None):
+    """profile -> [channel_id], expanding @@VAR@@ placeholders from env."""
+    path = Path(path) if path else (Path(__file__).resolve().parent.parent / ROUTES_FILE)
     try:
         with path.open("rb") as fh:
             data = tomllib.load(fh)
@@ -145,13 +159,19 @@ def load_routes():
         .get("gateway", {})
         .get("profile_routes", {})
     )
-    owners = {}
+    owners, unset = {}, []
     for name, route in routes.items():
         chat_id, profile = route.get("chat_id"), route.get("profile")
         if not chat_id or not profile:
             continue
+        match = PLACEHOLDER_RE.fullmatch(str(chat_id))
+        if match:
+            chat_id = env.get(match.group(1), "")
+            if not chat_id:
+                unset.append((name, match.group(1)))
+                continue
         owners.setdefault(profile, []).append((name, str(chat_id)))
-    return owners
+    return owners, unset
 
 
 def bot_tokens(env):
@@ -261,16 +281,17 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     env = read_env()
-    owners = load_routes()
+    owners, unset = load_routes(env)
     bots = bot_tokens(env)
     if not bots:
         sys.exit(f"no DISCORD_BOT_TOKEN (or PROFILE_*_DISCORD_BOT_TOKEN) in {ENV_FILE}")
 
-    # Every routed channel, plus anything asked for explicitly.
     channels = []
+    seen = set()
     for profile in sorted(owners):
         for name, chat_id in owners[profile]:
-            if chat_id not in [c[0] for c in channels]:
+            if chat_id not in seen:
+                seen.add(chat_id)
                 channels.append((chat_id, name, profile))
     for extra in args.channel:
         if extra not in [c[0] for c in channels]:
@@ -281,6 +302,8 @@ def main(argv=None):
     print("=" * 72)
     print("Discord thread doctor — can each bot create a thread?")
     print("=" * 72)
+    for name, var in unset:
+        print(f"  ! {name}: @@{var}@@ is not in the env yet — channel not wired, skipped")
 
     roles_cache = {}
     failures = []
