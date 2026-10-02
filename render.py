@@ -312,6 +312,39 @@ def gateway_model_names() -> set[str] | None:
     return names
 
 
+# A router-fallback entry line, inside the gateway config's
+# router_settings block: `- cheap: ["openrouter/..."]` — one fallback
+# LIST per line, a plain JSON array value is the shape the config
+# documents as its contract (and scripts/check-model-windows.py parses).
+_FALLBACK_LINE_RE = re.compile(r"^\s*-\s*(\S+):\s*(\[.*\])\s*$")
+
+
+def gateway_fallback_targets() -> set[str] | None:
+    """Every fallback target named in the gateway's router_settings
+    .fallbacks, or None if it isn't here.
+
+    Checked against the model names the gateway serves: the failure this
+    fails loudly on is a typo'd fallback id, which would ship as a gateway
+    that 500s exactly during an outage — the one moment it must work.
+    """
+    if not GATEWAY_SPEC.is_file():
+        return None
+    targets: set[str] = set()
+    in_router_settings = False
+    for line in GATEWAY_SPEC.read_text(encoding="utf-8").splitlines():
+        stripped = line.split("#", 1)[0]
+        if not stripped.strip():
+            continue
+        if not line[:1] in (" ", "\t"):
+            in_router_settings = stripped.startswith("router_settings")
+            continue
+        if in_router_settings:
+            match = _FALLBACK_LINE_RE.match(stripped)
+            if match:
+                targets.update(json.loads(match.group(2)))
+    return targets
+
+
 # Config schema version used when the base image's own value can't be read
 # (local preview runs, where hermes_cli isn't installed). Keep in sync with
 # the HERMES_REF pin — the authoritative stamp is derived at build time.
@@ -515,6 +548,18 @@ def validate(models: dict, providers: dict, integrations: dict,
             f"on the entry in models.toml if it is served natively instead. "
             f"Declared on the gateway: {', '.join(sorted(gateway_names))}"
         )
+    # The router's fallback targets must be servable model names too — a
+    # typo'd fallback id ships a gateway that 500s exactly during an
+    # outage, the one moment it must work.
+    fallback_targets = gateway_fallback_targets()
+    if fallback_targets and gateway_names is not None:
+        missing = fallback_targets - gateway_names
+        if missing:
+            raise ConfigError(
+                f"{GATEWAY_SPEC.name} router_settings.fallbacks names "
+                f"model(s) with no `- model_name:` group: "
+                f"{', '.join(sorted(missing))}"
+            )
     for key in integrations:
         if not key.strip():
             raise ConfigError("integration names must be non-empty")

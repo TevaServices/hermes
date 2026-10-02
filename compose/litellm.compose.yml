@@ -3,7 +3,11 @@
 # Every app (Hermes, Honcho, Firecrawl) points at http://litellm:4000
 # with the LITELLM_MASTER_KEY and sends a model name from
 # config/litellm.yaml. LiteLLM routes among group members (latency-based)
-# and falls back on failure.
+# and falls back on failure — within groups, and (for the four tiers)
+# through router_settings.fallbacks: a failing Ollama Cloud deployment
+# cools down and the SAME tier is served by its OpenRouter fallback, with
+# the primary re-probed when the cooldown expires. litellm.yaml's header
+# documents the contract.
 #
 # Secrets: /etc/hermes/litellm.env on the host (set HERMES_ENV_DIR to
 # override for local dev). Holds LITELLM_MASTER_KEY, OLLAMA_API_KEY,

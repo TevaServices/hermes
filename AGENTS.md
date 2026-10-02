@@ -137,6 +137,44 @@ echoed, or routed through a shell history or chat transcript.
   `/model smart`, `/model smarter` and `/model smartest` all genuinely
   resolve mid-session — the old alias names could not (they lived only in
   this repo and never reached the gateway).
+
+- **Outage fallbacks: the GATEWAY owns the failure path, not Hermes
+  (2026-10-02).** Each tier's Ollama Cloud deployment has an OpenRouter
+  fallback in `litellm.yaml`'s `router_settings.fallbacks` — same-model
+  matches with a window ≥ the tier's (`cheap`→
+  `openrouter/nvidia/nemotron-3-nano-30b-a3b`, `smart`→
+  `openrouter/google/gemma-4-31b-it`, `smarter`→
+  `openrouter/z-ai/glm-5.3-flash`, `smartest`→ `openrouter/z-ai/glm-5.3`
+  then `openrouter/moonshotai/kimi-k3`; the five ids are also
+  `model_name` groups, callable directly for testing). Live-triggered
+  2026-10-02 17:50Z: Ollama's subscription "session usage limit" 429'd
+  every tier and the old config (no fallbacks — `No fallback was
+  attempted` in litellm's log) propagated the 429 to every caller. Now: a
+  429 cools the Ollama deployment down immediately (per-deployment,
+  `cooldown_time: 60`; `num_retries: 1` — a limit is not fixed by
+  retrying), the request fails over to the OpenRouter id in order, and the
+  primary is re-probed when the cooldown expires — a refreshed subscription
+  returns traffic to Ollama on its own. Same-model matching, so fallback
+  turns keep the tier's capability class; all five ids tools-capable,
+  windows verified ≥ tier via `mise run check-model-windows` (which now
+  checks the fallback contracts against OpenRouter's catalog too, and
+  `render.py` fails the build if a fallback names a missing group).
+  Correspondingly, **no profile declares `fallback_model` any more** —
+  Hermes does not fail between tiers/models; the two-tier fallback
+  (re-routing the tier via OpenRouter, same quality) replaced the old
+  escalation chain (which would have degraded real work onto a bigger tier
+  during a transient). What is NOT covered, on purpose: the `firecrawl`
+  group (its two free members fail over within the group; it stays
+  OpenRouter-free-only — no fallback to a paid path) and the `ollama/*`
+  wildcard (single passthrough, no `default_fallbacks` — a wildcard id
+  must not acquire a silent paid path). During an outage window, requests
+  inside the cooldown go straight to the fallback; which backend served a
+  request is observable in the response's `model` field and the
+  `x-litellm-model-api-base`/`x-litellm-model-id` headers, and litellm's
+  cooldown lines in `docker logs litellm`. Related one-line fix shipped in
+  the same change: `litellm_settings.drop_params: true` — Honcho's
+  `nomic-embed-text` calls were 4xxing on OpenAI-client default
+  `encoding_format: float`, which the ollama provider rejects.
   Exception: the `firecrawl` group is NOT a tier and is **OpenRouter free
   models ONLY** (`google/gemma-4-31b-it:free`,
   `nvidia/nemotron-3-super-120b-a12b:free`) — Ollama Cloud strips
@@ -274,20 +312,23 @@ checking the host's actual resources.
 
 ### Agent runtime invariants
 
-- **`fallback_model` IS wired — as `fallback_providers`.** `render.py`
+- **`fallback_model` IS wired — as `fallback_providers`, and the chain is
+  now deliberately EMPTY.** The mechanism still exists: `render.py`
   renders a profile's `fallback_model` tier into the `fallback_providers`
   chain that `hermes_cli/fallback_config.get_fallback_chain` reads, which the
   agent's provider init and the cron setup both consume: Hermes walks the
   chain, in order, when the primary fails with rate-limit, overload or
-  connection errors. The entry carries only what the resolver reads —
-  `provider`, `model`, `base_url`, and `key_env` (the credential is named by
-  env var and read through the active profile's secret scope; an inline
-  `api_key` would put a key in a config file, which this stack never does).
-  A profile can contribute entries of its OWN via `[config_extra]`
-  `fallback_providers`; those are tried first, then the declared tier.
-  Note what this does NOT cover: a model that answers but answers badly.
-  Failover is for transport/rate-limit failures, so escalating for quality is
-  still manual (`/model smartest`, or `claude --model smartest`).
+  connection errors. But since 2026-10-02 no profile declares a
+  `fallback_model` — failure is handled INSIDE the gateway (the failing
+  tier is re-routed to its OpenRouter fallback, see the §Secrets gateway
+  section), and the user's direction is that Hermes must not fail between
+  tiers: a model-escalation chain would degrade real work onto a bigger
+  tier during a transient, and a turn that fails even there fails loudly
+  through the queue scripts' exit codes. A profile can still contribute
+  entries of its own via `[config_extra]` `fallback_providers` (tried
+  first); none does. What a chain would NOT cover anyway: a model that
+  answers but answers badly — quality escalation stays manual (`/model
+  smartest`, or `claude --model smartest`).
 - **The agent's BUILT-IN Honcho *toolset* is gone from this agent
   version** (the `honcho` toolset was removed — Honcho IS the memory
   provider plugin). What exists now: `render.py` ships `honcho.json`
@@ -1531,22 +1572,29 @@ gh label list -R <owner>/<repo> --json name --jq '.[].name' | grep '^type/'
 # the bit is missing at guild level or denied by a channel overwrite.
 python3 scripts/discord-thread-doctor.py            # all ✓, exit 0
 # Gateway: /v1/models should list the four tier names (cheap, smart,
-# smarter, smartest) PLUS the live Ollama Cloud catalogue (as ollama/<id>) —
-# if it instead returns a swarm of openai/… names, check_provider_endpoint
-# isn't taking effect.
+# smarter, smartest) PLUS the live Ollama Cloud catalogue (as ollama/<id>)
+# PLUS the five openrouter/ fallback ids — if it instead returns a swarm of
+# openai/… names, check_provider_endpoint isn't taking effect.
 curl -s http://127.0.0.1:4000/v1/models \
   -H "Authorization: Bearer $(sudo cat /etc/hermes/litellm.env | grep ^LITELLM_MASTER_KEY= | cut -d= -f2)" \
   | python3 -c 'import json,sys; print(*(m["id"] for m in json.load(sys.stdin)["data"]), sep="\n")'
 # One real request per tier name — 200 each, and litellm's log names the
-# upstream model that actually served it.
+# upstream model that actually served it. Then the fallback ids themselves:
+# 200 each (validates the OpenRouter credits + that the ids resolve), and a
+# tool-calling round trip per id — Hermes requires function calling.
+# After a REAL outage (429 from Ollama's subscription limit), confirm the
+# fallback actually served: the response's `model` field /
+# x-litellm-model-api-base header names the OpenRouter id, and the window
+# after cooldown expiry names the Ollama backend again.
 for m in cheap smart smarter smartest; do printf '%-9s ' "$m"; \
   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/v1/chat/completions \
     -H "Authorization: Bearer $(sudo cat /etc/hermes/litellm.env | grep ^LITELLM_MASTER_KEY= | cut -d= -f2)" \
     -H 'Content-Type: application/json' \
     -d "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}"; done
-# Tiers' declared windows vs the provider's own API (host-side, needs the
-# internet but no key) — the ONLY check that can catch litellm.yaml and
-# models.toml drifting apart.
+# Tiers' declared windows vs the provider's own API, plus every router
+# fallback's window and tools support vs OpenRouter's catalog (host-side
+# anywhere, needs the internet but no key) — the ONLY check that can catch
+# litellm.yaml and models.toml drifting apart, on tiers and fallbacks alike.
 mise run check-model-windows                        # all ok, exit 0
 # Dashboard plumbing (true in BOTH states): the vendored plugin is seeded
 # into the default home, and the loopback port behaves per the gate.

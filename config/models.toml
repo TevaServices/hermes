@@ -99,4 +99,12 @@ description = "GLM 5.3 flash via the gateway (1M, vision, 18B active) — the wo
 provider = "litellm"
 model = "smartest"
 context_length = 1048576
-description = "GLM 5.3 via the gateway (1M) — judgment work (the reviewer) and the opt-in /model escalation; no vision, so it is never a profile's primary where images arrive"
+description = "GLM 5.3 via the gateway (1M) — judgment work (the reviewer) and the opt-in /model escalation; no vision, so it is never a profile's primary where images arrive. Fallback: the same GLM 5.3 on OpenRouter, kimi-k3 second (see litellm.yaml router_settings.fallbacks)"
+
+# Outage behavior: a tier whose Ollama Cloud deployment fails (429 /
+# subscription limit / transport) is served by its OpenRouter fallback —
+# same tier, same capability class — while the gateway's cooldown expires,
+# then its primary is re-probed automatically. No profile declares a
+# fallback_model any more: Hermes never fails BETWEEN tiers; the gateway
+# owns the failure path. scripts/check-model-windows.py enforces that every
+# fallback's window >= its tier's window here and supports tools.
