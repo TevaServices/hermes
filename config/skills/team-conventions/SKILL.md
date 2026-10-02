@@ -263,7 +263,10 @@ BLOCKED` with every check green:
   every commit on the head branch at merge time. A GitHub App can only
   produce a verified commit through the API, never by pushing, so the
   developer publishes with `git-publish.py` and never `git push` (see
-  `team-developer` §Publishing).
+  `team-developer` §Publishing). Enforced mechanically now: the
+  container's `pre-push` hook stops the push from any profile's
+  tool-home before anything runs — the refusal names `git-publish.py`
+  and the publish command is the fix, not a permission question.
 - **Required review-thread resolution** — the table above.
 - **Required code-owner approval** — the human gate, and a real one: the
   most recent non-bot review must be `APPROVED` by a login in the repo's

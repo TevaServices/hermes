@@ -218,6 +218,17 @@ branch. It refuses to publish anything it cannot prove — the ref only moves af
 the App identity and the signature have been read back — and it never touches the
 default branch.
 
+**The refusal is mechanical as of 2026-10-02** — publishing is `git-publish.py`
+and never `git push`: the container's `pre-push` git hook stops the push before
+anything runs (same `core.hooksPath` scope as the DCO hook), and its message
+names the publish path and the `HERMES_ALLOW_PUSH=1` escape. Read that refusal
+as the rule enforcing itself, not as a permission problem; the fix is the
+publish command it names, not a reworded push. (It exists because every push
+this pipeline actually made ended as a full branch rewrite later — a forced
+replay that dismissed standing approvals, re-ran CI, and cost the human another
+approval of byte-identical content. On a ruleset-gated repo, four review rounds
+in a row.)
+
 **An existing branch of unsigned commits** (a PR already blocked, or one that
 predates this helper) is repaired by rewriting it:
 
@@ -341,6 +352,56 @@ why there: an open thread is a statement, so make it one.
    --replay-from origin/<base> --force`, and see "Publishing") and
    **unresolved review threads** (fix below). Nothing about either one
    shows up in `gh pr checks`.
+
+   The read-back can also say **`CONFLICTING`** / `DIRTY`: another landed PR
+   changed the same lines you changed — most often the repo's test-count
+   line (mach's `Green = N checks`), which every PR adding checks touches.
+   Nobody's queue re-serves an in-review item, so resolve it IN THIS TURN,
+   from your worktree, before handing off:
+
+   ```bash
+   git fetch origin
+   git rebase origin/main
+   # resolve; for a count line the union is MAIN's count + YOUR delta —
+   # main already holds the other PR's bump, and re-deriving the total
+   # from your own branch's history double-counts it
+   git-publish.py --replay-from origin/main --force
+   gh pr ready <PR#> --repo owner/repo
+   gh pr edit <PR#> --repo owner/repo --add-label review/ready
+   ```
+
+   The replay rewrites the published ref, so the repo's stale-review
+   dismissal clears every prior approval — that is the correct cost of a
+   real conflict, not a malfunction. Say in the PR what changed (one line:
+   the count, the resolved hunk), re-verify, and read the gates back again
+   before the handoff.
+
+   **The repo's own count lines are merge-relevant, not decoration** —
+   mach's AGENTS.md declares one with an updating rule, and mach's CI
+   asserts the count against the actual suite run. Update the count in the
+   same change that adds or removes checks, quote DELTAS in the PR
+   description ("adds 7 checks") rather than snapshot totals — a snapshot
+   number goes stale on the first rebase and is exactly the finding that
+   cost review rounds on #27 and #31.
+
+   **The shared host runs more than one e2e suite at the same time.** A
+   repo's e2e binds fixed loopback ports (mach: 8099 for the control
+   plane, 8098/8097 for the web-UI section; each overridable via
+   `MACH_TEST_PORT` / `MACH_TEST_UI_PORT` / `MACH_TEST_IDP_PORT`). The
+   reviewer verifying your PR — or a later session of your own — may be
+   running the same suite right now, and a collision produces
+   connection-refused and unrelated assertion failures that are NOT
+   properties of your diff. Before starting one, look:
+
+   ```bash
+   lsof -nP -iTCP:8099 -sTCP:8097 -sTCP:8098 -sTCP:LISTEN
+   ```
+
+   Occupied → wait for that run to finish, or pass a distinct port triple.
+   And never kill what you did not start: `pkill -f` on a server-name
+   pattern (e.g. `mach-e2e.*/mach-server serve`) matches ANOTHER profile's
+   e2e server — that is exactly what cost the reviewer its round-3 runs on
+   #31 and #34. e2e.sh's own cleanup is `$WORKDIR`-scoped; let it.
 4. **Hand off to reviewer — the LABEL is the handoff, not a review
    request.** Bot identities cannot be requested as PR reviewers
    (`gh pr edit --add-reviewer 'hermes-reviewer[bot]'` fails with

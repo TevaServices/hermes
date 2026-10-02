@@ -1,0 +1,87 @@
+#!/bin/sh
+# pre-push — `git push` is not the team's publish path. git-publish.py is.
+#
+# WHY THIS EXISTS
+#
+# Repo rulesets can require GitHub-verified signatures on every commit
+# that merges (`required_signatures`), and GitHub evaluates that at MERGE
+# time, not push time — so the failure arrives long after the push, with
+# every check green, as an unmergeable PR. Meanwhile a pushed commit is
+# unsigned forever: a GitHub App bot has no account settings, so no
+# signing key can ever be registered against it, and the only commit
+# GitHub verifies for an App is one it creates itself through the API
+# (no author, committer or signature field). That makes `git push` not
+# merely the wrong choice but an unrecoverable one from a bot identity —
+# and every observed `git push` here ended as a full branch rewrite later
+# (a forced replay that dismissed every standing approval, re-ran CI, and
+# cost the human another approval of byte-identical content).
+#
+# Observed on a ruleset-gated repo, a PR that needed FOUR review rounds:
+# the commit fix was pushed (unsigned; DCO "repair"), pushed again
+# (signature repair), replayed via the API, then re-replayed after a
+# rebase — each rewrite dismissing the human's approval. All of it came
+# from one place: a push that should have been a publish.
+#
+# WHY IT REFUSES (unlike the DCO hook, which never fails)
+#
+# The DCO hook adds a trailer because CI is the enforcement and the
+# commit is usable either way. A push has no redeeming fallback: its
+# commits cannot be repaired in place, only rewritten. So this hook
+# refuses outright and points at `git-publish.py`, which produces the
+# same commits as GitHub-signed ones on the first try.
+#
+# SCOPE AND ESCAPE
+#
+# Refusal applies to GitHub remotes (every spelling: https, ssh,
+# git@) from every profile's tool-home, because the reason holds
+# wherever the target repo happens to sit today. Non-GitHub remotes
+# pass. A deliberate push that git-publish.py cannot express is not
+# refused by design when run with HERMES_ALLOW_PUSH=1 — but that escape
+# is for the operator reading this message, not for automating around
+# the refusal.
+#
+# Like every hook under /opt/hermes-git-hooks, this lives behind the
+# per-home global core.hooksPath and is skipped by --no-verify. Unlike
+# the DCO hook it is unconditional: there is no repo state that makes a
+# push the right tool here.
+#
+# git calls this as: pre-push <remote-name> <remote-url>, with the
+# ref/sha pairs it wants to update on stdin (drained below).
+
+url="${2:-}"
+# Drain stdin unconditionally: git is already writing the ref-update
+# list, and a hook that exits before reading risks EPIPE on the writer.
+cat >/dev/null 2>/dev/null
+
+case "$url" in
+  github.com:*|git@github.com:*|ssh://git@github.com:*|ssh://git@github.com/*|https://github.com/*|http://github.com/*) ;;
+  *) exit 0 ;;
+esac
+
+[ "${HERMES_ALLOW_PUSH:-}" = "1" ] && exit 0
+
+cat >&2 <<'EOF'
+
+git push: REFUSED by the container's pre-push hook — publish instead.
+
+Commits created by a push can never carry a GitHub signature: a GitHub
+App has no account settings, so no signing key can be registered, and
+the only commit GitHub verifies for an App is one it creates itself
+through the API. A repo requiring signed commits (required_signatures
+in a branch ruleset) blocks the merge with every check green, and the
+only repair is a full branch rewrite — which dismisses every standing
+approval and re-runs CI.
+
+Publish with:  git-publish.py [-C <worktree>] [-b <branch>]
+  Replays the branch's own commits as API-created ones that GitHub
+  signs (preserving messages, diffs, modes, deletes; re-pointing each
+  Signed-off-by at the identity actually stamped). First run creates
+  the remote branch and `gh pr create` works straight after it.
+  An existing branch of unsigned commits (already published): repair it
+  with  git-publish.py --replay-from <fork-point> --force .
+
+A deliberate `git push` is still possible exactly once, on purpose:
+  HERMES_ALLOW_PUSH=1 git push ...
+
+EOF
+exit 1

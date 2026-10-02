@@ -235,6 +235,31 @@ Either way **the verdict is yours, and so is the read-back.** A child's
 approve on a summary you did not check. You still never push, never commit,
 never author a fix.
 
+### The shared host runs more than one e2e suite at the same time
+
+Your verification run and the developer's fix-round run are supposed to
+overlap — but a suite binding fixed loopback ports (mach: 8099 for the
+control plane, 8098/8097 for the web-UI section) collides: the second
+run cannot bind its server, and an improvised cleanup that
+`pkill -f`'s a server-name pattern kills the OTHER profile's server
+(mid-run), so the other side sees connection-refused and unrelated
+assertion failures that look like genuine findings. Both #31-round-3
+and #34 degraded this way, and only the exclusive re-runs were
+evidence worth quoting.
+
+- **Before starting the suite**, look: `lsof -nP -iTCP:8099 -iTCP:8098
+  -iTCP:8097 -sTCP:LISTEN`. Occupied → wait for that run to end, or pass a
+  distinct triple: `MACH_TEST_PORT=8119 MACH_TEST_UI_PORT=8118
+  MACH_TEST_IDP_PORT=8117 scripts/e2e.sh`.
+- **A degraded run is never a verdict.** Failures that are
+  connection/setup-shaped, or unrelated assertions failing around a server
+  that died mid-run, are collision signatures — re-run exclusively before
+  you approve OR reject off that suite, and in the review name which run
+  was authoritative. The developer's diff is judged on the exclusive one.
+- **Kill only what you started**: e2e.sh's own cleanup is
+  `$WORKDIR`-scoped; never a pattern-based pkill you did not verify against
+  another run.
+
 ## Verdicts
 
 - **Request changes**: one GitHub review; every finding as a separate

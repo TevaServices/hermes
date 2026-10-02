@@ -447,10 +447,12 @@ configure_github_for_home() {  # <tool_home> [profile_name]
   # owner. (Verified against git 2.54: with the default false, the path
   # is not sent at all and per-owner routing is impossible.)
   #
-  # core.hooksPath is the DCO sign-off hook (/opt/hermes-git-hooks): it
-  # adds a `Signed-off-by:` matching the commit's own identity, but only
-  # in repos that declare a DCO rule in CONTRIBUTING.md or a CI
-  # workflow. Per-HOME global config is the right scope, not per-repo:
+  # core.hooksPath is the git-hooks dir (/opt/hermes-git-hooks): the DCO
+  # sign-off hook (adds a `Signed-off-by:` matching the commit's own
+  # identity, but only in repos that declare a DCO rule in
+  # CONTRIBUTING.md or a CI workflow) and the pre-push hook (refuses a
+  # `git push` from a bot identity — publishing is `git-publish.py`).
+  # Per-HOME global config is the right scope, not per-repo:
   # the repos are cloned at runtime (git-repo.sh), and a worktree shares
   # its common dir's hooks — so pointing at an image path is the only
   # way every repo and worktree gets it without a runtime install step.

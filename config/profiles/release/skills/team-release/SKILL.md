@@ -99,6 +99,22 @@ Every one of these must hold:
 
 - `review/approved` is present and the PR is not a draft;
 - `mergeable` is `MERGEABLE` and `mergeStateStatus` is not `BLOCKED`;
+- and it is not `CONFLICTING`/`DIRTY` either — another landed PR changed
+  the same lines, and **nobody's queue owns that state** (the item's issue
+  sits at `status/in-review`, which the developer's queue does not poll),
+  so the PR would sit there forever while looking busy. Route it back in
+  this turn: comment on the PR the deterministic fix recipe — fetch, rebase
+  onto the base branch, resolve (for a repo's test-count line the union is
+  MAIN's count plus the branch's delta — re-deriving the total from the
+  branch's own history double-counts what main already holds), then
+  `git-publish.py --replay-from origin/<base> --force`, then re-add
+  `review/ready` — and mention `@hermes-planner` so the card returns to
+  the developer. **The replay runs from the developer's profile** —
+  commits replayed under any other profile's identity mis-attribute the
+  work, and this profile's boundary is that it never publishes, never
+  pushes and never rebases someone else's branch. (Dry-running a repair
+  locally is fine and is good evidence; executing it on the branch is
+  not your write.)
 - the **most recent non-bot review is `APPROVED`**, and its author appears in
   `CODEOWNERS`. Most-recent, not "any": a later changes-requested re-closes
   the gate. A bot's approval does not count — the reviewer bot approves hours
