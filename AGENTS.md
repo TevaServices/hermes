@@ -528,6 +528,28 @@ repo owner.**
   the owner (verified against git 2.54; per-URL credential config keys
   were rejected because git's urlmatch path compare is case-sensitive
   while GitHub owners are case-insensitive).
+- **The shim also carries a LABEL GATE** (added after the misfiled labels
+  kept happening despite three layers of prose — conventions skill, handoff
+  read-back, queue guard). Before it execs gh-real (and BEFORE the
+  `GH_TOKEN` passthrough, so a preset token — a queue script's forced call
+  or the `gh-org-token`-minted one — cannot route around it), the shim
+  refuses mechanically: a `review/*` label on an issue or a `status/*`
+  label on a PR (`gh issue edit|create`, `gh pr edit|create`; every label
+  flag spelling including `-l` and comma lists — `type/*` is legal on
+  both), and, for the **reviewer profile** (`$HOME` under
+  `profiles/reviewer/home`, or `$HERMES_HOME` under `profiles/reviewer`),
+  any `gh issue edit|close|reopen` (card moves route to planner via
+  `@hermes-planner`; comments stay open). A refusal is stderr + exit 1
+  **without** calling gh-real, and its message names the invariant and the
+  corrective command shape in the FOREIGN LABEL guard's wording — hard
+  block, never auto-correct (the shim cannot know which PR closes which
+  issue). **What it deliberately does NOT cover: `gh api` label writes**
+  — the endpoint scanner cannot know which argv members are flag values
+  and a body may be a file, so the REST spelling stays the
+  `!! FOREIGN LABEL` queue guard's net. Fail-open for every profile that
+  is not the reviewer (default profile, human shells, cron children where
+  the signal is absent): the family gate is object-kind-based and applies
+  everywhere regardless. Covered offline in `scripts/test-gh-shim.sh`.
 - **Commit identity**: org worktrees commit as the org bot —
   `git-repo.sh worktree` sets `user.name`/`user.email` in the worktree's
   own `config.worktree` (needs `extensions.worktreeConfig`, which it
@@ -1240,8 +1262,21 @@ every 5-minute tick (add `review/ready`, drop `status/in-progress`; add
 `status/in-progress` back) until the container was paused by hand in
 Komodo.
 
-Three things now hold, and each is enforced somewhere mechanical rather
+Four things now hold, and each is enforced somewhere mechanical rather
 than by remembering it:
+
+- **The write site is fenced** (2026-10-02, after the same misfile shape
+  recurred even with the three guards below in place — `review/ready` on
+  the issue, card left at `status/ready` during review): the gh shim
+  refuses a wrong-object label edit before gh-real runs, and refuses every
+  `gh issue edit|close|reopen` from the reviewer profile (see §GitHub
+  access, "The shim also carries a LABEL GATE"). The refusal message names
+  the invariant and the corrective command, so it is the teaching moment
+  at the moment of misuse rather than at skill-load time. Since the CLI
+  label-edit path can no longer produce a misfile at all, the
+  `!! FOREIGN LABEL` guard's role narrows to the spellings no gate covers
+  (a label written through `gh api`, which the shim deliberately does not
+  screen).
 
 - **Ownership is stated once**, in the shared `team-conventions` skill
   ("The routing labels" — the fifteen labels with added-by/removed-by
@@ -1279,8 +1314,9 @@ than by remembering it:
     `AUTHOR FILTER DROPPED` below). Both slots are cleared by a healthy run,
     so a fault that returns is reported again.
   - The misfile happens anyway — a handoff turn has skipped the read even
-    where the skill stated the opposite — so the guard is not the whole
-    answer. Its undo line now also
+    where the skill stated the opposite — so guards that only REPORT are
+    not the whole answer (the gh shim's label gate is now the prevention
+    half). Its undo line now also
     names restoring the card (`status/ready`, an issue edit) for an issue left
     with no `status/*` at all — removing the misfile alone leaves the item
     laneless still — and `team-developer`'s handoff steps read the labels

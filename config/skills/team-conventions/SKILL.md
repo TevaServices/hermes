@@ -191,6 +191,17 @@ gh pr list --repo <owner>/<repo> --state open \
   (`review/approved` or `review/changes`) plus the code-owner review
   request. Merge, tag, deploy and validate are release's, end to end.
 
+A backstop the stack runs for the rules above: the `gh` shim refuses,
+before gh ever runs, any label command whose family contradicts its object
+(`review/*` on an issue, `status/*` on a PR — `type/*` is always legal) and
+any `gh issue edit`/`close`/`reopen` issued from the reviewer's profile. A
+refusal is the machine repeating the rule, not a new problem: read its
+message, which names the wrong label and the command shape that puts it on
+the right object (the PR whose body says `Closes #N`). Do not rework the
+call into another spelling to get past it — `gh api` label writes can slip
+the shim, but the queues' FOREIGN LABEL guard reports exactly that shape,
+and the report is an incident either way.
+
 That last rule is the one this team got wrong. The reviewer's verdict
 steps used to say "Card → In Progress / In Review / Done", and on a
 label-mechanism repo the card *is* the `status/*` label — so a failed
