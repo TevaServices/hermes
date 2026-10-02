@@ -198,7 +198,11 @@ done
 # covered by the queues' FOREIGN LABEL guard, which re-reads the real
 # objects on every tick.
 is_reviewer() {
-    case "$HERMES_HOME" in
+    # ${HERMES_HOME:-} — a bare expansion dies under set -u where the var
+    # is unset; inside the s6 gateway it is always set, which is why this
+    # worked there and exploded anywhere else (observed as "HERMES_HOME:
+    # unbound variable" from test-gh-shim.sh on a laptop).
+    case "${HERMES_HOME:-}" in
         */profiles/reviewer|*/profiles/reviewer/) return 0 ;;
     esac
     case "${HOME:-}" in

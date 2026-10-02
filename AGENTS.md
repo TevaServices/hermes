@@ -620,6 +620,26 @@ hook; and its detection is in-repo only, so a DCO requirement expressed
 solely as branch protection or an outside app is invisible to it — which is
 what the documented read is for.
 
+### The pre-push hook — the developer's publish path is git-publish.py, never git push
+
+The same `core.hooksPath` install carries a second hook,
+`docker/hermes/git-hooks/pre-push`, which **refuses a `git push` to any
+GitHub remote from every profile's tool-home**. It exists because the
+§"`required_signatures`" dance was observed to cost a PR four review
+rounds: pushes are unsigned forever from a bot identity, each push
+eventually became a full branch rewrite (a forced `git-publish.py` replay),
+each rewrite dismissed every standing approval, and the human re-approved
+byte-identical content. The refusal (stderr + exit 1, gh-real never run —
+same shape as the gh shim's label gate) names `git-publish.py` and the one
+escape, `HERMES_ALLOW_PUSH=1`; it applies to every github.com URL spelling
+and passes non-GitHub remotes through. The DCO hook's
+"never-fail" philosophy is deliberately NOT shared here: a pushed branch has
+no in-place repair, so refusing at the moment of misuse is the lesser cost.
+`--no-verify` skips it like any hook; `git-publish.py` is unaffected (it
+publishes through the git-data API, not a push). Both hooks are pinned
+offline by `scripts/test-git-hooks.sh` (`mise run test`) — including the
+real-commits DCO cases the §Verification checklist probes live.
+
 ### The merge gates a green CI cannot see (signed commits, resolved threads)
 
 A ruleset can gate a merge on conditions **no workflow job reports**, so a
@@ -663,7 +683,13 @@ it left unmet.
   (`docker/hermes/`), which replays the branch's local commits as
   API-created ones — blobs → trees → commits → ref — preserving every
   message, diff, file mode (100755), symlink and delete, and re-pointing
-  each `Signed-off-by:` at the identity GitHub actually stamps. That last
+  each `Signed-off-by:` at the identity GitHub actually stamps. The
+  publish path is also mechanically the only one now: the pre-push hook
+  (see the hook section above) refuses a `git push` from the agents'
+  tool-homes outright — on ruleset-gated repos this is what keeps a
+  content-preserving signature repair from ever being needed again, since
+  a branch published with the API carries `verified: true` from its first
+  commit. That last
   part is not cosmetic: the DCO hook's trailer names the WORKTREE's git
   config, which can be a different bot from the token the push routes
   through (those commits were signed off by the PERSONAL App's identity
@@ -1712,6 +1738,14 @@ docker exec -e HOME=/opt/data/profiles/developer/home hermes-main \
 # `git push` replacement — see §"The merge gates a green CI cannot see"):
 docker exec hermes-main test -x /usr/local/bin/git-publish.py && echo "publish ok"
 docker exec hermes-main ls -l /opt/hermes-git-hooks/prepare-commit-msg   # 0755
+docker exec hermes-main ls -l /opt/hermes-git-hooks/pre-push             # 0755
+# pre-push hook probe: a github.com push is refused with the publish path
+# named; the escape passes it; a non-GitHub remote passes through.
+docker exec -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
+  printf "refs/heads/x %s refs/heads/y %s\n" 0000000000000000000000000000000000000000 0000000000000000000000000000000000000000 |
+  sh /opt/hermes-git-hooks/pre-push origin https://github.com/owner/repo.git 2>&1 | head -3'
+#   -> "git push: REFUSED ... publish instead" + naming git-publish.py. With
+#      HERMES_ALLOW_PUSH=1 prefixed to the sh invocation it exits 0 silently.
 # Functional probe, in a throwaway repo: a repo that declares DCO gets the
 # trailer, one that does not stays byte-identical. No network, no clone.
 docker exec -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '

@@ -20,8 +20,9 @@
 #     in the central bare repo — they add worktrees.
 #   - Git refuses to check the same branch out in two worktrees. If the
 #     requested branch is already checked out anywhere, the worktree gets
-#     its own branch `s/<slug>` created from that branch instead; push a
-#     session branch with `git push origin HEAD:<branch>`.
+#     its own branch `s/<slug>` created from that branch instead; publish
+#     a session branch with `git-publish.py -b <sbranch>` (never `git
+#     push` — a bot's pushed commits are unsigned and unfixable in place).
 #
 # Usage:
 #   git-repo.sh ensure <git-url>
@@ -168,7 +169,7 @@ case "$cmd" in
       if grep -qiE "already used by worktree|already checked out" /tmp/git-repo-wt.err 2>/dev/null; then
         sbranch="s/$(session_slug | cut -c1-40)"
         git -C "$bare" worktree add -b "$sbranch" "$dest" "$branch"
-        echo "git-repo: branch '$branch' was taken; session branch '$sbranch' created (push with: git push origin HEAD:$branch)" >&2
+        echo "git-repo: branch '$branch' was taken; session branch '$sbranch' created (publish with: git-publish.py -b $sbranch)" >&2
       else
         cat /tmp/git-repo-wt.err >&2
         rm -f /tmp/git-repo-wt.err
