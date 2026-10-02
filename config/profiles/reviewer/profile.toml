@@ -14,11 +14,10 @@
 # config/models.toml; which backend sits behind each one is
 # config/litellm.yaml's business.
 model = "smartest"
-# The tier a failing primary moves to. render.py emits this as the
-# `fallback_providers` chain Hermes walks, in order, when the primary fails
-# with rate-limit, overload or connection errors (hermes_cli/fallback_config).
-# The entry is built FROM the tier, so it follows a backend swap automatically.
-fallback_model = "smarter"
+# No fallback_model: Hermes must not fail between tiers/models (2026-10-02 —
+# LiteLLM's router fallbacks own the failure path instead: a failing tier
+# deployment cools down and the SAME tier is served by its OpenRouter
+# fallback, config/litellm.yaml router_settings.fallbacks).
 integrations = ["honcho", "firecrawl"]
 platforms = ["discord"]
 

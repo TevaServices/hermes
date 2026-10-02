@@ -81,6 +81,43 @@ model_list:
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
 
+  # ── OpenRouter fallbacks — consulted ONLY when a tier's Ollama Cloud
+  #    deployment fails (router_settings.fallbacks below). NOT tier members:
+  #    they never split healthy tier traffic (latency-based-routing would
+  #    send real work to the paid provider otherwise), so a request that
+  #    names a tier hits Ollama while it is healthy and hits these ONLY
+  #    through the cooldown fallback path. Same-model matching, pinned from
+  #    OpenRouter's own catalog (GET openrouter.ai/api/v1/models — recheck
+  #    with scripts/check-model-windows.py, which enforces both the window
+  #    contract and tools support): every fallback's window is >= its tier's
+  #    declared window (config/models.toml), because a fallback with a
+  #    smaller window silently breaks long-context work. Name == the
+  #    OpenRouter id so `gh`-shaped callers, the /model switch and curl can
+  #    exercise each one directly (also how /v1/models lists them).
+  #    kimi-k3 rides `smartest` as its second fallback (1M, vision — the
+  #    drop-in swap the tier comment names, used here as the second-choice
+  #    fallback rather than as the tier).
+  - model_name: openrouter/nvidia/nemotron-3-nano-30b-a3b
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-nano-30b-a3b
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: openrouter/google/gemma-4-31b-it
+    litellm_params:
+      model: openrouter/google/gemma-4-31b-it
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: openrouter/z-ai/glm-5.3-flash
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: openrouter/z-ai/glm-5.3
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: openrouter/moonshotai/kimi-k3
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k3
+      api_key: os.environ/OPENROUTER_API_KEY
+
   # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). NOT a tier: it
   #    serves one app that only ever ingests PUBLIC web pages, and is
   #    OpenRouter ONLY because schema-bound extraction needs
@@ -131,8 +168,43 @@ router_settings:
   # Caveat for firecrawl: latency-based routing CONCENTRATES traffic on the
   # faster member where simple-shuffle would split it 50/50, so free-tier
   # rate-limit pressure lands differently. If extraction starts returning
-  # errors, delete this block (the default is simple-shuffle).
+  # errors, delete this block (the default is simple-shuffle). Note
+  # cooldown_time below now also applies to the firecrawl members — a 429
+  # parks one for the cooldown while its sibling serves.
   routing_strategy: latency-based-routing
+  num_retries: 1
+  cooldown_time: 60
+  # ── Ollama Cloud outage fallbacks (observed live 2026-10-02 17:50Z:
+  #    Ollama's subscription "session usage limit" 429'd every tier, retried
+  #    twice, then propagated to the callers). A failed tier deployment —
+  #    429/subscription limit, 401, timeout, connection failure — cools the
+  #    Ollama deployment down per-deployment (cooldown_time above; a 429
+  #    cools down IMMEDIATELY, no need to exceed allowed_fails), the request
+  #    fails over to the listed OpenRouter id in order, and the cooled
+  #    deployment is re-probed when the cooldown expires — so a refreshed
+  #    Ollama subscription returns traffic to Ollama on its own, observable
+  #    via the response's `model` field / x-litellm-model-api-base header and
+  #    litellm's own cooldown log lines. Cooldown state is in-memory: a
+  #    gateway recreate resets it. During the window requests inside the
+  #    cooldown go STRAIGHT to the fallback (no retry latency).
+  #
+  #    Every fallback is a same-model match on OpenRouter with a window >=
+  #    its tier's declared window and tools support — the pair is what
+  #    scripts/check-model-windows.py enforces. Hermes does not fail between
+  #    tiers on top of this (no fallback_model in the profiles) — the gateway
+  #    owns the failure path.
+  #
+  #    NO `firecrawl` entry (its two :free members fail over within the
+  #    group) and NO `default_fallbacks` (that would give the `ollama/*`
+  #    wildcard route a fallback and a silent paid path — the wildcard is
+  #    explicitly single-passthrough). One fallback list per line, a plain
+  #    JSON array value — that literal shape is what
+  #    scripts/check-model-windows.py parses.
+  fallbacks:
+    - cheap: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
+    - smart: ["openrouter/google/gemma-4-31b-it"]
+    - smarter: ["openrouter/z-ai/glm-5.3-flash"]
+    - smartest: ["openrouter/z-ai/glm-5.3", "openrouter/moonshotai/kimi-k3"]
 
 litellm_settings:
   # Expand the "ollama/*" wildcard in /v1/models by querying the
@@ -140,3 +212,10 @@ litellm_settings:
   # the wildcard) instead of falling back to LiteLLM's static OpenAI
   # catalogue.
   check_provider_endpoint: true
+  # Drop provider-unsupported request params instead of erroring. This is
+  # the documented fix for the failure observed live 2026-10-02: OpenAI
+  # clients send embeddings with the DEFAULT `encoding_format: float`,
+  # which the ollama provider rejects (`UnsupportedParamsError`) — Honcho's
+  # nomic-embed-text calls were failing on it. Dropping is safe here: the
+  # ollama provider returns floats regardless.
+  drop_params: true
