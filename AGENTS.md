@@ -331,11 +331,30 @@ Verified against the live image + `firecrawl-mcp@3.27.3`, 2026-10-03:
   schema accepts only `{prompt, schema}` and **drops the flag entirely** (0
   occurrences in the bundle); and there is **no force env var** — it is a
   per-request opt-in. It also **fails open** by design ("proceeding without a
-  guard verdict"). It works self-hosted when it does run, because
-  `getModel()` resolves `MODEL_NAME=firecrawl` → the LiteLLM `firecrawl`
-  group (OpenRouter free, which passes `json_schema`). The guard therefore
-  **forces the flag on** — reuse, not reimplementation — and the live check
-  below is whether it is silently failing open.
+  guard verdict"). It resolves its model through `getModel()`, so
+  `MODEL_NAME=firecrawl` sends it to the LiteLLM `firecrawl` group — but as of
+  2026-10-03 that group **404s on every call** (see below), so the classifier
+  currently runs, fails, and fails open: the json-extraction lane is NOT
+  guarded today. The guard still **forces the flag on**, because that is the
+  correct posture the moment the group is fixed, and the live check below is
+  exactly how to tell which state you are in.
+
+- **The `firecrawl` LiteLLM group is broken (found 2026-10-03, pre-existing).**
+  Both its members are OpenRouter `:free` models, and the account's OpenRouter
+  guardrail now excludes them: *"0 endpoints out of 1 requested are available
+  matching your guardrail restrictions and data policy … ZDR violation
+  (guardrail): 1 endpoint excluded"*. This fails for the `/responses` shape the
+  classifier uses AND the `/chat/completions` extraction shape alike — so it is
+  the **model group, not the call shape**, and it takes Firecrawl's `/extract`
+  and v2 json-format scrapes down with it, not just the classifier. The first
+  occurrence in 24h of litellm logs was the guard's own probe, i.e. nothing had
+  exercised the group recently — it is a latent breakage the guard surfaced, not
+  one it caused. Free OpenRouter endpoints and a ZDR guardrail are in tension by
+  construction: the account setting is at
+  `https://openrouter.ai/workspaces/default/guardrails`, and the alternatives
+  are to relax it or to point the group at an endpoint that offers ZDR. Every
+  failed call also cools the group down (`cooldown_time: 60`), which is why a
+  json scrape leaves the group unusable for a minute afterwards.
 - **Lockdown mode** is a true no-egress guarantee but is *scrape-only*, and
   self-hosted it is a hard **refuse-everything** switch, not a cache mode:
   `useIndex` is `config.INDEX_DATABASE_URL !== undefined`, and with that unset
@@ -1901,6 +1920,17 @@ docker logs firecrawl-api 2>&1 | grep -i 'prompt injection' | tail -3
 #   -> "Prompt injection detected..." or nothing; a repeated
 #      "guard call failed ... (fail-open)" means MODEL_NAME/OPENROUTER broke
 #      and the json-extraction lane is unguarded until it is fixed.
+# Confirm which side is broken — the model group, or just the guard call —
+# with the extraction shape. 404 "ZDR violation (guardrail)" means the GROUP
+# is down (so /extract is down too); a 429 "all deployments in cooldown" is
+# the aftermath of a failure, not a cause:
+docker exec -e HOME=/opt/data/home hermes-main python3 -c "
+import json,os,urllib.request,urllib.error
+r=urllib.request.Request('http://litellm:4000/v1/chat/completions',
+  data=json.dumps({'model':'firecrawl','messages':[{'role':'user','content':'hi'}],'max_tokens':5}).encode(),
+  headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['LITELLM_API_KEY']})
+try: print('ok', urllib.request.urlopen(r,timeout=60).status)
+except urllib.error.HTTPError as e: print('HTTP', e.code, e.read()[:200].decode())"
 # The brake, live (flip in the stack environment, then deploy; no rebuild):
 #   FIRECRAWL_EGRESS=closed    -> every fetch refused
 #   FIRECRAWL_EGRESS=cache-only-> warmed pages served, everything else refused
