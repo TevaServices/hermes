@@ -591,6 +591,33 @@ repo owner.**
   `scripts/test-gh-shim.sh` (`R3 …`); the planner's authoring procedure and
   the release skill's failure-filing example were both moved to
   `--body-file` in the same change.
+- **The shim also carries a CI GATE** — a write that ASSERTS a verdict on a
+  PR is refused while a check is red or still running. Those writes are
+  `gh pr edit <PR#> --add-label review/ready` (the handoff),
+  `gh pr edit <PR#> --add-label review/approved` and the
+  `gh pr review <PR#> --approve` that IS the GitHub approval (the verdict),
+  and `gh pr merge <PR#>`. It is the one gate that makes a network call (`pr checks
+  --json bucket --jq …`, so no `jq` dependency), which is why owner
+  resolution moved ABOVE the `GH_TOKEN` passthrough with it — a preset token
+  is the documented way to force an org token, so a gate below that line
+  would fence nothing. It **fails open**, deliberately: only a positively
+  observed red/running check refuses, while "no checks reported", an unknown
+  bucket, an API error or an unparseable answer pass through, because a gate
+  that blocks on "I could not tell" reads as a permission problem. A
+  **rejection is never gated** (`review/changes`, `--request-changes`, and
+  the claim that swaps `review/ready` → `review/in-progress`) — a red PR must
+  always be sendable back. The gate exists because prose alone did not hold:
+  both skills already said to watch CI green, and a handoff went out two
+  seconds after the push (before the checks had started) and was approved
+  minutes later with a check already red. The half no gate can do is the
+  waiting, so the skills carry it too — `gh pr checks <PR#> --repo
+  <owner>/<repo> --watch` before the handoff, a checks read before the
+  verdict, and a green local run explicitly overridden by a red CI (the
+  disagreement is the finding). All three halves are pinned offline:
+  `scripts/test-gh-shim.sh` (`R4 …`) and `scripts/test-team-labels.sh`
+  (§2c). Note `mergeStateStatus` is NOT a CI read — a ruleset requiring no
+  status checks leaves a red job in no field of it, which is why the gate and
+  the skills both key on `gh pr checks`.
 - **Commit identity**: org worktrees commit as the org bot —
   `git-repo.sh worktree` sets `user.name`/`user.email` in the worktree's
   own `config.worktree` (needs `extensions.worktreeConfig`, which it

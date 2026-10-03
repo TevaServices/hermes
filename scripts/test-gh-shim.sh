@@ -32,6 +32,15 @@
 # The body fixtures use SINGLE quotes on purpose — inside double quotes
 # this test file would run the command substitution it is testing for.
 #
+# `R4 …` is the CI GATE: a write that ASSERTS a verdict on a PR — the handoff
+# (review/ready), the verdict (review/approved, or the `pr review --approve`
+# that IS the approval), and the merge — is refused while a check is red or
+# still running. It is the one gate that runs gh-real (that is how it asks),
+# so its cases assert the real command did not happen rather than that the stub
+# was never reached, and they cover the FAIL-OPEN half too: no checks reported,
+# an unknown bucket and a query it cannot make all pass through, and a
+# rejection (`review/changes`, `--request-changes`) is never gated.
+#
 #   $ mise run test-gh-shim      (or: sh scripts/test-gh-shim.sh)
 
 set -u
@@ -53,8 +62,20 @@ mkdir -p "$tmp/bin" "$tmp/home/org-creds"
 
 # Stand-in for gh-real: report the identity the shim chose, then stop.
 # (The real CLI is what needs the network; the shim's decision does not.)
+#
+# The `pr checks` arm exists for the CI gate (R4), which is the ONE gate that
+# has to run gh-real to ask its question — it reads this stub's answer off
+# stdout the way the real gate reads gh's. $CHECKS_STUB pins the bucket list
+# `--json bucket --jq …` would have printed; unset means "no checks reported"
+# (also what a failed query looks like), and the real gh exits non-zero there,
+# which the gate must not read as a verdict.
 cat > "$tmp/bin/gh-real" <<'STUB'
 #!/bin/sh
+if [ "${1:-}" = pr ] && [ "${2:-}" = checks ]; then
+    [ -n "${CHECKS_STUB-}" ] || exit 1
+    printf '%s\n' "$CHECKS_STUB"
+    exit 0
+fi
 printf 'token=%s\n' "${GH_TOKEN:-<none>}"
 STUB
 
@@ -489,6 +510,96 @@ case_run "preset GH_TOKEN wins" \
 case_run "gh auth * passthrough" \
     "$PERSONAL" "$tmp/wt-org" "" \
     auth status
+
+# --- R4: the CI gate --------------------------------------------------------
+# A verdict write (the handoff, the verdict, the approval, the merge) is
+# refused while CI is red or still running. Unlike the gates above, this one
+# RUNS gh-real (that is how it asks), so the assertion is not "the stub was
+# never exec'd" — it is that the real command did not happen, which shows up
+# as a missing `token=` line, plus a refusal on stderr.
+#
+#   $1 name  $2 CHECKS_STUB answer  $3 "refused" or the expected stdout
+#   $4 marker required on stderr when refused
+# CI_PRESET=… on the call presets GH_TOKEN, which must not route around the
+# gate any more than it routes around the label gate (the queue scripts set it
+# on every call).
+case_ci() {
+    name="$1"; checks="$2"; mode="$3"; marker="${4:-}"; shift 4
+    # An assignment prefixed to a FUNCTION call persists after it returns (a
+    # POSIX sh quirk — only a simple command's assignment is scoped), so clear
+    # it here or the next case inherits this one's preset token.
+    preset="${CI_PRESET:-}"; CI_PRESET=""
+    if [ -n "$preset" ]; then
+        out=$(cd "$tmp/scratch" && env HOME="$tmp/home" GH_TOKEN="$preset" \
+                GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+                CHECKS_STUB="$checks" GIT_CEILING_DIRECTORIES="$tmp" \
+                sh "$shim" "$@" 2>&1); rc=$?
+    else
+        out=$(cd "$tmp/scratch" && env -u GH_TOKEN HOME="$tmp/home" \
+                GH_REAL="$tmp/bin/gh-real" PATH="$tmp/bin:$PATH" \
+                CHECKS_STUB="$checks" GIT_CEILING_DIRECTORIES="$tmp" \
+                sh "$shim" "$@" 2>&1); rc=$?
+    fi
+    ran=""
+    case "$out" in *"token="*) ran=" (the command ran anyway)";; esac
+    if [ "$mode" = refused ]; then
+        hit=""
+        case "$out" in *"$marker"*) ;; *) hit=" — stderr lacks '$marker'";; esac
+        if [ "$rc" -eq 0 ] || [ -n "$ran" ] || [ -n "$hit" ]; then
+            printf 'FAIL %-34s rc=%s%s%s\n' "$name" "$rc" "$ran" "$hit"
+            fail=$((fail + 1))
+        else
+            printf 'ok   %-34s refused\n' "$name"
+            pass=$((pass + 1))
+        fi
+        return
+    fi
+    if [ "$out" = "$mode" ]; then
+        printf 'ok   %-34s %s\n' "$name" "$out"
+        pass=$((pass + 1))
+    else
+        printf 'FAIL %-34s expected %s, got %s\n' "$name" "$mode" "$out"
+        fail=$((fail + 1))
+    fi
+}
+
+case_ci "R4 handoff, CI red"             "fail,pass"    refused "CI is RED" \
+    pr edit 44 --repo bcross/widget --add-label review/ready
+case_ci "R4 handoff, CI still running"   "pending,pass" refused "still RUNNING" \
+    pr edit 44 --repo bcross/widget --add-label review/ready
+case_ci "R4 verdict, CI red"             "fail"         refused "CI is RED" \
+    pr edit 44 --repo bcross/widget --add-label review/approved
+case_ci "R4 the approval itself"         "fail,pass"    refused "CI is RED" \
+    pr review 44 --repo bcross/widget --approve
+case_ci "R4 approval, cancel bucket"     "cancel"       refused "CI is RED" \
+    pr review 44 --repo bcross/widget --approve
+case_ci "R4 merge, CI red"               "fail"         refused "CI is RED" \
+    pr merge 44 --repo bcross/widget --squash
+case_ci "R4 org repo, CI red"            "fail"         refused "CI is RED" \
+    pr edit 44 --repo acme/widget --add-label review/ready
+CI_PRESET=ghp_explicit case_ci "R4 handoff, preset GH_TOKEN" "fail" refused "CI is RED" \
+    pr edit 44 --repo bcross/widget --add-label review/ready
+
+# The gate must never stand between the reviewer and a rejection, nor between
+# a claim and the work: only the writes that ASSENT are fenced.
+case_ci "R4 pass: CI green"              "pass,skipping" "token=<none>" \
+    pr edit 44 --repo bcross/widget --add-label review/ready
+case_ci "R4 pass: org routing intact"   "pass"          "token=ORGTOKEN:acme" \
+    pr edit 44 --repo acme/widget --add-label review/ready
+case_ci "R4 pass: the claim (a swap)"    "fail"          "token=ORGTOKEN:acme" \
+    pr edit 44 --repo acme/widget --remove-label review/ready --add-label review/in-progress
+case_ci "R4 pass: review/changes"        "fail"          "token=<none>" \
+    pr edit 44 --repo bcross/widget --add-label review/changes
+case_ci "R4 pass: request-changes"       "fail"          "token=<none>" \
+    pr review 44 --repo bcross/widget --request-changes -b 'no'
+case_ci "R4 pass: no checks reported"    ""              "token=<none>" \
+    pr edit 44 --repo bcross/widget --add-label review/ready
+case_ci "R4 pass: unknown bucket"        "weird"         "token=<none>" \
+    pr edit 44 --repo bcross/widget --add-label review/ready
+case_ci "R4 pass: no number to query"    "fail"          "token=<none>" \
+    pr edit --repo bcross/widget --add-label review/ready
+case_ci "R4 pass: not a verdict write"   "fail"          "token=<none>" \
+    pr view 44 --repo bcross/widget
 
 # --- summary ----------------------------------------------------------------
 echo

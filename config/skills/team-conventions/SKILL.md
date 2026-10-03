@@ -1,7 +1,7 @@
 ---
 name: team-conventions
 description: Shared conventions for the agile SaaS team (GitHub-first workflow, identity, cross-referencing, repos)
-version: 1.2.0
+version: 1.3.0
 metadata:
   hermes:
     tags: [team, workflow, github, conventions]
@@ -308,6 +308,25 @@ BLOCKED` with every check green:
   reads this back before emitting a merge, and the release agent reads it
   back again before merging.
 
+**The converse holds too, and it is the easier half to get wrong: a green
+local run is not green CI.** Every check is terminal and green *before* the
+handoff (`review/ready`) and *before* the verdict (`review/approved`, or the
+approval itself) — a `pending` job is not a pass, and a red one is not
+something to approve past and mention. Read it with `gh pr checks <PR#>`, on
+both sides of the handoff, and treat a disagreement between your own run and
+CI as a finding rather than an inconvenience.
+
+That read has no substitute, because **`mergeStateStatus` does not check
+CI**: a ruleset that requires no status checks (`gh api
+repos/<owner>/<repo>/rules/branches/main --jq '.[].type'`) puts nothing in the
+merge state for a red job to change, so a red check appears in no field of it.
+`gh pr checks` is the only read that sees one — the one gate in this pipeline
+that is nobody's backstop but the reader's. The `gh` shim refuses the verdict
+writes themselves (the handoff, the approval, the `review/approved` label and
+the merge) while a check is red or still running, so that mistake meets a wall
+instead of a review cycle; a rejection is never fenced, because a red PR must
+always be sendable back.
+
 Read the state back before claiming a handoff is ready, on both sides:
 
 ```bash
@@ -315,6 +334,7 @@ gh pr view <PR#> --repo owner/repo --json mergeable,mergeStateStatus \
   --jq '"\(.mergeable) \(.mergeStateStatus)"'      # BLOCKED = a setting is unmet
 gh api repos/owner/repo/pulls/<PR#>/commits \
   --jq '[.[].commit.verification.verified] | all'  # false = unsigned commits
+gh pr checks <PR#> --repo owner/repo               # the ONLY read that shows a red one
 ```
 
 ## Surfaces the team does NOT touch (user-owned)

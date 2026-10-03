@@ -31,15 +31,25 @@
 #        gh-real is never exec'd — the message is the teaching moment
 #   2c. body gate — inline `--body`/`-b` on issue/pr create|edit -> refuse,
 #      name --body-file (see "the body gate" below)
-#   3. GH_TOKEN is set          -> passthrough (explicit caller intent;
+#   3. resolve the owner        -> -R/--repo (step 2), else a `gh api`
+#      endpoint path, else the cwd's origin. Above the passthrough because
+#      the CI gate needs it.
+#   4. org descriptor lookup    -> $HOME/org-creds/<owner>.env, which is what
+#      tells the CI gate which identity to ask as (the mint itself is 7)
+#   5. the CI gate — a write that ASSERTS a verdict on a PR (the handoff,
+#      the verdict, the approval, the merge) while CI is RED or STILL
+#      RUNNING -> refuse (see "the CI gate" below). The one gate that makes
+#      a network call, and it FAILS OPEN on anything that is not a
+#      positively observed red/running check.
+#   6. GH_TOKEN is set          -> passthrough (explicit caller intent;
 #      the queue scripts use this to force their own token) — AFTER the
-#      gate, so preset-token calls are fenced too
-#   4. owner has an org descriptor ($HOME/org-creds/<owner>.env)
+#      gates, so preset-token calls are fenced too
+#   7. owner has an org descriptor ($HOME/org-creds/<owner>.env)
 #        -> mint/reuse the org token and exec gh-real with GH_TOKEN
 #      (mint failure = hard error: a descriptor means the caller means
 #      the ORG identity; silently using the personal token would
 #      attribute org work to the wrong bot)
-#   5. anything else            -> exec gh-real unchanged (personal
+#   8. anything else            -> exec gh-real unchanged (personal
 #      token from the tool-home's gh auth state — exactly as before)
 #
 # gh api CARRIES NO -R — gh's own parser rejects it ("unknown shorthand
@@ -127,7 +137,7 @@ done
 # plus the label flags' (see 2b).
 #
 # This scan is a pure argv read and sits ABOVE the GH_TOKEN passthrough
-# (step 3) on purpose: the label gate in 2b must see preset-token calls
+# (step 6) on purpose: the gates in 2b/2c/5 must see preset-token calls
 # too — the queue scripts set GH_TOKEN on every gh call, so a gate below
 # the passthrough would fence nothing that matters.
 #
@@ -150,8 +160,11 @@ done
 #                 `--body` and `--body=…` are the complete spellings) —
 #                 which is what keeps the file shape passing.
 owner=""
+owner_repo=""
 subcmd=""
 action=""
+pr_num=""
+approve=""
 add_labels=""
 rm_labels=""
 body_inline=""
@@ -161,7 +174,7 @@ nl='
 '
 for arg in "$@"; do
     case "$prev" in
-        -R|--repo) owner="$arg"; prev=""; continue ;;
+        -R|--repo) owner="$arg"; owner_repo="$arg"; prev=""; continue ;;
         # --body/-b take a value, and that value is a whole document: it
         # must be swallowed here or a body line could be read as the
         # action/subcommand.
@@ -187,14 +200,14 @@ for arg in "$@"; do
     prev=""
     case "$arg" in
         --) break ;;
-        -R=*) owner="${arg#-R=}" ;;
-        --repo=*) owner="${arg#--repo=}" ;;
+        -R=*) owner="${arg#-R=}"; owner_repo="$owner" ;;
+        --repo=*) owner="${arg#--repo=}"; owner_repo="$owner" ;;
         -R|--repo) prev="$arg" ;;
         --hostname) prev="$arg" ;;
         # Attached shorthand (`-Rowner/repo`), which gh's flag parser accepts.
         # Without this arm it fell to `-*)` and the call silently used the
         # personal token — the same failure this file's header describes.
-        -R?*) owner="${arg#-R}" ;;
+        -R?*) owner="${arg#-R}"; owner_repo="$owner" ;;
         # Label flags in the attached spellings gh accepts (the separated
         # forms are handled by the prev-arm above).
         --add-label=*) add_labels="$add_labels${add_labels:+$nl}${arg#--add-label=}" ;;
@@ -209,6 +222,10 @@ for arg in "$@"; do
         -b=*) case "$subcmd" in issue|pr) body_inline=yes ;; esac ;;
         -b?*) case "$subcmd" in issue|pr) body_inline=yes ;; esac ;;
         --body|-b) prev="$arg" ;;
+        # A boolean flag with no value, captured for the CI gate (5):
+        # `gh pr review --approve` IS the approval, and it must not land on a
+        # head CI has not blessed any more than the label may.
+        --approve) approve=yes ;;
         -*) ;;
         *)
             if [ -z "$subcmd" ]; then subcmd="$arg"; continue; fi
@@ -218,6 +235,13 @@ for arg in "$@"; do
             # clone owner/repo`'s positional-owner detection intact.
             if [ -z "$action" ] && { [ "$subcmd" = issue ] || [ "$subcmd" = pr ]; }; then
                 action="$arg"; continue
+            fi
+            # The number — the first positional AFTER the action, captured
+            # for pr only. `gh pr edit|review|merge <N>` puts it there, and
+            # the CI gate (5) needs it to query the checks; `issue|pr
+            # create` has none, and nothing to query.
+            if [ "$subcmd" = pr ] && [ -z "$pr_num" ]; then
+                pr_num="$arg"; continue
             fi
             # `gh repo <view|clone|create|…> owner/repo`: the positional
             # IS the target — but only when it carries the owner part
@@ -355,10 +379,15 @@ if [ "$subcmd" = issue ] || [ "$subcmd" = pr ]; then
     fi
 fi
 
-# --- 3. explicit token wins ---------------------------------------------------
-[ -n "${GH_TOKEN:-}" ] && exec "$GH_REAL" "$@"
+# --- 3. resolve the owner (endpoint path, then cwd) --------------------------
+# This used to run BELOW the explicit-token passthrough, which was fine while
+# the only gates were argv-shape reads. It cannot stay there now: the CI gate
+# (5) needs the owner, and it must sit ABOVE the passthrough, or a preset
+# GH_TOKEN routes around it — the same reasoning that put the label gate above
+# it. Both scans below are read-only (argv, and one `git remote get-url`), so
+# hoisting them costs a preset-token call nothing but a subprocess.
 
-# --- 4. `gh api` names the owner in the ENDPOINT PATH -----------------------
+# --- 3a. `gh api` names the owner in the ENDPOINT PATH -----------------------
 # `gh api` defines no -R/--repo (see the header), so for it the path is the
 # only owner signal the invocation carries. Matching is deliberately STRICT
 # and anchored — `repos/<owner>/<repo>…` or `orgs/<owner>…`, with an
@@ -403,10 +432,16 @@ if [ -z "$owner" ]; then
         esac
     fi
 fi
+# The CI gate (below) needs the FULL owner/repo; the truncation throws the repo
+# away. Both values come from the same two sources (an explicit -R/--repo, or
+# the cwd's origin URL), so keep the whole one beside the owner. A trailing
+# `.git` (the cwd spelling) is not part of a repo name.
+[ -n "$owner_repo" ] || owner_repo="$owner"
+owner_repo="$(printf '%s' "${owner_repo%.git}" | tr -d '[:space:]')"
 owner="$(printf '%s' "$owner" | cut -d/ -f1 | tr -d '[:space:]')"
 [ -n "$owner" ] || exec "$GH_REAL" "$@"
 
-# --- 5. org descriptor? -------------------------------------------------------
+# --- 4. org descriptor? -------------------------------------------------------
 creds_dir="${ORG_CREDS_DIR:-}"
 [ -n "$creds_dir" ] || creds_dir="${HOME:-}/org-creds"
 owner_slug="$(printf '%s' "$owner" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
@@ -420,6 +455,111 @@ if [ -n "$owner_slug" ] && [ -d "$creds_dir" ]; then
         fi
     done
 fi
+
+# --- 5. the CI gate ----------------------------------------------------------
+# CI is the gateway on CI, and a green local run is not a CI verdict. A write
+# that ASSERTS a verdict on a PR may not land while a check is red or still
+# running: the developer's handoff (review/ready), the reviewer's verdict
+# (review/approved, and the `pr review --approve` that IS the GitHub approval),
+# and the merge. On a repo whose ruleset requires no status checks a red check
+# never appears in mergeStateStatus at all, so `gh pr checks` is the only read
+# that sees it.
+#
+# It FAILS OPEN, deliberately. The query is an API call, so a result that is
+# not a POSITIVELY observed red/running check — no checks configured, no
+# network, no permission, an unparseable answer — passes through. A gate that
+# blocks on "I could not tell" reads as a permission problem, which is the trap
+# this file's header warns about; the skills' prose is still the rule.
+#
+# NOT gated: a rejection. `review/changes`, and the claim that swaps
+# review/ready -> review/in-progress, must always be possible — a red PR the
+# reviewer cannot even pick up is a PR nobody can send back.
+checks_gate() {
+    [ "$subcmd" = pr ] || return 0
+    norm="$(printf '%s' "$add_labels" | tr '\n' ',')"
+    gated=""
+    case "$action" in
+        edit)   case ",$norm," in
+                    *,review/ready,*|*,review/approved,*) gated=yes ;;
+                esac ;;
+        review) [ "${approve:-}" = yes ] && gated=yes ;;
+        merge)  gated=yes ;;
+    esac
+    [ "$gated" = yes ] || return 0
+    case "$pr_num" in ''|*[!0-9]*) return 0 ;; esac
+    case "$owner_repo" in */*) ;; *) return 0 ;; esac
+
+    # The token this check must run under: an explicit GH_TOKEN (the caller's
+    # own choice, and the queue scripts' forced calls), else the org
+    # descriptor's mint for this owner, else gh-real's stored personal token.
+    # A mint failure HERE is not fatal — it means no answer, which fails open;
+    # the refusal for a mint failure is step 7's, not this gate's.
+    ci_token=""
+    if [ -n "${GH_TOKEN:-}" ]; then
+        ci_token="$GH_TOKEN"
+    elif [ -n "$desc" ]; then
+        ci_token="$(gh-org-token "$owner_slug" 2>/dev/null)" || ci_token=""
+    fi
+
+    # gh's own --jq does the parsing (there is no `jq` on this image) and it
+    # reports the same bucket names the skills read: pass|fail|pending|
+    # skipping|cancel. The no-checks case prints nothing and exits non-zero.
+    if [ -n "$ci_token" ]; then
+        buckets="$(GH_TOKEN="$ci_token" "$GH_REAL" pr checks "$pr_num" \
+                     --repo "$owner_repo" --json bucket \
+                     --jq '[.[].bucket]|unique|join(",")' 2>/dev/null)"
+    else
+        buckets="$("$GH_REAL" pr checks "$pr_num" --repo "$owner_repo" \
+                     --json bucket --jq '[.[].bucket]|unique|join(",")' 2>/dev/null)"
+    fi
+    [ -n "$buckets" ] || return 0
+
+    state=""
+    oldIFS=$IFS; IFS=,
+    for b in $buckets; do
+        case "$b" in
+            fail|cancel|cancelled) state="red" ;;          # red outranks running
+            pending) [ -n "$state" ] || state="running" ;;
+        esac
+    done
+    IFS=$oldIFS
+    [ -n "$state" ] || return 0
+
+    case "$state" in
+        red)     headline="CI is RED ($buckets) on $owner_repo#$pr_num" ;;
+        running) headline="CI is still RUNNING ($buckets) on $owner_repo#$pr_num" ;;
+    esac
+    case "$action" in
+        merge) why="Nothing merges with CI red: a merge is the one write no later check can undo." ;;
+        edit)  case ",$norm," in
+                   *,review/ready,*) why="review/ready is the handoff — it goes on only once every check is terminal and GREEN, never while one is still running." ;;
+                   *) why="review/approved is the verdict — an approval over a red or running check blesses a revision CI never ran." ;;
+               esac ;;
+        *)     why="An approval blesses a revision, and CI has not blessed this one." ;;
+    esac
+    {
+        echo "gh shim: refused: $headline — gh-real was not run."
+        echo "  A green local run is not a CI verdict. On a repo whose ruleset requires"
+        echo "  no status checks, a red check never appears in mergeStateStatus at all:"
+        echo "  \`gh pr checks\` is the only read that shows it."
+        echo "  $why"
+        echo "  Watch it to completion, then run the command again:"
+        echo "    gh pr checks $pr_num --repo $owner_repo --watch"
+    } >&2
+    return 1
+}
+checks_gate || exit 1
+
+# --- 6. explicit token wins ---------------------------------------------------
+# BELOW the gate, deliberately — the same reason the label gate is above it:
+# the queue scripts set GH_TOKEN on every gh call, and the documented way to
+# force an org token is `GH_TOKEN="$(gh-org-token <slug>)"`, so a gate below
+# this line would fence nothing that matters.
+[ -n "${GH_TOKEN:-}" ] && exec "$GH_REAL" "$@"
+
+# --- 7. mint the org token and exec -------------------------------------------
+# A descriptor means the caller means the ORG identity; silently using the
+# personal token would attribute org work to the wrong bot.
 if [ -z "$desc" ]; then
     exec "$GH_REAL" "$@"
 fi

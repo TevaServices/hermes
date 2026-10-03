@@ -1,7 +1,7 @@
 ---
 name: team-developer
 description: Developer role procedure — self-pull work discovery, worktree discipline, draft PRs, roadblock protocol
-version: 1.4.0
+version: 1.5.0
 metadata:
   hermes:
     tags: [team, developer]
@@ -332,12 +332,29 @@ why there: an open thread is a statement, so make it one.
    it, so a PR with no type contributes only a patch. If the issue somehow
    has none, say so in the PR rather than guessing silently.
 3. Verify before marking ready: tests, lint, type checks — whatever the
-   repo's CI runs, run locally. If CI exists, watch it green — and read
-   `gh pr checks <PR#>` for **every** job, not only the ones your local
-   suite mirrors. A policy job (DCO sign-off, license header, commit
-   format) fails the PR exactly as hard as a red test, and it is
-   precisely the job a local run cannot tell you about. Then read back
-   the two things a green CI cannot tell you, because they are repo
+   repo's CI runs, run locally. Then read `gh pr checks <PR#>` for
+   **every** job, not only the ones your local suite mirrors. A policy job
+   (DCO sign-off, license header, commit format) fails the PR exactly as
+   hard as a red test, and it is precisely the job a local run cannot tell
+   you about.
+
+   **`review/ready` goes on only once every check has finished GREEN — wait
+   for CI, do not hand off and hope.** One command does the waiting:
+
+   ```bash
+   gh pr checks <PR#> --repo owner/repo --watch   # blocks until the last job ends
+   ```
+
+   `--watch` runs until every job has finished and exits non-zero if any
+   failed. **A `pending` check is not a pass.** The label IS the handoff, so
+   adding it while CI is still running hands the reviewer a revision CI has
+   not blessed — and a reviewer that runs its gates on that revision can only
+   approve a commit nothing has validated. Any `fail`/`cancelled`/`timed_out`
+   is fixed HERE: the same branch, re-published, watched again. Handing off a
+   red PR to be told about it spends a whole review round to learn what CI
+   already said.
+
+   Then read back the things CI cannot tell you, because they are repo
    *settings* rather than jobs — `mergeStateStatus` must not be `BLOCKED`:
 
    ```bash
@@ -437,6 +454,9 @@ why there: an open thread is a statement, so make it one.
    gh pr view <PR#> --repo owner/repo --json labels \
      --jq '[.labels[].name] | join(", ")'
    #   want: review/ready (review/changes gone). NEVER a status/* label.
+   gh pr checks <PR#> --repo owner/repo
+   #   want: every job pass (skipping is fine). A red or still-running check
+   #   is not a handoff — `--watch` blocks until you can say this truthfully.
    ```
 
    Reviewer claims it by swapping the PR's label to `review/in-progress`,
@@ -457,6 +477,8 @@ why there: an open thread is a statement, so make it one.
 
    ```bash
    git-publish.py                       # publish the fixes (never `git push`)
+   gh pr checks <PR#> --repo owner/repo --watch   # a fix is not handed off
+                                                 # until CI is green again
    # reply with what changed (the reviewer re-reads this), then resolve:
    gh api graphql -f query='
      mutation { resolveReviewThread(input: {threadId: "<thread id>"}) {
