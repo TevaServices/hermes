@@ -331,11 +331,36 @@ Verified against the live image + `firecrawl-mcp@3.27.3`, 2026-10-03:
   schema accepts only `{prompt, schema}` and **drops the flag entirely** (0
   occurrences in the bundle); and there is **no force env var** — it is a
   per-request opt-in. It also **fails open** by design ("proceeding without a
-  guard verdict"). It works self-hosted when it does run, because
-  `getModel()` resolves `MODEL_NAME=firecrawl` → the LiteLLM `firecrawl`
-  group (OpenRouter free, which passes `json_schema`). The guard therefore
-  **forces the flag on** — reuse, not reimplementation — and the live check
-  below is whether it is silently failing open.
+  guard verdict"). It resolves its model through `getModel()`, so
+  `MODEL_NAME=firecrawl` sends it to the LiteLLM `firecrawl` group. The guard
+  therefore **forces the flag on** — reuse, not reimplementation — and because
+  it fails open, the live check below is how you confirm it is really running
+  rather than silently skipping.
+
+- **The `firecrawl` group carries its OWN key, and that is load-bearing.**
+  Both its members are OpenRouter `:free` models, and the account's OpenRouter
+  guardrail enforces ZDR — which excludes `:free` endpoints outright: *"0
+  endpoints out of 1 requested are available matching your guardrail
+  restrictions and data policy … ZDR violation (guardrail): 1 endpoint
+  excluded"*. This fails for the `/responses` shape the classifier uses AND the
+  `/chat/completions` extraction shape alike — so it is the **model group, not
+  the call shape**, and it takes Firecrawl's `/extract` and v2 json-format
+  scrapes down with it, not just the classifier. Free endpoints and a ZDR
+  guardrail are in tension by construction, so the group runs on
+  `OPENROUTER_FREE_KEY` — a free-models key with **no ZDR guardrail** — and it
+  is the only place that key appears. The tiers keep the shared
+  `OPENROUTER_API_KEY` (verified 2026-10-03: same `:free` model returned 404
+  ZDR on the shared key and 200 on the free key, while the shared key still
+  served a paid tier model). Found by the firecrawl-guard, which was the first
+  thing to exercise the group in a day — a latent breakage it surfaced rather
+  than caused. If the group 404s again, check the key first — the account
+  setting that caused it is at
+  `https://openrouter.ai/workspaces/default/guardrails`. The other ways out
+  would be relaxing ZDR for the whole account (which the tiers would inherit)
+  or moving the group to a paid endpoint that offers ZDR (which cuts against
+  this group being free-only by design); the scoped second key avoids both.
+  Every failed call also cools the group down (`cooldown_time: 60`), which is
+  why a failed json scrape leaves the group unusable for a minute afterwards.
 - **Lockdown mode** is a true no-egress guarantee but is *scrape-only*, and
   self-hosted it is a hard **refuse-everything** switch, not a cache mode:
   `useIndex` is `config.INDEX_DATABASE_URL !== undefined`, and with that unset
@@ -1901,6 +1926,17 @@ docker logs firecrawl-api 2>&1 | grep -i 'prompt injection' | tail -3
 #   -> "Prompt injection detected..." or nothing; a repeated
 #      "guard call failed ... (fail-open)" means MODEL_NAME/OPENROUTER broke
 #      and the json-extraction lane is unguarded until it is fixed.
+# Confirm which side is broken — the model group, or just the guard call —
+# with the extraction shape. 404 "ZDR violation (guardrail)" means the GROUP
+# is down (so /extract is down too); a 429 "all deployments in cooldown" is
+# the aftermath of a failure, not a cause:
+docker exec -e HOME=/opt/data/home hermes-main python3 -c "
+import json,os,urllib.request,urllib.error
+r=urllib.request.Request('http://litellm:4000/v1/chat/completions',
+  data=json.dumps({'model':'firecrawl','messages':[{'role':'user','content':'hi'}],'max_tokens':5}).encode(),
+  headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['LITELLM_API_KEY']})
+try: print('ok', urllib.request.urlopen(r,timeout=60).status)
+except urllib.error.HTTPError as e: print('HTTP', e.code, e.read()[:200].decode())"
 # The brake, live (flip in the stack environment, then deploy; no rebuild):
 #   FIRECRAWL_EGRESS=closed    -> every fetch refused
 #   FIRECRAWL_EGRESS=cache-only-> warmed pages served, everything else refused
