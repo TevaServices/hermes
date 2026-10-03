@@ -170,31 +170,43 @@ git-repo.sh worktree https://github.com/<owner>/<repo> <default-branch>
   PR. (The stack's injection scanner may false-positive on repo docs —
   a deliberate read is fine.)
 
-## Implementation = Claude Code (`claude`)
+## Implementation — your own tools first, `claude` for a real refactor
 
-Write code by driving the `claude` CLI (Claude Code), not by editing
-files tool-by-tool yourself. It is pre-wired in this container:
+Write the code yourself: `read_file` → `patch` / `write_file`, and a script
+run by path for anything shell-shaped. That is the right shape for most of
+this profile's work — a migration, a CLI verb, an e2e section, a rebase —
+and it is the only shape that fits the lane you usually run in, where a turn
+has a bounded delivery window that cannot host a long synchronous build.
 
-- Same model as this profile: the wrapper reads this profile's rendered
-  `config.yaml` and pins `--model` to it (`smarter` for this profile),
-  routed through the LiteLLM gateway — never Anthropic directly, never a
-  hardcoded backend model id (which backend a tier uses lives in
-  `config/litellm.yaml`). For a hard multi-step refactor you may opt up
-  with `--model smartest`; an explicit `--model` always wins. Run
-  `/opt/data/tools/claude-hermes/claude-model-resolve.py <profile>/config.yaml`
-  to print the active provider + model.
-- One-shot steps (preferred): `claude -p '<task>' --max-turns 10` run in
-  the worktree. Put the issue's acceptance criteria in the task text.
-  Multi-turn/iterative sessions: run `claude` inside tmux and drive it
-  with send-keys / capture-pane.
+Reach for `claude` (Claude Code) when the change is genuinely **multi-file**:
+the kind where you would otherwise read three files and make five passes.
+That is what a real read/edit loop buys you. It is pre-wired here:
+
+- Same model as this profile — the wrapper reads this profile's rendered
+  `config.yaml` and pins `--model` to it (`smarter` here), routed through the
+  LiteLLM gateway, never Anthropic and never a hardcoded backend id (which
+  backend a tier uses lives in `config/litellm.yaml`). A hard multi-step
+  refactor may opt up with `--model smartest`; an explicit `--model` always
+  wins. `claude-model-resolve.py <profile>/config.yaml` prints the active
+  provider + model.
+- One-shot (preferred): `claude -p '<task>' --max-turns 10` in the
+  worktree, with the issue's acceptance criteria in the task text. The
+  wrapper already passes `--dangerously-skip-permissions` — do **not** pass
+  a permission flag of your own; a different one turns Claude Code's
+  classifier back on, and it cannot be served through this gateway. For
+  iterative work, drive `claude` inside tmux with send-keys / capture-pane.
+- A run is long and synchronous, so it must not sit inside your turn: give
+  it the background with its output to a log file and `notify_on_complete`.
+  Never a `sleep`-and-poll loop — that spends the whole delivery window and
+  can be killed mid-write, which is exactly how mach#26 lost four hours.
 - A harmless `unrecognized_model` warning is expected (it talks to the
   gateway, not Anthropic).
 
-You stay accountable for what lands: after Claude Code finishes, review
-the diff (`git diff`), run the repo's tests/lint yourself, then commit
-under your own identity and follow the draft-PR flow below. If Claude
-Code adds "Generated with"/Co-Authored-By trailers, keep them only if
-the target repo's conventions allow.
+You stay accountable for what lands: after Claude Code finishes, review the
+diff (`git diff`), run the repo's tests/lint yourself, then commit under your
+own identity and follow the draft-PR flow below. If Claude Code adds
+"Generated with"/Co-Authored-By trailers, keep them only if the target repo's
+conventions allow.
 
 ## Publishing: `git-publish.py`, never `git push`
 
