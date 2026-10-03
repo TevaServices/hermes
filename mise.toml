@@ -37,6 +37,18 @@ HERMES_REF = "v2026.9.24"     # ref on github.com/NousResearch/hermes-agent
 HONCHO_VERSION = "main"       # ref on github.com/plastic-labs/honcho
 FIRECRAWL_VERSION = "latest"  # tag on the ghcr.io/firecrawl/* images
 LAVINMQ_VERSION = "2.4.4"     # tag on the docker.io/cloudamqp/lavinmq image
+# The firecrawl-guard image (docker/firecrawl-guard/) — the fence between
+# firecrawl-mcp and firecrawl-api. Built by Komodo Builds; this pin is the
+# reference the stack resolves, and must match resources.toml there.
+HERMES_GUARD_REF = "v2026.10.3"
+
+# The guard's two operator knobs live in the stack environment for the real
+# deploy (komodo/resources.toml) and here locally — never in an env_file,
+# which compose `environment:` would override. FIRECRAWL_GUARD_MODE=monitor
+# logs what would have been blocked and blocks nothing, so the rules can be
+# tuned against real traffic before anything is refused.
+# FIRECRAWL_GUARD_MODE = "enforce"
+# FIRECRAWL_EGRESS = "open"   # open | cache-only | closed — see AGENTS.md
 
 # Optional — override locally with `mise set FIRECRAWL_PORT=3002`:
 # FIRECRAWL_PORT = "3002"
@@ -65,8 +77,8 @@ run = "python render.py --check"
 # purpose: that task gates the config render, and a routing bug in a shell
 # helper must not be able to block it (or vice versa).
 [tasks.test]
-description = "Run the repo's offline tests (gh shim owner routing, team label protocol, verified publish, git hooks, claude wrapper argv, entrypoint secret copy, ssh secret push, discord doctor routes)"
-run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-team-labels.sh", "sh scripts/test-git-publish.sh", "sh scripts/test-git-hooks.sh", "sh scripts/test-claude-wrapper.sh", "sh scripts/test-entrypoint-secrets.sh", "sh scripts/test-hostdeploy.sh", "sh scripts/test-discord-thread-doctor.sh"]
+description = "Run the repo's offline tests (gh shim owner routing, team label protocol, verified publish, git hooks, claude wrapper argv, entrypoint secret copy, ssh secret push, discord doctor routes, firecrawl guard)"
+run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-team-labels.sh", "sh scripts/test-git-publish.sh", "sh scripts/test-git-hooks.sh", "sh scripts/test-claude-wrapper.sh", "sh scripts/test-entrypoint-secrets.sh", "sh scripts/test-hostdeploy.sh", "sh scripts/test-discord-thread-doctor.sh", "sh scripts/test-firecrawl-guard.sh"]
 
 [tasks.net]
 description = "Create the shared external docker network (idempotent)"

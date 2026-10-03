@@ -1,5 +1,6 @@
-# The hermes-agent and litellm Dockerfiles build from the repo root —
-# keep the context to what they COPY (docker/hermes/, config/, render.py).
+# The hermes-agent, litellm and firecrawl-guard Dockerfiles build from the
+# repo root — keep the context to what they COPY (docker/hermes/, config/,
+# render.py, docker/firecrawl-guard/).
 # There is NO committed build/ output anymore: render.py runs inside the
 # agent image build. Note: Komodo Builds clone the repo fresh, so
 # gitignored files never reach the host-side context anyway; this guards

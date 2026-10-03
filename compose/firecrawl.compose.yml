@@ -90,6 +90,65 @@ services:
     ports:
       - "127.0.0.1:${FIRECRAWL_PORT:-3002}:3002"
 
+  # The fence on the agent's web path: firecrawl-mcp talks to this, and this
+  # talks to firecrawl-api. It forces Firecrawl's own checkPromptInjection
+  # onto json scrapes, refuses egress carrying secrets or aimed at the
+  # stack's own services, and sanitises what comes back (see
+  # docker/firecrawl-guard/guard.py, and AGENTS.md for the findings behind
+  # it). No published port: the host loopback port above bypasses it, which
+  # is deliberate — a human curling 3002 is not the threat model.
+  #
+  # Built by a Komodo Build like the rest of the stack (the stack runs
+  # run_build = false, so the Build resource supplies this image); the
+  # `build:` key is for local `mise run up --build`, exactly as litellm and
+  # hermes-main do it.
+  firecrawl-guard:
+    build:
+      # Repo-root context (the Dockerfile COPYs docker/firecrawl-guard/ from
+      # it) — matches the Komodo Build's build_path ".".
+      context: ..
+      dockerfile: docker/firecrawl-guard/Dockerfile
+    image: firecrawl-guard:${HERMES_GUARD_REF:-latest}
+    container_name: firecrawl-guard
+    restart: unless-stopped
+    environment:
+      FIRECRAWL_UPSTREAM: http://firecrawl-api:3002
+      FIRECRAWL_GUARD_PORT: "3003"
+      # enforce applies the rules; monitor only logs what would have happened.
+      FIRECRAWL_GUARD_MODE: ${FIRECRAWL_GUARD_MODE:-enforce}
+      # open | cache-only | closed — the operator brake. Flips from the stack
+      # environment (komodo/resources.toml, mirrored in mise.toml), never from
+      # an env_file. See AGENTS.md §firecrawl-guard for what each means.
+      FIRECRAWL_EGRESS: ${FIRECRAWL_EGRESS:-open}
+      # Logical DB /2 of the shared valkey — Firecrawl holds /0, Honcho /1.
+      FIRECRAWL_GUARD_CACHE_URL: redis://firecrawl-redis:6379/2
+      FIRECRAWL_GUARD_CACHE_TTL: ${FIRECRAWL_GUARD_CACHE_TTL:-604800}
+      # Opt-in egress allowlist, comma-separated, leading "." = suffix match.
+      # Off by default: it breaks the open web, so it is a posture you choose.
+      # FIRECRAWL_EGRESS_ALLOWLIST: "docs.example.com,.internal.example"
+    depends_on:
+      firecrawl-api:
+        condition: service_started
+      # firecrawl-redis is an alias of the shared valkey container.
+      valkey:
+        condition: service_started
+    networks:
+      hermes-net:
+        aliases: [firecrawl-guard]
+    healthcheck:
+      # The image has no curl; python is the probe (same shape as litellm's).
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:3003/healthz', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          # Small host. It buffers and re-serialises one response at a time
+          # (MAX_BODY caps that at 16 MB), so this is generous, not tight.
+          memory: 256m
+
   firecrawl-playwright:
     image: ghcr.io/firecrawl/playwright-service:${FIRECRAWL_VERSION:-latest}
     container_name: firecrawl-playwright
