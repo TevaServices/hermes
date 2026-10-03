@@ -29,6 +29,8 @@
 #        refused, routed to planner
 #        refusals exit 1 with the corrected command shape on stderr and
 #        gh-real is never exec'd — the message is the teaching moment
+#   2c. body gate — inline `--body`/`-b` on issue/pr create|edit -> refuse,
+#      name --body-file (see "the body gate" below)
 #   3. GH_TOKEN is set          -> passthrough (explicit caller intent;
 #      the queue scripts use this to force their own token) — AFTER the
 #      gate, so preset-token calls are fenced too
@@ -60,7 +62,37 @@
 # a permission gap that isn't there. A PRIVATE repo is the honest probe:
 # 200 under the org token, 404 under the personal one.
 #
-# Scope: owner detection from (a)/(b)/(c) plus ONE mechanical gate (2b).
+# The body gate (2c). A multi-line --body is a SHELL argument, and the shell
+# expands it before gh ever runs: a backtick code span is command
+# substitution, so the span is replaced by that command's stdout — the
+# issue body becomes the shell's output. Observed: the planner
+# filed five issues in one repo that way. `mach` is on PATH in this
+# image (it is the agent binary the stack ships), and bare `mach` on an
+# admin box prints the fleet table, so all five bodies carried a
+# NAME/STATE/OS-ARCH/… table where the word `mach` belonged; everything
+# else substituted EMPTY — `systemctl`, `.deb`, `MACH_STATE_DIR`,
+# `/usr/bin/mach` — leaving sentences with literal blanks ("replacing the
+# internal  mechanism"). A second escape layer bit too: the same body past
+# a Python """…""" literal turned `$\rightarrow$` into a carriage return,
+# breaking a line mid-sentence.
+#
+# The gate cannot DETECT that damage — the substitution has already
+# happened by the time this script runs, so all 2c sees is the wreckage.
+# What it can do is forbid the shape that makes it possible, which is the
+# same move as 2b: a hard block at the one hop, with the fix in the
+# message. `--body-file` always works and cannot be got wrong; a variable
+# (`--body "$body"`) happens to be safe, because the shell does not re-scan
+# an expansion for command substitution — but it is one quoting slip from
+# being the exact bug, so it is not worth the exception.
+#
+# Deliberately NOT gated: `gh issue comment --body` / `gh pr comment
+# --body`. A one-line comment is legitimately inline ("done", "+1"), and
+# refusing it would be a false positive on correct work. A whole-body
+# payload (issue/PR create|edit) is never legitimately inline — it is a
+# document, and a document belongs in a file.
+#
+# Scope: owner detection from (a)/(b)/(c) plus TWO mechanical gates (2b
+# label families, 2c inline bodies).
 # The gate screens gh issue/pr edit|create label-writing flags by the
 # label families' object rule — it does NOT screen `gh api` label writes:
 # the endpoint scanner cannot know which args are flag values, so the
@@ -112,11 +144,17 @@ done
 #   rm_labels   — --remove-label values (captured, never gated: removing a
 #                 wrong-family label is the undo the FOREIGN LABEL guard
 #                 prints, and a removal can only improve the lane).
+#   body_inline — set when an inline --body/-b is present on issue/pr; the
+#                 gate in 2c reads it. --body-file is captured by NONE of
+#                 these arms (a long flag's attached form requires `=`, so
+#                 `--body` and `--body=…` are the complete spellings) —
+#                 which is what keeps the file shape passing.
 owner=""
 subcmd=""
 action=""
 add_labels=""
 rm_labels=""
+body_inline=""
 positional=""
 prev=""
 nl='
@@ -124,6 +162,12 @@ nl='
 for arg in "$@"; do
     case "$prev" in
         -R|--repo) owner="$arg"; prev=""; continue ;;
+        # --body/-b take a value, and that value is a whole document: it
+        # must be swallowed here or a body line could be read as the
+        # action/subcommand.
+        --body|-b)
+            case "$subcmd" in issue|pr) body_inline=yes ;; esac
+            prev=""; continue ;;
         # --hostname takes a value too. Swallowing it keeps `subcmd` honest
         # for `gh --hostname github.com api repos/…` — otherwise the value
         # becomes the subcommand and the api-path scan below never runs.
@@ -159,6 +203,12 @@ for arg in "$@"; do
         -l=*) add_labels="$add_labels${add_labels:+$nl}${arg#-l=}" ;;
         -l?*) add_labels="$add_labels${add_labels:+$nl}${arg#-l}" ;;
         --add-label|--remove-label|--label|-l) prev="$arg" ;;
+        # Inline body, attached spellings. `--body-file` matches no arm
+        # here on purpose (see body_inline above).
+        --body=*) case "$subcmd" in issue|pr) body_inline=yes ;; esac ;;
+        -b=*) case "$subcmd" in issue|pr) body_inline=yes ;; esac ;;
+        -b?*) case "$subcmd" in issue|pr) body_inline=yes ;; esac ;;
+        --body|-b) prev="$arg" ;;
         -*) ;;
         *)
             if [ -z "$subcmd" ]; then subcmd="$arg"; continue; fi
@@ -278,6 +328,27 @@ if [ "$subcmd" = issue ] || [ "$subcmd" = pr ]; then
                     echo "gh shim: refused: the reviewer does not edit issues — labels are the routing mechanism and the card is planner's to move."
                     echo "  Route it: comment @hermes-planner on the PR/issue naming the state the verdict implies."
                     echo "  Your writes live on the PR (review/* labels, the verdict) — issue comments stay open to you."
+                } >&2
+                exit 1 ;;
+        esac
+    fi
+
+    # Rule 3 (the body gate, profile-agnostic): no inline --body/-b on a
+    # whole-body write. See "the body gate" in the header — the shim sees
+    # the damage only after the shell has done it, so the defensible move
+    # is to refuse the shape. create|edit only: those payloads are
+    # documents, and a document belongs in a file. `gh issue comment
+    # --body` stays open (a one-line comment is legitimately inline), and
+    # --body-file passes untouched.
+    if [ -n "$body_inline" ]; then
+        case "$action" in
+            create|edit)
+                {
+                    echo "gh shim: refused: inline --body on $subcmd $action — the shell expands it BEFORE gh runs, so a backtick code span is command substitution and the body becomes that command's output."
+                    echo "  (Observed: five issues in one repo were filed this way. \`mach\` is on PATH here, so bare \`mach\` printed the fleet table into the body; \`systemctl\`, \`.deb\` and \`MACH_STATE_DIR\` substituted empty and left blanks mid-sentence.)"
+                    echo "  Write the body to a file, then:"
+                    echo "    gh $subcmd $action <N> --repo <owner>/<repo> --body-file <path>"
+                    echo "  An ALREADY-corrupted body is repaired, not just avoided: re-read it (gh $subcmd view <N> --json body) and check every code span and path survived."
                 } >&2
                 exit 1 ;;
         esac

@@ -564,6 +564,33 @@ repo owner.**
   is not the reviewer (default profile, human shells, cron children where
   the signal is absent): the family gate is object-kind-based and applies
   everywhere regardless. Covered offline in `scripts/test-gh-shim.sh`.
+- **The shim also carries a BODY GATE** — inline `--body`/`-b`
+  on `gh issue|pr create|edit` is refused, in every flag spelling
+  (`-b`/`-b=…`/`-bxxx`, `--body`/`--body=…`), for every profile (shape-based,
+  not role-based) and ahead of the `GH_TOKEN` passthrough like the label
+  gate. The reason is that the damage is invisible in a way a *message*
+  gate cannot fix: a quoted multi-line `--body` is a SHELL argument, so the
+  shell expands it before gh runs, a backtick code span becomes command
+  substitution, and the body arrives as that command's stdout. Observed —
+  the planner filed five issues in one repo this way and every body was
+  corrupt: `mach` is on PATH in this image (it is the agent
+  binary the stack ships), and bare `mach` on an admin box prints the fleet
+  table, so a NAME/STATE/OS-ARCH/… table landed where the word `mach`
+  belonged, while `systemctl`, `.deb`, `MACH_STATE_DIR` and `/usr/bin/mach`
+  substituted **empty** and left blanks mid-sentence ("replacing the
+  internal  mechanism"). A second escape layer bit too: the same body
+  through a Python `"""…"""` literal turned `$\rightarrow$` into `\r`,
+  breaking a line of an issue's enrollment workflow. **The shim cannot detect
+  the damage** — by the time it runs, the substitution has already
+  happened — so it refuses the SHAPE that permits it and names
+  `--body-file`, which cannot be got wrong. Deliberately NOT gated:
+  `gh issue|pr comment --body` (a one-line comment is legitimately inline;
+  a whole-body payload never is), and `gh api -f body=…` (safe — the shell
+  does not re-scan an expansion). An already-corrupted body is repaired by
+  re-reading it, not merely avoided. Covered offline in
+  `scripts/test-gh-shim.sh` (`R3 …`); the planner's authoring procedure and
+  the release skill's failure-filing example were both moved to
+  `--body-file` in the same change.
 - **Commit identity**: org worktrees commit as the org bot —
   `git-repo.sh worktree` sets `user.name`/`user.email` in the worktree's
   own `config.worktree` (needs `extensions.worktreeConfig`, which it
@@ -1248,6 +1275,49 @@ the local `secrets/` checkout).
    gateway logs `[Discord] Connected as <bot>` plus
    `✓ discord connected (profile: <name>)`.
 
+### The planner decides; it does not enumerate
+
+The planner's spec is the only place a design decision can be made: the
+developer has no channel to the user, so **any choice left open in an issue
+body will be made silently, by the developer, in the planner's name.**
+"End the open questions" is the job; listing them is not a plan.
+
+Observed on `<org>/mach`, after six user turns of "there's not enough
+information to implement or even approve" → "also detail the publishing
+method" → three separate "flesh out issue N"s: the Windows issue shipped
+*"Use WiX Toolset **or a similar MSI generator**"* verbatim; the Homebrew
+issue contradicted itself in one body (AC: a state dir *"e.g. `var/mach`
+relative to the prefix"*; Design: *"State: `/var/mach`"*); the Linux issue
+flipped `User=nobody` to `User=mach` between revisions with no rationale
+and no migration story, and silently reversed the platform issue's accepted
+`systemctl enable --now` to `enable`. Each revision re-decided, so the body
+was a snapshot of the last draft rather than the record the developer was
+relying on.
+
+Three changes hold now, and they are all in the planner's own files
+(`config/profiles/planner/SOUL.md`, `config/profiles/planner/skills/
+team-planner/SKILL.md`):
+
+- **`## Decisions` is a required body section** — a table of every decision
+  the work depends on, with the choice, the why, and *who* decided (planner
+  or user). It is what lets the developer tell "settled" from "I may still
+  pick".
+- **An unresolved alternative is a defect**, listed by shape (`or
+  similar`, `e.g.` where it names the thing to build, `TBD`, a path/env
+  var/flag not read back from the code, two sections that disagree, a
+  silent reversal of an earlier revision). Before `status/ready` the
+  planner re-reads the body and greps it for those markers; each hit is
+  either decided or asked.
+- **The approval round ends in a question.** SOUL.md already required a
+  round of input; it now says the round must end in a question the planner
+  actually needs answered, with its own recommendation attached — "a
+  summary of what you just did is not a round". The planner's six turns on
+  those issues were all summaries of work already done.
+
+Body payloads are also `--body-file`-only now, for the reason in §GitHub
+access ("The shim also carries a BODY GATE"): the inline spelling is what
+corrupted all five of those issues in the first place.
+
 ### Routing work to a profile: labels, never assignees
 
 **GitHub App bot identities cannot be issue/PR assignees.** This is a
@@ -1302,7 +1372,7 @@ every 5-minute tick (add `review/ready`, drop `status/in-progress`; add
 `status/in-progress` back) until the container was paused by hand in
 Komodo.
 
-Four things now hold, and each is enforced somewhere mechanical rather
+Five things now hold, and each is enforced somewhere mechanical rather
 than by remembering it:
 
 - **The write site is fenced** (2026-10-02, after the same misfile shape
@@ -1317,6 +1387,18 @@ than by remembering it:
   `!! FOREIGN LABEL` guard's role narrows to the spellings no gate covers
   (a label written through `gh api`, which the shim deliberately does not
   screen).
+
+- **A handoff is a SWAP, never a bare removal** (the gates above refuse a
+  wrong-family *set*; nothing refused a `--remove-label` that added
+  nothing, and that leaves an item carrying no `status/*` at all — in no
+  lane at either end, while still looking busy on the board). Observed: the
+  developer claimed an issue, opened its PR, removed `status/in-progress`
+  and added nothing; the issue sat laneless for hours with an approved PR
+  waiting on the user, and the reviewer's `@hermes-planner` request to move
+  the card was unanswerable — **the planner has no self-pull queue**, so a
+  GitHub mention reaches it only if it is in a session anyway. The rule
+  (`team-conventions`, "Every handoff is a SWAP") is one command, both
+  flags. Do not route a card move through planner and assume it lands.
 
 - **Ownership is stated once**, in the shared `team-conventions` skill
   ("The routing labels" — the fifteen labels with added-by/removed-by
