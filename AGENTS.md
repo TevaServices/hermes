@@ -1904,6 +1904,10 @@ for a subcommand — see §"Agent self-management"):
 sh scripts/test-claude-wrapper.sh                   # 19 passed
 # Live: the argv claude-real actually receives. -p is what agents use; the
 # flag must be present exactly once and the profile model still pinned.
+# NOTE — this probe only means anything on an image built AFTER the
+# CLAUDE_HERMES_DIR override landed. On an older one the wrapper ignores the
+# var, finds the real claude-real, and answers the prompt instead of echoing
+# its argv (it looks like the stub was skipped; it was — the override was).
 docker exec -u hermes -e HERMES_HOME=/opt/data/profiles/developer \
   -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
   set -a; . /opt/data/profiles/developer/.env; set +a
