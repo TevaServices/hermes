@@ -178,6 +178,37 @@ grep -q 'also restore the card' "$queue" \
     && ok "guard's undo names the card restore for a status-less issue" \
     || bad "guard does not tell how to restore a card lost to the misfile"
 
+# --- 2c. green CI gates the handoff and the verdict -------------------------
+# A verdict asserted while a check is red or still running is one nobody can
+# act on, and it is INVISIBLE in mergeStateStatus whenever the ruleset requires
+# no status checks — `gh pr checks` is the only read that shows it. The shim
+# refuses the writes themselves (R4 in test-gh-shim.sh); what a gate cannot do
+# is the waiting, so the prose has to say it: the developer waits in BOTH
+# handoff shapes, the reviewer reads the checks before its verdict, and the
+# shared conventions name the read once.
+dev_wait='gh pr checks <PR#> --repo owner/repo --watch'
+count=$(grep -cF "$dev_wait" "$dev_skill" || true)
+case "$count" in
+    [2-9]*) ok "developer waits for green CI in both handoff shapes (x$count)" ;;
+    1)      bad "the CI wait appears once — the fix-round re-handoff needs it too" ;;
+    *)      bad "the developer skill does not wait for CI before handing off" ;;
+esac
+
+rev_skill="$here/config/profiles/reviewer/skills/team-reviewer/SKILL.md"
+[ -f "$rev_skill" ] || { bad "team-reviewer SKILL.md not found"; exit 2; }
+grep -qF 'gh pr checks <PR#> --repo owner/repo' "$rev_skill" \
+    && ok "reviewer reads the checks before its verdict" \
+    || bad "reviewer skill has no CI read before the verdict"
+grep -qF 'never overrides a red CI' "$rev_skill" \
+    && ok "reviewer: a green local run cannot override a red CI" \
+    || bad "reviewer skill does not say a local run cannot override a red CI"
+
+conv_skill="$here/config/skills/team-conventions/SKILL.md"
+[ -f "$conv_skill" ] || { bad "team-conventions SKILL.md not found"; exit 2; }
+grep -qF 'gh pr checks <PR#> --repo owner/repo' "$conv_skill" \
+    && ok "conventions name the checks read-back" \
+    || bad "conventions do not name the checks read-back"
+
 # --- 3. the queues poll one family per object kind -------------------------
 # The mapping is only real if the scripts search by it.
 grep -q 'issues) \[ -n "\$LABELS" \] || LABELS="status/in-progress,type/bug status/ready,type/bug status/in-progress status/ready"' "$queue" \

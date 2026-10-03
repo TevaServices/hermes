@@ -1,7 +1,7 @@
 ---
 name: team-reviewer
 description: Reviewer gate set — fixed checklist (security, tests, style, testability), verdicts, handoff to release
-version: 1.3.0
+version: 1.4.0
 metadata:
   hermes:
     tags: [team, reviewer, review-gates]
@@ -107,6 +107,28 @@ never appear under another role's identity.
 
 ### The verdict and the loop back
 
+**CI comes before the verdict.** Read the checks before you judge anything —
+they are a gate in their own right, and the one no other read shows you:
+
+```bash
+gh pr checks <PR#> --repo owner/repo
+#   want: every job pass (skipping/neutral are fine)
+```
+
+**Any `fail`/`cancelled`/`timed_out` is Request changes — never an
+approval** — and anything still *running* means wait rather than approve.
+The developer's handoff does not happen until CI is green (`team-developer`),
+so a check still running here means CI restarted under you; wait it out
+instead of racing it to a verdict.
+
+**A green local run never overrides a red CI.** Your reproduction disagreeing
+with CI *is* the finding: name the job, the failing assertion and the commit.
+A stale worktree, a revision you did not mean to check out, and an
+environment-only dependency all look exactly like this — and "it passes for
+me" is a claim about your checkout, not about the PR. Approving while
+mentioning the red check in the summary is still an approval on a revision CI
+never ran, and it is the shape that costs a release cycle.
+
 Every command here is on the PR (`<PR#>` is the number
 `review-queue.sh` printed):
 
@@ -121,8 +143,9 @@ Every command here is on the PR (`<PR#>` is the number
   act on:
 
   ```bash
-  # CLEAN subsumes every required rule; BLOCKED is a rule unmet, UNSTABLE
-  # is only a check still running. Run this once CI has finished.
+  # CLEAN subsumes every required rule; BLOCKED is a rule unmet; UNSTABLE
+  # means a check is FAILING or still running and no rule required it —
+  # it is not "only a check still running". A rules read, not a CI read.
   gh pr view <PR#> --repo owner/repo --json mergeable,mergeStateStatus \
     --jq '"\(.mergeable) \(.mergeStateStatus)"'      # want MERGEABLE CLEAN
   # which gate, when it is BLOCKED:
@@ -134,6 +157,22 @@ Every command here is on the PR (`<PR#>` is the number
     --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
           | select(.isResolved == false)] | length'  # want 0
   ```
+
+  **What `mergeStateStatus` does NOT do is check CI.** A ruleset that requires
+  no status checks puts nothing in the merge state for a red job to change, so
+  the red check appears in no field of this read at all — the `gh pr checks`
+  read above is the only one that sees it. What a repo actually requires is
+  one call:
+
+  ```bash
+  gh api repos/owner/repo/rules/branches/main --jq '.[].type'
+  ```
+
+  With no `required_status_checks` in that list, nothing but your own checks
+  read stands between a red head and an approval. (And it is worth knowing
+  per repo rather than assuming: the rules that ARE usually there —
+  `required_signatures`, the review-thread and code-owner gates — are exactly
+  what this read exists for.)
 
   `BLOCKED` is a finding, not a pass: **unsigned commits** mean the
   developer published with `git push` instead of `git-publish.py`
@@ -269,7 +308,9 @@ evidence worth quoting.
   (`@hermes-planner` — back to In Progress). **Do not write the label.**
 - **Approve**: approve + `gh pr ready` + `review/approved` + request the
   **CODEOWNER's** review (`gh pr edit --add-reviewer <owner>` where
-  possible; otherwise cc @<owner> in a comment). Comment gates-passed
+  possible; otherwise cc @<owner> in a comment). An approval is allowed only
+  on a head whose checks are all terminal and green — the summary's first
+  line says so, so the next reader can see it was read. Comment gates-passed
   summary (one line per gate), naming the card state it implies
   (`@hermes-planner` — In Review/human gate). Post verdict to `#reviews`.
   **Do not write a `status/*` label and do not edit the issue** — the
@@ -289,9 +330,10 @@ and the code-owner review request.
    "approved by review, awaiting a CODEOWNER's approval" — it is not a
    release, and it is not yours to interpret as one.
 2. Say what you have left unmet, if anything: a `BLOCKED`
-   `mergeStateStatus`, an unresolved thread, a missing `type/*`, a red
-   check. Release reads those back before merging and a surprise there costs
-   a cycle — the read-back queries are in §"The verdict and the loop back".
+   `mergeStateStatus`, an unresolved thread, a missing `type/*`, a red or
+   still-running check. Release reads those back before merging, and a
+   surprise there costs a cycle — the read-back queries are in §"The verdict
+   and the loop back".
    A gate you know is unmet and did not name is your miss, not theirs.
 3. `#reviews` post: the verdict and the link. The merge (which release
    performs) closes the issue via `Closes #N` — the state change that
