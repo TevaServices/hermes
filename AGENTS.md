@@ -1044,11 +1044,39 @@ over time.
   `/opt/data/bin/claude`, model resolved from each profile's own
   `$HERMES_HOME/config.yaml`), but the usage instructions lived only in
   `team-developer`. The canonical contract now lives in the stack-wide
-  `hermes-stack-ops` skill, with a "writing code → `claude`" entry in the
-  SOUL_OPERATING shape ladder, so planner and reviewer reach for it too.
-  The role split is the part that matters: `claude` writes code,
-  `delegate_task` reasons in fresh context, `execute_code` does mechanical
-  bulk.
+  `hermes-stack-ops` skill, with a shape-ladder entry in SOUL_OPERATING, so
+  planner and reviewer reach for it too. The role split is the part that
+  matters: **writing the code directly is the default** (read → `patch` /
+  `write_file`, a script by path for shell-shaped work), `claude` is for a
+  genuinely multi-file change and for read-only code questions whose
+  reasoning should not land in your context, `delegate_task` reasons in
+  fresh context, `execute_code` does mechanical bulk. Naming `claude` the
+  *implementation* tool for the developer, as this file did until
+  2026-10-03, was wrong on two counts: it is pinned to the same tier the
+  profile already runs (a second harness over the same model, not a better
+  one), and a synchronous multi-minute run does not fit the cron lane's
+  bounded delivery window — which is why the developer had launched it
+  exactly five times ever, and not once in the eight days before that.
+- **The wrapper passes `--dangerously-skip-permissions` (2026-10-03).**
+  Claude Code's permission layer is its own, separate from Hermes'. In print
+  mode it cannot prompt, so its default denies every write — the first bare
+  `claude -p` an agent ran here walled on an unrequested permission, and the
+  developer's own MEMORY.md recorded the wrong fix
+  (`--permission-mode acceptEdits`). That family of modes (`acceptEdits`,
+  plan, auto) is the wrong fix because each call goes through Claude Code's
+  permission **classifier** — a billed extra model call a third-party gateway
+  cannot serve, and Claude Code here only ever talks to LiteLLM (the wrapper
+  prints that incompatibility itself). So `docker/hermes/claude` appends the
+  skip flag unless the caller passed a permission flag of their own, or the
+  argv opens with a subcommand (`mcp`, `config`, `update`, `doctor`, …, none
+  of which take it) or is `--help`/`--version`. It is the same posture the
+  profiles already run under for their own tools (`STACK_APPROVAL_DEFAULTS`:
+  `mode: off`), so the agent harness is never held to a stricter rule than
+  the agent driving it — and **no skill may tell an agent to pass a
+  permission flag**, because doing so suppresses the default. Pinned offline
+  by `scripts/test-claude-wrapper.sh` (`mise run test`), which runs the real
+  wrapper against a stubbed `claude-real` and asserts the argv — including
+  the double-pass and subcommand passthrough cases.
 - **The wrapper tells Claude Code the real context window (2026-09-15).**
   It exported `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` and pinned the
   model, but never `CLAUDE_CODE_MAX_CONTEXT_TOKENS` — and Claude Code's
@@ -1865,6 +1893,39 @@ docker exec -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
   git log -1 --format=%B | grep -c "^Signed-off-by: "'
 #   -> 1; 0 means the hook is not found or not executable (check the two
 #      hooksPath values above before the hook itself).
+```
+
+The `claude` wrapper's argv (the skip flag is appended for a real run, never
+for a subcommand — see §"Agent self-management"):
+
+```bash
+# Offline first: the wrapper is exercised against a stubbed claude-real, so
+# this needs no container and no gateway.
+sh scripts/test-claude-wrapper.sh                   # 19 passed
+# Live: the argv claude-real actually receives. -p is what agents use; the
+# flag must be present exactly once and the profile model still pinned.
+# NOTE — this probe only means anything on an image built AFTER the
+# CLAUDE_HERMES_DIR override landed. On an older one the wrapper ignores the
+# var, finds the real claude-real, and answers the prompt instead of echoing
+# its argv (it looks like the stub was skipped; it was — the override was).
+docker exec -u hermes -e HERMES_HOME=/opt/data/profiles/developer \
+  -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
+  set -a; . /opt/data/profiles/developer/.env; set +a
+  d=$(mktemp -d); mkdir -p "$d/claude-hermes"
+  printf "#!/bin/sh\nfor a in \"\$@\"; do echo \"\$a\"; done\n" > "$d/claude-hermes/claude-real"
+  chmod +x "$d/claude-hermes/claude-real"
+  cp /opt/data/tools/claude-hermes/claude-model-resolve.py "$d/claude-hermes/"
+  CLAUDE_HERMES_DIR="$d/claude-hermes" claude -p hi --max-turns 3'
+#   -> the profile model (`smarter`), `--model smarter`, `-p`, `hi`,
+#      `--max-turns 3`, `--dangerously-skip-permissions` — and NOT a second
+#      permission flag. `claude mcp list` must show no skip flag at all.
+# Then the real thing, once, to prove it still reaches the gateway:
+docker exec -u hermes -e HERMES_HOME=/opt/data/profiles/developer \
+  -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
+  set -a; . /opt/data/profiles/developer/.env; set +a
+  cd "$(mktemp -d)" && claude -p "Reply with exactly: OK" --max-turns 2'
+#   -> OK, exit 0. A write is the part that used to fail, so prove that too:
+#      ask it to create a file and check the file exists afterwards.
 ```
 
 Org GitHub Apps (after landing the org env vars + PEMs):

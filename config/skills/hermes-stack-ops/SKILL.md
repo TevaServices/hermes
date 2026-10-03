@@ -211,12 +211,32 @@ entry in `config/models.toml`** (id + true window) before you can run it
 here; that one line serves Hermes' own resolution, the cheap/auxiliary
 lanes, and `claude`.
 
+**Permissions: the wrapper passes `--dangerously-skip-permissions` for you.
+Do not pass a permission flag of your own.** Claude Code has its own
+permission layer, separate from Hermes'. In print mode it cannot prompt, so
+its default denies every write — an agent's first bare `claude -p` walls
+there and has to invent an escape. The `acceptEdits` / plan modes are the
+wrong escape: they route each call through Claude Code's permission
+*classifier*, a billed extra model call that a third-party gateway cannot
+serve, and this stack reaches Claude Code **only** through LiteLLM (the
+wrapper prints that incompatibility itself). So the wrapper skips the layer
+outright — the same posture the profiles already run under for their own
+tools (`render.py`'s `STACK_APPROVAL_DEFAULTS`: `mode: off` +
+`unattended_mode: approve`). Passing your own `--permission-mode` or
+`--dangerously-skip-permissions` suppresses the wrapper's default and keeps
+whatever you passed; subcommands and `--help`/`--version` are left alone.
+
 **Driving it**
 
 - One-shot (preferred): `claude -p '<task>' --max-turns 10`, run in the
   project worktree. Put the acceptance criteria in the task text.
 - Multi-turn / iterative: `tmux new-session -d -s cc …`, driven with
   send-keys / capture-pane.
+- A run is long and synchronous: never sit in it, and never poll it with a
+  `sleep`-and-check loop — that spends a whole delivery window and can be
+  killed mid-write (it cost four hours on mach#26). Background it with its
+  output to a log and `notify_on_complete`, or give it to a job that
+  outlives the turn.
 - A hard multi-step refactor may opt up a tier: `--model smartest` instead
   of the profile's default (`smarter` for the default, developer and
   release profiles).

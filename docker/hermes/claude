@@ -38,7 +38,7 @@
 
 set -u
 
-CLAUDE_HERMES_DIR="/opt/data/tools/claude-hermes"
+CLAUDE_HERMES_DIR="${CLAUDE_HERMES_DIR:-/opt/data/tools/claude-hermes}"
 CLAUDE_REAL="$CLAUDE_HERMES_DIR/claude-real"
 CONFIG="${CLAUDE_HERMES_CONFIG:-${HERMES_HOME:-/opt/data}/config.yaml}"
 
@@ -140,6 +140,37 @@ export CLAUDE_HERMES_WINDOW="$window"
 # Pin the profile's model unless the caller already chose one.
 if [ "${1:-}" != "mcp" ] && [ -z "$arg_model" ]; then
     set -- "$@" --model "$primary"
+fi
+
+# Claude Code's OWN permission layer — not Hermes', which lives in the
+# rendered config and is already open on the unattended lanes. In print mode
+# Claude Code cannot prompt, so its default denies every write and the
+# agent's first `claude -p` walls on an unrequested permission; that is the
+# wall the developer profile rediscovered by hand (its MEMORY.md said to pass
+# --permission-mode acceptEdits, which is not the right answer).
+#
+# The right answer is to skip the layer outright. The permission CLASSIFIER is
+# a billed extra model call that a third-party gateway cannot serve, and this
+# stack reaches Claude Code only through LiteLLM — the wrapper prints that
+# incompatibility itself. Skipping it is also the posture the profiles already
+# run under for their own tools (render.py's STACK_APPROVAL_DEFAULTS: mode
+# off + unattended_mode approve), so one agent harness is not held to a
+# stricter rule than the agent driving it.
+#
+# A caller who wants a specific mode passes one and keeps it; subcommands and
+# --help/--version take no such flag.
+_skip_perm=1
+case "${1:-}" in
+    mcp|config|update|doctor|install|migrate-installer|setup-token|plugin|help) _skip_perm=0 ;;
+esac
+for _arg in "$@"; do
+    case "$_arg" in
+        -h|--help|-v|--version) _skip_perm=0 ;;
+        --permission-mode|--permission-mode=*|--dangerously-skip-permissions) _skip_perm=0 ;;
+    esac
+done
+if [ "$_skip_perm" = 1 ]; then
+    set -- "$@" --dangerously-skip-permissions
 fi
 
 exec "$CLAUDE_REAL" "$@"

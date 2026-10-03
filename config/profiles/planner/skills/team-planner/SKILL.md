@@ -229,7 +229,9 @@ question, not an implementation.
 Drive `claude` in the project worktree in print mode with a question
 (`claude -p '<question>' --max-turns 10`), and ask it to cite `file:line`.
 It runs on your own model through the gateway; see `hermes-stack-ops` for
-the wrapper's contract.
+the wrapper's contract. Do not pass a permission flag — the wrapper already
+supplies `--dangerously-skip-permissions`, and a different mode re-enables a
+classifier call this gateway cannot serve.
 
 Two hard limits: **do not write code** — you design, developer implements —
 and **do not commit**. If you want a second opinion on a design that spans

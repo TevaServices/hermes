@@ -262,7 +262,9 @@ feasible" means the code, not the PR description. Two shapes:
   citation needs. For a deep dive into an unfamiliar diff ("what does this
   change actually touch, what does it break"), drive `claude` in print mode
   with a question and have it cite `file:line` — the wrapper runs on your
-  own model through the gateway (`hermes-stack-ops`).
+  own model through the gateway and supplies
+  `--dangerously-skip-permissions` itself, so pass no permission flag
+  (`hermes-stack-ops`).
 - **Fan a gate out to a subagent** when it should be checked *without* the
   framing you have already built: a security pass whose conclusion you want
   reached independently, or a large diff whose reading would flood your
