@@ -344,10 +344,16 @@ Open **one** issue in the repo that failed — `type/bug` + `status/ready`, so
 the developer's queue picks it up (and hoists it ahead of features):
 
 ```bash
+# Body to a FILE, never inline. A quoted --body is expanded by the shell
+# before gh sees it, so any backtick code span in it RUNS and its output
+# replaces the text; the shim refuses the inline spelling outright (see
+# hermes-stack-ops). Include: tag, run URL, failing job, log excerpt,
+# state file, and what you did NOT do.
+write_file /opt/data/profiles/release/cache/scratch/bug.md   # the body
 gh issue create -R "$R" \
   --title "release: <what failed> (<tag>)" \
   --label type/bug --label status/ready \
-  --body "…tag, run URL, failing job, log excerpt, state file, and what I did NOT do…"
+  --body-file /opt/data/profiles/release/cache/scratch/bug.md
 ```
 
 Then set `RELEASE_STATE=failed:<what>` in the state file, post one line to

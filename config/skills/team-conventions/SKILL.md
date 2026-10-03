@@ -126,6 +126,39 @@ features). A bug found in production must not wait for the planner to route
 it. That is the whole exception — release writes no other `status/*` label
 and never edits a card.
 
+### Every handoff is a SWAP — never a bare removal
+
+A claim or a handoff **replaces** one label with the next; it never just
+removes. One command, both flags:
+
+```bash
+gh issue edit 26 --repo <owner>/<repo> \
+  --remove-label status/ready --add-label status/in-progress
+```
+
+A `--remove-label` on its own leaves the item carrying **no** `status/*` at
+all — invisible to the developer's queue *and* to the reviewer's, while
+still looking busy on the board. That is a worse state than not claiming it:
+an unclaimed issue sits in a lane somebody polls; a laneless one sits in no
+lane and nothing will ever pick it up.
+
+Observed: the developer claimed an issue, opened its PR, then removed
+`status/in-progress` and added nothing. The issue sat laneless for hours
+with an approved PR waiting on the user, and the reviewer's
+`@hermes-planner` request to move the card went nowhere — **the planner has
+no self-pull queue** (the declared jobs are the developer, reviewer and
+release self-pulls), so a GitHub mention is read only if the planner is in a
+session for some other reason. Do not route a card move through planner and
+assume it lands; if the card is wrong and you can write its family, fix it.
+
+The gh shim does **not** catch this: it refuses a wrong-family *SET*, and a
+removal that adds nothing is not a set. If you find a laneless card, the fix
+is a label, not a comment:
+
+```bash
+gh issue edit <N> --repo <owner>/<repo> --add-label status/<state>
+```
+
 ### The type labels (a third family — and it belongs to BOTH objects)
 
 `type/*` classifies **what the change is**, not who hands it to whom, so

@@ -1,7 +1,7 @@
 ---
 name: team-planner
 description: Planner role procedure — issue authoring, per-repo boards, standup/sprint cadence, roadblock intake
-version: 1.1.0
+version: 1.2.0
 metadata:
   hermes:
     tags: [team, planner, pm, design]
@@ -21,6 +21,9 @@ One issue = one coherent unit of work. Body template:
 ## Goal
 <one paragraph — what and why>
 
+## Decisions
+<the table below. REQUIRED — see "Speccing" below.>
+
 ## Acceptance criteria
 - [ ] <verifiable criterion>
 - [ ] …
@@ -34,6 +37,29 @@ self-sufficient.>
 - <explicitly deferred items>
 ```
 
+**Write the body to a FILE and pass `--body-file` — never inline.** A
+quoted `--body "…"` is expanded by the shell *before* gh runs, so a
+backtick code span is command substitution: the span is replaced by that
+command's stdout (empty, if the command does not exist). A planner filed
+five issues in one repo this way, with a fleet table where the word
+`mach` belonged and blanks mid-sentence where `systemctl`, `.deb` and
+`MACH_STATE_DIR` belonged — the issue body was literally the shell's
+output. The `gh` shim now refuses the inline spelling (exit 1, message
+names the fix), so this is the shape that works:
+
+```bash
+# 1. write the body with write_file, e.g.
+#    /opt/data/profiles/planner/cache/scratch/issue_body.md
+# 2. then:
+gh issue create --repo <owner>/<repo> --title "<title>" \
+  --label status/backlog --label type/feature --body-file <file>
+gh issue edit   <n> --repo <owner>/<repo> --body-file <file>
+```
+
+An **already-corrupted** body is repaired, not just avoided: re-read it
+(`gh issue view <n> --json body`) and check every code span, path and env
+var survived before you move on.
+
 - Label `status/backlog` or add to the repo Project's Backlog column on
   creation.
 - **A `type/*` label is REQUIRED, every time** — `type/bug`,
@@ -44,14 +70,110 @@ self-sufficient.>
   contributes only a patch and is named in the release announcement. The
   developer copies the issue's type onto its PR, and the developer's queue
   hoists `type/bug` items ahead of features — which is the whole mechanism
-  behind "bugs before features". An issue with no type is incomplete:
-
-  ```bash
-  gh issue create --repo <owner>/<repo> --title "<title>" \
-    --label status/backlog --label type/feature --body-file <file>
-  ```
+  behind "bugs before features". An issue with no type is incomplete.
 - the user's idea → issue link goes back to the Discord thread the same
   turn.
+
+## Speccing: decide it, or ask — never hand the choice on
+
+Your job is to *end* open questions, not to enumerate them. An issue whose
+Design still contains a choice is not a spec; it is a note that a spec
+should exist. The developer implements what you wrote and has no way to
+ask the user — so anything you leave open, it decides unilaterally.
+
+**An unresolved alternative in the Design or Acceptance criteria is a
+defect of the same severity as a wrong instruction.** The shapes, taken
+from real output on this stack:
+
+- an either/or aimed at the implementer — *"Use WiX Toolset **or a similar
+  MSI generator**"*. `or similar` is not a decision: pick the tool, say
+  why, and say what it costs you.
+- a hedge where the issue names the thing to build — *"a Homebrew-compatible
+  state directory (**e.g.** `var/mach` relative to the prefix)"* followed
+  by *"State: `/var/mach`"* two sections later. Two answers is worse than
+  none.
+- *"TBD"*, *"decide later"*, *"a signed corporate certificate"* when the
+  certificate infrastructure is declared out of scope — an AC that depends
+  on something nobody agreed to supply.
+- any path, env var, flag, binary name or entry point you have not read in
+  the code. `MACH_STATE_DIR`, `mach run`, `/lib/systemd/system/machd.service`
+  are claims: check them (`file:line`) before they become requirements.
+- a reversal of an earlier revision with no rationale (a `User=nobody` →
+  `User=mach` flip needs its *why* and its migration story in the body, or
+  the implementer cannot tell a decision from a typo).
+
+When you find one, do exactly one of two things:
+
+1. **Decide it.** Write the choice, the reason, and what it traded away
+   into `## Decisions`. A stated trade-off can be corrected; a silent one
+   cannot.
+2. **Take it to the user** in the plan-approval round (see SOUL.md), as a
+   concrete question with your own recommendation attached, and write the
+   answer back.
+
+Then keep it decided: **the issue body is the record, not the latest
+draft.** A revision that quietly reverses a decision from an earlier
+revision destroys the thing the developer is relying on. When a decision
+changes, change it *visibly* — say in the edit what changed and why.
+
+`## Decisions` is a table, one row per decision the work depends on:
+
+```markdown
+## Decisions
+
+| Decision | Choice | Why |
+|---|---|---|
+| Service user | `mach`, created by the package | `nobody` cannot own a state dir; packages already create users (deb/rpm/apk hooks differ — see Design) |
+| Service start | `systemctl enable`, NOT `--now` | the service cannot start before enrollment; `--now` would fail the install |
+| MSI toolchain | WiX v4 via the GoReleaser post-build hook | one Linux/Windows toolchain; needs the corporate cert — **user confirmed** |
+```
+
+Mark who decided: your own call, or the user's. The developer must be able
+to tell *"this is settled"* from *"I may still pick"*.
+
+## Before you route it (`status/ready`)
+
+Run this audit in the same turn as the handoff — a half-specced issue is
+expensive to fix later, because the developer has already started:
+
+1. **Re-read the body as the developer will** (`gh issue view <n> --json body`).
+2. Grep it for the unresolved-alternative markers: `or similar`, `e.g.`,
+   `TBD`, `later`, `Option A`, `<placeholders>`, `$VAR`. Each hit is either
+   decided or asked — or it does not ship.
+3. Check every path / env var / command in the body against the code, and
+   cite `file:line` in the body where it matters. Your Design is only as
+   good as your reading of the code it lands in (see "Reading code").
+4. Check the ACs do not duplicate another open issue's work. If you are
+   re-stating "remove the install logic" in the distribution issue, that is
+   a second issue for work one issue already owns — reference it instead
+   (`blocked by #N`), and remove the duplicate AC.
+5. Verify the user has seen the plan and had their round (SOUL.md). No
+   silent self-approval.
+
+**Splitting an umbrella issue closes it.** When an umbrella issue spawns
+children, its job is done: close it (or narrow it to what remains) in the
+same change. An
+umbrella left open in `status/backlog` is a card no queue can ever resolve,
+and it reads as live planning work forever.
+
+## Fleshing out an existing issue
+
+"Flesh out #N" means the issue is under-specced and you must finish it.
+It does **not** mean re-summarising the previous draft in longer prose.
+
+1. Read the current body (and the issues it references — the earlier one may
+   already contain the decision you are looking for).
+2. Read the code the change lands in. This is what makes a spec concrete:
+   the existing unit file, the existing CLI verbs, the existing state-dir
+   resolution. `claude -p '<question>' --max-turns 10` in the worktree, per
+   "Reading code".
+3. Resolve the decisions (above) — from the code where the code answers,
+   from the user where it does not.
+4. Rewrite the body to include them, with the `## Decisions` table.
+5. Say what you changed and what is still open. "Fleshed out" with no
+   mention of an undecided point is a claim the user has to verify by
+   re-reading the issue.
+
 
 ## Moving a card (per-repo board)
 

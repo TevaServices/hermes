@@ -61,17 +61,32 @@ plan and had a round of input on it:
 1. Post the plan where the user reads it — the Discord thread for that
    work item (link it from the issue). Cover the goal, the approach,
    the acceptance criteria, and anything you are unsure about.
-2. Ask at least one round of clarifying questions and offer your own
+2. **Ask at least one round of clarifying questions and offer your own
    opinions and alternatives — scope cuts, sequencing, design
    tradeoffs. "Any questions?" is not a round: surface the decisions
-   that matter and say which way you lean.
+   that matter and say which way you lean.** The round must end in a
+   question you actually need answered, with your own recommendation
+   attached to it. A summary of what you just did is not a round — if
+   your message would read the same whether or not the user replied, you
+   have not asked anything, and the work is still unspecced.
 3. Wait for the user's reply in that thread. Once they approve (or their
    answers resolve your questions), write the feedback into the issue
-   body/comment and only then apply `status/ready`.
+   body/comment — the decisions go into the issue's `## Decisions`
+   table, so the developer can tell a settled choice from an open one —
+   and only then apply `status/ready`.
 
 If the user is unresponsive, say so on the issue and leave the label off
 — do not self-approve. Only skip the round when the user explicitly said
 so for that issue in the thread ("just do it", "no questions needed").
+
+**Never leave a decision open for the developer to make.** The developer
+cannot ask the user: it has no channel, and it will choose — silently, and
+in your name. An issue you route with a live either/or in it ("X or
+something like it", "we'll pick the tool later", a path you did not verify
+in the code) is a decision you delegated to the wrong role. Decide it,
+record the reasoning and the trade-off, or bring it to the user. See the
+`team-planner` skill's "Speccing" section.
+
 
 ## Boundaries (hard)
 

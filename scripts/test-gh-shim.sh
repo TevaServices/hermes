@@ -26,6 +26,12 @@
 # the cases pin is the fence itself. Refusals are asserted by exit code and
 # stderr marker — the stub must never be exec'd on a refused call.
 #
+# `R3 …` is the BODY GATE: an inline --body/-b on a whole-body write
+# (issue/pr create|edit) is refused, every gh-accepted spelling, while
+# --body-file, `gh issue comment --body` and non-issue/pr subcommands pass.
+# The body fixtures use SINGLE quotes on purpose — inside double quotes
+# this test file would run the command substitution it is testing for.
+#
 #   $ mise run test-gh-shim      (or: sh scripts/test-gh-shim.sh)
 
 set -u
@@ -409,6 +415,73 @@ case_refused_hh_only "R2 trailing-slash HERMES_HOME fires" \
 case_run "R2 pass: default home issue edit" \
     "token=<none>" "$tmp/scratch" "" \
     issue edit 26 --repo bcross/widget --remove-label status/ready
+
+# --- the body gate (R3: inline --body on a whole-body write) ----------------
+# The shape that filed five corrupted issues in one repo. Refused on
+# BOTH objects, every flag spelling, and from every
+# profile (rule 3 is shape-based, not role-based) — including under a
+# preset GH_TOKEN, since it sits above the passthrough like R1/R2.
+case_refused "R3 issue edit --body separated" \
+    "inline --body" "$tmp/scratch" "" \
+    issue edit 43 --repo acme/widget --body '## Goal
+Publish the `mach` agent. State lives in `MACH_STATE_DIR`.'
+case_refused "R3 issue create --body" \
+    "inline --body" "$tmp/scratch" "" \
+    issue create --repo acme/widget --title t --body 'run `systemctl enable machd`'
+case_refused "R3 issue edit --body= form" \
+    "inline --body" "$tmp/scratch" "" \
+    issue edit 43 --repo=acme/widget --body='run `mach install`'
+case_refused "R3 pr edit -b separated" \
+    "inline --body" "$tmp/scratch" "" \
+    pr edit 44 -R acme/widget -b 'see `install.go`'
+case_refused "R3 pr create -b attached" \
+    "inline --body" "$tmp/scratch" "" \
+    pr create --repo bcross/widget --title t -b'attach `mach`'
+case_refused "R3 pr edit -b= form" \
+    "inline --body" "$tmp/scratch" "" \
+    pr edit 44 --repo bcross/widget -b='x `y`'
+case_refused "R3 under preset GH_TOKEN" \
+    "inline --body" "$tmp/scratch" "ghp_preset" \
+    issue edit 43 --repo acme/widget --body 'body with a `span`'
+case_refused_as "R3 as reviewer, org creds live" \
+    "inline --body" "$tmp/scratch" "$tmp/homes/profiles/reviewer" \
+    pr edit 44 --repo acme/widget --body 'a `span`'
+# (A reviewer's `issue edit --body` is refused by R2 first — its message is
+# the useful one there, since the reviewer should not be editing issues at
+# all. The PR case above is the profile-agnostic proof: the reviewer fence
+# is silent on PRs, so what fires is rule 3, from a non-default home.)
+# A body line must not leak into the action/subcommand scan: the value of
+# --body is swallowed, so `issue edit 43 --body <doc>` still reads action
+# as `edit` and still routes by owner (here: refused, and NOT by the
+# label gate, whose marker is a label name).
+case_refused "R3 body value not an action" \
+    "inline --body" "$tmp/scratch" "" \
+    issue edit 43 --repo acme/widget --body 'review/ready'
+
+# Pass — the file shape, one-line comments, and subcommands that are not
+# whole-body writes. The one-line comment is the deliberate non-gate.
+case_run "R3 pass: issue edit --body-file" \
+    "token=<none>" "$tmp/scratch" "" \
+    issue edit 43 --repo bcross/widget --body-file body.md
+case_run "R3 pass: issue create --body-file" \
+    "token=<none>" "$tmp/scratch" "" \
+    issue create --repo bcross/widget --title t --body-file body.md
+case_run "R3 pass: pr create --body-file" \
+    "token=<none>" "$tmp/scratch" "" \
+    pr create --repo bcross/widget --title t --body-file body.md
+case_run "R3 pass: pr edit -F attached" \
+    "token=<none>" "$tmp/scratch" "" \
+    pr edit 44 --repo bcross/widget -Fbody.md
+case_run "R3 pass: one-line issue comment" \
+    "token=<none>" "$tmp/scratch" "" \
+    issue comment 43 --repo bcross/widget --body 'lgtm'
+case_run "R3 pass: release notes untouched" \
+    "token=<none>" "$tmp/scratch" "" \
+    release create v1 --repo bcross/widget --notes 'x `y` z'
+case_run "R3 pass: issue create, no body flag" \
+    "token=<none>" "$tmp/scratch" "" \
+    issue create --repo bcross/widget --title t -l type/chore
+
 # Passthroughs, which must never be second-guessed.
 case_run "preset GH_TOKEN wins" \
     "token=ghp_explicit" "$tmp/wt-org" "ghp_explicit" \
