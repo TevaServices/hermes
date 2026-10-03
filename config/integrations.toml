@@ -30,9 +30,15 @@ label = "Firecrawl web scraping/crawling"
 enabled = true
 # firecrawl-mcp is an npx stdio MCP server pointed at the self-hosted
 # API container. Hermes substitutes ${VAR} from its .env at runtime.
+#
+# The URL names firecrawl-guard, NOT firecrawl-api: the guard is the fence on
+# this path (secret/SSRF egress refusal, injection sanitising, forced
+# checkPromptInjection) and forwards to firecrawl-api:3002 behind it. See
+# docker/firecrawl-guard/guard.py and AGENTS.md. Pointing this back at
+# firecrawl-api is the escape hatch when the guard itself is the suspect.
 mcp_command = "npx"
 mcp_args = ["-y", "firecrawl-mcp"]
-mcp_env = { FIRECRAWL_API_URL = "http://firecrawl-api:3002", FIRECRAWL_API_KEY = "${FIRECRAWL_API_KEY}" }
+mcp_env = { FIRECRAWL_API_URL = "http://firecrawl-guard:3003", FIRECRAWL_API_KEY = "${FIRECRAWL_API_KEY}" }
 # TEST_API_KEY is what the self-hosted Firecrawl API accepts when
 # USE_DB_AUTHENTICATION=false.
 required_env = ["FIRECRAWL_API_KEY"]
