@@ -332,29 +332,35 @@ Verified against the live image + `firecrawl-mcp@3.27.3`, 2026-10-03:
   occurrences in the bundle); and there is **no force env var** — it is a
   per-request opt-in. It also **fails open** by design ("proceeding without a
   guard verdict"). It resolves its model through `getModel()`, so
-  `MODEL_NAME=firecrawl` sends it to the LiteLLM `firecrawl` group — but as of
-  2026-10-03 that group **404s on every call** (see below), so the classifier
-  currently runs, fails, and fails open: the json-extraction lane is NOT
-  guarded today. The guard still **forces the flag on**, because that is the
-  correct posture the moment the group is fixed, and the live check below is
-  exactly how to tell which state you are in.
+  `MODEL_NAME=firecrawl` sends it to the LiteLLM `firecrawl` group. The guard
+  therefore **forces the flag on** — reuse, not reimplementation — and because
+  it fails open, the live check below is how you confirm it is really running
+  rather than silently skipping.
 
-- **The `firecrawl` LiteLLM group is broken (found 2026-10-03, pre-existing).**
+- **The `firecrawl` group carries its OWN key, and that is load-bearing.**
   Both its members are OpenRouter `:free` models, and the account's OpenRouter
-  guardrail now excludes them: *"0 endpoints out of 1 requested are available
-  matching your guardrail restrictions and data policy … ZDR violation
-  (guardrail): 1 endpoint excluded"*. This fails for the `/responses` shape the
-  classifier uses AND the `/chat/completions` extraction shape alike — so it is
-  the **model group, not the call shape**, and it takes Firecrawl's `/extract`
-  and v2 json-format scrapes down with it, not just the classifier. The first
-  occurrence in 24h of litellm logs was the guard's own probe, i.e. nothing had
-  exercised the group recently — it is a latent breakage the guard surfaced, not
-  one it caused. Free OpenRouter endpoints and a ZDR guardrail are in tension by
-  construction: the account setting is at
-  `https://openrouter.ai/workspaces/default/guardrails`, and the alternatives
-  are to relax it or to point the group at an endpoint that offers ZDR. Every
-  failed call also cools the group down (`cooldown_time: 60`), which is why a
-  json scrape leaves the group unusable for a minute afterwards.
+  guardrail enforces ZDR — which excludes `:free` endpoints outright: *"0
+  endpoints out of 1 requested are available matching your guardrail
+  restrictions and data policy … ZDR violation (guardrail): 1 endpoint
+  excluded"*. This fails for the `/responses` shape the classifier uses AND the
+  `/chat/completions` extraction shape alike — so it is the **model group, not
+  the call shape**, and it takes Firecrawl's `/extract` and v2 json-format
+  scrapes down with it, not just the classifier. Free endpoints and a ZDR
+  guardrail are in tension by construction, so the group runs on
+  `OPENROUTER_FREE_KEY` — a free-models key with **no ZDR guardrail** — and it
+  is the only place that key appears. The tiers keep the shared
+  `OPENROUTER_API_KEY` (verified 2026-10-03: same `:free` model returned 404
+  ZDR on the shared key and 200 on the free key, while the shared key still
+  served a paid tier model). Found by the firecrawl-guard, which was the first
+  thing to exercise the group in a day — a latent breakage it surfaced rather
+  than caused. If the group 404s again, check the key first — the account
+  setting that caused it is at
+  `https://openrouter.ai/workspaces/default/guardrails`. The other ways out
+  would be relaxing ZDR for the whole account (which the tiers would inherit)
+  or moving the group to a paid endpoint that offers ZDR (which cuts against
+  this group being free-only by design); the scoped second key avoids both.
+  Every failed call also cools the group down (`cooldown_time: 60`), which is
+  why a failed json scrape leaves the group unusable for a minute afterwards.
 - **Lockdown mode** is a true no-egress guarantee but is *scrape-only*, and
   self-hosted it is a hard **refuse-everything** switch, not a cache mode:
   `useIndex` is `config.INDEX_DATABASE_URL !== undefined`, and with that unset

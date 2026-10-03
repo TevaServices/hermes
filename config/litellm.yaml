@@ -124,14 +124,26 @@ model_list:
   #    response_format json_schema, which Ollama Cloud strips. Both members
   #    are json_schema-capable. This group is also what a "never sees
   #    private data" lane looks like — copy the shape if another one appears.
+  #
+  #    These two use OPENROUTER_FREE_KEY, NOT the shared OPENROUTER_API_KEY,
+  #    and it is the only place that key appears. The account's OpenRouter
+  #    guardrail enforces ZDR, which excludes :free endpoints outright
+  #    ("ZDR violation (guardrail): 1 endpoint excluded") — so on the shared
+  #    key this whole group 404s and takes Firecrawl's /extract and v2
+  #    json-format scrapes down with it (and, since the guard forces
+  #    checkPromptInjection, the classifier fails open too). A free-models
+  #    key with no ZDR guardrail is what makes free endpoints usable. It is
+  #    scoped HERE on purpose: the tier fallbacks below stay on the shared
+  #    key, so relaxing ZDR buys the public-web lane only. Do not let this
+  #    key leak into a tier.
   - model_name: firecrawl
     litellm_params:
       model: openrouter/google/gemma-4-31b-it:free
-      api_key: os.environ/OPENROUTER_API_KEY
+      api_key: os.environ/OPENROUTER_FREE_KEY
   - model_name: firecrawl
     litellm_params:
       model: openrouter/nvidia/nemotron-3-super-120b-a12b:free
-      api_key: os.environ/OPENROUTER_API_KEY
+      api_key: os.environ/OPENROUTER_FREE_KEY
 
   # ── nomic-embed-text — Honcho embeddings, proxied to the stack-local
   #    ollama service (Ollama Cloud has no embeddings endpoint).
