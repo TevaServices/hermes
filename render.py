@@ -304,6 +304,14 @@ BOOT_PLACEHOLDERS = {
     "DISCORD_CHANNEL_DEVELOPER",
     "DISCORD_CHANNEL_REVIEWER",
     "DISCORD_CHANNEL_RELEASE",
+    # The operator's own Honcho peer id (honcho.json -> peerName, with
+    # pinUserPeer). An identifier, and not one this public repo should carry,
+    # so it travels the same path as the channel ids: emitted as @@VAR@@,
+    # resolved at boot from the host env file. Unset expands to "" — the
+    # plugin then treats the peer as undeclared and falls back to the
+    # transport identity, which is the behaviour without this pin at all
+    # (see the honcho.json block in render_profile for why the pin matters).
+    "HONCHO_USER_PEER",
 }
 _PLACEHOLDER_RE = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 
@@ -1317,9 +1325,66 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     # provider plugin), so enabling this does not double-wire anything;
     # the honcho MCP server (config/integrations.toml) remains the
     # on-demand tool surface.
+    #
+    # THE TUNING BELOW IS MEASURED, NOT DEFAULTED (2026-10-04, all values
+    # from the live plugin source and the running stack — see AGENTS.md
+    # §"Honcho memory: what recall actually does"):
+    #
+    # peerName / pinUserPeer — WITHOUT these the peer is whatever user id
+    #   the transport supplies, so a Discord turn resolves one and a cron /
+    #   Bot-Chat / CLI turn resolves NONE: the plugin then raises
+    #   HonchoPeerUnresolvedError, tells the agent "Honcho memory is off for
+    #   this session" and stores nothing. Measured: 327 of 504 injected
+    #   memory blocks across every profile were that notice (release
+    #   274/274, reviewer 48/48, developer 163/168) — the four team profiles
+    #   are cron-driven, so their Honcho memory has effectively never been
+    #   on. Pinning ONE peer is right here because the stack is single-user
+    #   (DISCORD_ALLOWED_USERS gates every channel) — the plugin warns
+    #   against it on a shared gateway, where it would merge users. It also
+    #   unblocks the MEMORY.md/USER.md → Honcho seeding, which the plugin
+    #   skips while no owner peer is declared.
+    #   The VALUE is a runtime secret (the operator's own peer id), so it is
+    #   a BOOT_PLACEHOLDER, not a literal: unset it expands to "" and the
+    #   plugin falls back to today's transport-identity behaviour.
+    #
+    # timeout 120 — the plugin's default HTTP timeout is 30s
+    #   (client_cache.py _DEFAULT_HTTP_TIMEOUT) while a dialectic call on
+    #   this host's LLM stack really takes 90-270s. Every automatic recall
+    #   therefore died in a timeout that the plugin logs as a WARNING and
+    #   then swallows into "" (session_context.py) — 90 occurrences in
+    #   agent.log across profiles. Injection is asynchronous (the result
+    #   lands on a later turn), so a longer ceiling costs no turn latency.
+    #
+    # dialecticReasoningLevel/Cap "minimal" — the auto-injected supplement
+    #   is capped at 1200 chars, so spending a 5-round (level `low`) or
+    #   10-round (`high`, via the query-length heuristic) agentic loop on it
+    #   every turn buys latency and tokens that the cap then throws away: a
+    #   measured `low` call ran 90-210s server-side. Auto-injection runs
+    #   `minimal` (one tool round, measured 18-28s); an explicit
+    #   `honcho_reasoning` tool call is unaffected — the agent picks its own
+    #   level and the plugin returns those results in full.
+    #
+    # dialecticMaxChars 1200 — upstream's 600 truncates mid-sentence ("### …"
+    #   in the stored blocks) now that real answers measure 1.2-3.4 KB.
+    #   ~300 tokens/turn; the base representation layer rides separately and
+    #   is uncapped.
+    #
+    # logging true — one JSON record per turn (reason + payload) in
+    #   ~/.honcho/injection.log, owner-only. It is the ONLY per-turn record
+    #   of what recall did and why; it was off, which is why the failures
+    #   above had to be reconstructed from the database instead of read.
     (out_dir / "honcho.json").write_text(
-        json.dumps({"enabled": True, "baseUrl": "http://honcho-api:8000"},
-                   indent=2) + "\n"
+        json.dumps({
+            "enabled": True,
+            "baseUrl": "http://honcho-api:8000",
+            "peerName": "@@HONCHO_USER_PEER@@",
+            "pinUserPeer": True,
+            "timeout": 120,
+            "dialecticMaxChars": 1200,
+            "dialecticReasoningLevel": "minimal",
+            "reasoningLevelCap": "minimal",
+            "logging": True,
+        }, indent=2) + "\n"
     )
 
     soul = profile_dir / "SOUL.md"
@@ -1365,12 +1430,13 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
 
     # Fail the build on an @@VAR@@ placeholder the boot resolver does not
     # know. render.py cannot resolve these itself — the values (Discord
-    # channel IDs) are runtime secrets in the host env file, not in git — so
-    # they are emitted verbatim for docker/hermes/expand-placeholders.py to
-    # fill in at container boot. An unknown name is a typo that would ship a
-    # config with a literal @@VAR@@ where a channel id belongs, so it is a
-    # build error rather than a boot-time surprise.
-    for fname in ("config.yaml", "cron.json"):
+    # channel IDs, the Honcho user peer) are runtime secrets in the host env
+    # file, not in git — so they are emitted verbatim for
+    # docker/hermes/expand-placeholders.py to fill in at container boot. An
+    # unknown name is a typo that would ship a config with a literal @@VAR@@
+    # where a channel id belongs, so it is a build error rather than a
+    # boot-time surprise.
+    for fname in ("config.yaml", "cron.json", "honcho.json"):
         for var in _PLACEHOLDER_RE.findall((out_dir / fname).read_text()):
             if var not in BOOT_PLACEHOLDERS:
                 raise ConfigError(

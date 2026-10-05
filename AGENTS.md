@@ -250,12 +250,16 @@ echoed, or routed through a shell history or chat transcript.
   2026-10-04** because it is the DEFAULT level for every query
   (`src/dialectic/chat.py`) and carries the most demanding prompt in the
   stack, so it was the one lane whose tier contradicted its work). Every
-  lane except `summary` requires tool calling and the deriver requires strict
-  JSON mode, so whatever a lane points at must support both. Raising the
-  DERIVER is the single biggest spend lever here — and the biggest quality
-  lever; it is the one line to change if memory extraction looks thin (live
-  signal to watch: deriver batches returning `observation_count=0`, and
-  100-475s calls, both seen 2026-10-02/03).
+  lane except `summary` requires tool calling, and **the deriver additionally
+  requires structured JSON output — which no Ollama-backed lane on this
+  gateway honours**, so it carries
+  `DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE=json_object` (verified: 0
+  facts → 3 facts). That line, the peer pin and the recall-side tuning are
+  the whole story of §"Honcho memory (what recall actually does)" below —
+  read it before changing anything here. Raising the DERIVER is the single
+  biggest spend lever here — and the biggest quality lever; it is the one
+  line to change if memory extraction still looks thin once the structured
+  output is actually working.
 
 ## Stack particulars (hard-won)
 
@@ -619,6 +623,102 @@ for t in ('compression','title_generation','memory_query_rewrite','vision','mcp'
     print(t, r(t))"
 #   -> compression ('litellm','smarter',…)   title_generation ('litellm','cheap',…)
 #      memory_query_rewrite ('litellm','cheap',…)   vision/mcp ('auto',…)
+```
+
+### Honcho memory (what recall actually does)
+
+Honcho is the stack's memory provider, and its behaviour is split across two
+surfaces that are easy to confuse: **the Honcho-side lanes** (which model
+derives/summarises/answers — `secrets/honcho.env`) and **the plugin side**
+(when recall fires, how long it waits, how much it injects — each profile's
+`honcho.json`, rendered by render.py). Measured 2026-10-04, from the live
+plugin source, `honcho-db`, and 504 memory blocks recovered from stored
+turns; two independent defects were making recall look broken.
+
+**1. The deriver could not produce JSON, so there was almost nothing to
+recall.** The deriver asks for a typed extraction
+(`response_model=PromptRepresentation, json_mode=True`, `deriver.py:156`) and
+**every Ollama-backed lane on this gateway ignores `response_format:
+json_schema`** — measured directly: `cheap` truncates, `smart` returns
+markdown-fenced prose, and the schema changes the output not at all. Honcho's
+pydantic parse then rejects it, retries 3×, and parks the job. In `honcho-db`:
+84 queue rows, **70 errored, all 70 `task_type='representation'`, 65 of them
+`ValidationError: Invalid JSON … for PromptRepresentation`**; 28 documents
+total, all `explicit`, covering **5 of 188 messages (~2.7 %)**; zero
+deductive/inductive documents ever; `card` returns `null`. The fix is
+Honcho's own mode for providers without json_schema support —
+`structured_output_mode: json_object` (schema injected into the prompt,
+result repaired downstream). Verified by replaying the deriver's exact call:
+**default 0 facts vs `json_object` 3 correct facts**, same `cheap` tier, no
+provider change, no extra spend. That is the one line
+`DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE=json_object`. The `DREAM_*`
+lanes are deliberately NOT set: they call with `tools=` and no
+`response_model` (`src/dreamer/specialists.py`), so the mode does not apply —
+and they have never run here, because they need the ≥50 documents the broken
+deriver never produced. **Watch them the first time they fire.**
+
+**2. The plugin threw away recall it had already paid for.** A real dialectic
+call against the live instance returns genuine context (1 233 chars in 104 s,
+3 414 chars in 267 s), but the plugin's HTTP timeout defaults to **30 s**
+(`client_cache.py::_DEFAULT_HTTP_TIMEOUT`, since `honcho.json` set none)
+while the call really takes **90–270 s**. `session_context.py` catches the
+timeout, logs a WARNING, and **returns `""`** — 90 of those in `agent.log`
+across profiles — and each failure also widens the plugin's empty-streak
+backoff (up to 8× the cadence), so recall decays toward never firing. The
+rendered `honcho.json` now carries `timeout: 120` (injection is
+asynchronous, so a longer ceiling costs no turn latency),
+`dialecticReasoningLevel`/`reasoningLevelCap: minimal` (auto-injection is
+capped at `dialecticMaxChars: 1200`, so buying a 5-round `low` loop — 90–210 s
+measured — every turn only feeds the cap; an explicit `honcho_reasoning`
+tool call still picks its own level and returns in full), and `logging: true`
+for the per-turn injection audit at `~/.honcho/injection.log`, which records
+the reason and payload and is the only way to answer "is recall working?"
+from data rather than inference. It was off, which is why all of the above
+had to be reconstructed from the database.
+
+**3. Three of five profiles had no memory at all — by identity, not by
+failure.** With no declared `peerName` the peer is whatever the transport
+supplies: a Discord message carries one, a **cron / Bot-Chat / CLI turn
+carries none**, and on those the plugin raises `HonchoPeerUnresolvedError`,
+injects "Honcho memory is off for this session", and stores nothing. The
+four team profiles are cron-driven, so **327 of the 504 blocks ever injected
+across every profile were that notice** (release 274/274, reviewer 48/48,
+developer 163/168); `honcho_release` as a workspace does not even exist.
+Every profile now renders `peerName` + `pinUserPeer: true` — correct here
+because the stack is single-user behind `DISCORD_ALLOWED_USERS` (the plugin
+warns against pinning only on a *shared* gateway, where it would merge
+distinct users). It also unblocks the `MEMORY.md`/`USER.md` → Honcho seeding
+the plugin skips while no owner peer is declared. **The value is an
+identifier and does not belong in this public repo**: it travels the
+`BOOT_PLACEHOLDERS` path as `@@HONCHO_USER_PEER@@`, resolved at boot from
+`HONCHO_USER_PEER` in `/etc/hermes/hermes-main.env` (unset → `""` → the old
+transport-identity behaviour, reported on stderr). Set it to the peer id the
+transport already supplies (your Discord user id), **not** a friendly name —
+a different string is a different peer, and the two memories split.
+
+Checks, in the order they pay off:
+
+```bash
+# The plugin's own view: peer, recall mode, level, cap, connection.
+docker exec -u hermes -e HOME=/opt/data/home -e HERMES_HOME=/opt/data \
+  hermes-main /opt/hermes/bin/hermes honcho status      # "User peer:" must be set
+docker exec -u hermes -e HOME=/opt/data/home hermes-main \
+  /opt/hermes/bin/hermes honcho peers                   # per profile
+# Per-turn record of what recall injected and why (needs logging: true):
+docker exec hermes-main tail -3 /opt/data/home/.honcho/injection.log
+# The deriver's own health — the number that was 70 errored / 0 dream:
+docker exec honcho-db psql -U postgres -c \
+  "select task_type, count(*), count(*) filter (where error is not null) as errored from queue group by 1"
+# Live recall, read-only, timed (a real answer is ~1-3 KB; 30s = the old bug):
+docker exec honcho-api python3 -c "
+import httpx,os,time; t=time.time()
+r=httpx.post('http://127.0.0.1:8000/v3/workspaces/hermes/peers/hermes/chat',
+  json={'query':'What do you know about this user?','reasoning_level':'minimal'},timeout=200)
+print(round(time.time()-t,1),'s',len(r.text),r.status_code)"
+# What actually reached an agent's turn (every injected memory block):
+docker exec hermes-main python3 -c "
+import sqlite3;c=sqlite3.connect('/opt/data/state.db')
+print(c.execute(\"select count(*) from messages where content like '%memory-context%'\").fetchone())"
 ```
 
 ### Discord
@@ -2117,6 +2217,15 @@ for m in cheap smart smarter smartest; do printf '%-9s ' "$m"; \
 # anywhere, needs the internet but no key) — the ONLY check that can catch
 # litellm.yaml and models.toml drifting apart, on tiers and fallbacks alike.
 mise run check-model-windows                        # all ok, exit 0
+# Honcho memory end to end: the plugin's own view (peer must be set), the
+# per-turn injection audit, the deriver's queue (0 errored), and one timed
+# recall. Commands and expected numbers: §"Honcho memory (what recall
+# actually does)". The deriver's queue is the one that was silently broken —
+# 70 errored rows, all `representation`.
+docker exec -u hermes -e HOME=/opt/data/home -e HERMES_HOME=/opt/data \
+  hermes-main /opt/hermes/bin/hermes honcho status | grep 'User peer'
+docker exec honcho-db psql -U postgres -c \
+  "select task_type, count(*) filter (where error is not null) as errored from queue group by 1"
 # Aux lanes resolve to the tiers render.py pins them to (see §"Auxiliary side
 # tasks"). Run against the DEPLOYED config, not the repo — this is the check
 # that would have caught four inert env pins: an unpinned lane answers

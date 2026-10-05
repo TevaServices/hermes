@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Offline tests for the aux-lane rendering rules in render.py.
+"""Offline tests for what render.py emits per profile.
 
 WHY THIS EXISTS
 
-Hermes routes its auxiliary side tasks (compression, title generation,
-memory-query rewrite, vision, ...) through one resolver whose model comes from
-`auxiliary.<task>.{provider, model}` in config.yaml — `auto` meaning "the
-profile's primary model". This repo pinned four of those lanes through
-`AUXILIARY_*_MODEL` env vars for months; the image reads no such var for any
-of those tasks, so every lane silently inherited the primary and the docs
-described a routing that was not happening. The pins now live in
-STACK_AUX_MODELS and are rendered per profile — and a rendered pin can fail
-in exactly the same silent way, so these cases pin the loud half:
+Two rendered surfaces here were both silently wrong in the same way — a
+setting that reads correct and reaches nothing — and both cost real
+behaviour before anyone noticed. These cases pin the loud half.
+
+AUX LANES (`auxiliary.<task>`). Hermes routes its auxiliary side tasks
+(compression, title generation, memory-query rewrite, vision, ...) through
+one resolver whose model comes from `auxiliary.<task>.{provider, model}` in
+config.yaml — `auto` meaning "the profile's primary model". This repo pinned
+four of those lanes through `AUXILIARY_*_MODEL` env vars for months; the
+image reads no such var for any of those tasks, so every lane silently
+inherited the primary and the docs described a routing that was not
+happening. The pins now live in STACK_AUX_MODELS and are rendered per
+profile:
 
   1. THE DECLARATION. Every task in STACK_AUX_MODELS is a task the image has
      (KNOWN_AUX_TASKS), and every tier it names exists in models.toml.
@@ -28,11 +32,23 @@ in exactly the same silent way, so these cases pin the loud half:
   5. THE OVERRIDES. A profile may set a bare tier name, or a table merged over
      the declared block ({model = "cheap"} alone keeps the provider).
 
-Run from the repo root: python3 scripts/test-render-aux.py  (needs 3.11+
+HONCHO PLUGIN CONFIG (`honcho.json`). Every value there is a recall
+behaviour the plugin's own defaults got wrong on this stack, measured from
+the plugin source and the running system (AGENTS.md §"Honcho memory"): the
+30s default HTTP timeout discarded recall that takes 90-270s, a 5-round
+reasoning level was being spent on a 600-char-capped supplement, no user
+peer was pinned so cron/Bot-Chat turns had no identity and stored nothing
+(327 of 504 memory blocks ever injected were the "memory is off" notice),
+and the injection audit log was off, so none of it left a trace. Also pinned
+here: the peer id travels as a boot placeholder rather than a literal in
+this public repo, and the boot expander actually covers honcho.json.
+
+Run from the repo root: python3 scripts/test-render.py  (needs 3.11+
 for tomllib; `mise run test` provides it). No Docker, no network.
 """
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -210,6 +226,40 @@ check("a profile may add a task the stack does not pin", added["skills_hub"],
       {"provider": "litellm", "model": "cheap"})
 check_raises("a non-table, non-string override is a build error",
              with_aux({"title_generation": 3}))
+
+# ---------------------------------------------------------------------------
+# 6. the Honcho plugin config (honcho.json)
+# ---------------------------------------------------------------------------
+print("# 6. honcho.json")
+renders()  # (re)render the default profile into the scratch root
+honcho = json.loads(Path(_scratch.name, "auxprobe", "honcho.json").read_text())
+
+# The peer pin: without it a cron/Bot-Chat turn resolves no user identity and
+# Honcho memory is simply off for that session.
+check("the user peer is pinned", honcho.get("pinUserPeer"), True)
+check("the peer id is a boot placeholder, not a literal",
+      honcho.get("peerName"), "@@HONCHO_USER_PEER@@")
+check("the peer placeholder is declared, so the boot expander knows it",
+      "HONCHO_USER_PEER" in render.BOOT_PLACEHOLDERS, True)
+# The plugin's 30s default discarded recall that takes 90-270s on this stack.
+check("the HTTP timeout exceeds the plugin default (30s)",
+      honcho.get("timeout", 0) > 30, True)
+# A 5-round reasoning level on a char-capped, every-turn supplement bought
+# latency the cap then threw away.
+check("auto-injection reasoning is bounded to minimal",
+      (honcho.get("dialecticReasoningLevel"), honcho.get("reasoningLevelCap")),
+      ("minimal", "minimal"))
+check("the injection cap is raised from the 600 default",
+      honcho.get("dialecticMaxChars", 0) > 600, True)
+check("the injection audit log is on", honcho.get("logging"), True)
+
+# The placeholder must actually be expanded at boot: honcho.json is copied to
+# the profile home by bootstrap-profiles.sh, so the expander has to cover it
+# or the literal @@VAR@@ would ship into the plugin's config.
+bootstrap = Path(ROOT, "docker/hermes/bootstrap-profiles.sh").read_text()
+expand_loop = bootstrap.split("expand_overlay()", 1)[1].split("}", 1)[0]
+check("bootstrap expands placeholders in honcho.json",
+      "honcho.json" in expand_loop, True)
 
 # ---------------------------------------------------------------------------
 # summary
