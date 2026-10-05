@@ -9,9 +9,9 @@ memory-query rewrite, vision, ...) through one resolver whose model comes from
 profile's primary model". This repo pinned four of those lanes through
 `AUXILIARY_*_MODEL` env vars for months; the image reads no such var for any
 of those tasks, so every lane silently inherited the primary and the docs
-described a routing that was not happening. The repair moved the pins into
-STACK_AUX_MODELS, rendered per profile — and a rendered pin can fail in
-exactly the same silent way, so these cases pin the loud half:
+described a routing that was not happening. The pins now live in
+STACK_AUX_MODELS and are rendered per profile — and a rendered pin can fail
+in exactly the same silent way, so these cases pin the loud half:
 
   1. THE DECLARATION. Every task in STACK_AUX_MODELS is a task the image has
      (KNOWN_AUX_TASKS), and every tier it names exists in models.toml.

@@ -269,8 +269,8 @@ STACK_AUX_MODELS = {
 }
 
 # The aux task set of the base image, as a typo guard. A task key that is not
-# in this set is silently ignored by Hermes, which is exactly the failure this
-# whole change exists to undo — so an unknown key fails the BUILD instead.
+# in this set is silently ignored by Hermes — a knob that does nothing while
+# looking like the pins that work — so an unknown key fails the BUILD instead.
 # Re-verify at a HERMES_REF bump:
 #   python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG; \
 #               print(sorted(DEFAULT_CONFIG['auxiliary']))"
