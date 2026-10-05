@@ -704,8 +704,11 @@ docker exec -u hermes -e HOME=/opt/data/home -e HERMES_HOME=/opt/data \
   hermes-main /opt/hermes/bin/hermes honcho status      # "User peer:" must be set
 docker exec -u hermes -e HOME=/opt/data/home hermes-main \
   /opt/hermes/bin/hermes honcho peers                   # per profile
-# Per-turn record of what recall injected and why (needs logging: true):
-docker exec hermes-main tail -3 /opt/data/home/.honcho/injection.log
+# Per-turn record of what recall injected and why (needs logging: true). One
+# shared file: every gateway slot runs with HOME=/opt/data (see
+# /run/service/gateway-*/run), so records for all profiles land here —
+# distinguished by the session_key field.
+docker exec hermes-main tail -3 /opt/data/.honcho/injection.log
 # The deriver's own health — the number that was 70 errored / 0 dream:
 docker exec honcho-db psql -U postgres -c \
   "select task_type, count(*), count(*) filter (where error is not null) as errored from queue group by 1"
