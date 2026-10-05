@@ -753,10 +753,17 @@ release_incident() {  # like incident(), plus the retry TTL
            && [ $(( $(date +%s) - first )) -lt "${TEAM_RELEASE_RETRY_TTL:-21600}" ]; then
             return 1   # unchanged, and not yet due for a reminder
         fi
-        [ "$prev" = "$key" ] || first=$(date +%s)
-    else
-        first=$(date +%s)
     fi
+    # Stamp `first` on EVERY emit, not only when the key changed. Reaching
+    # here means the finding is new/changed OR unchanged-and-past-its-TTL,
+    # and in both cases this emission IS the new "first seen". Leaving the
+    # old value in place when only the TTL had lapsed made `now - first`
+    # stay past the TTL forever, so the finding re-delivered on EVERY tick
+    # after the first expiry. Observed live 2026-10-04: ~19h of 5-minute
+    # re-deliveries to the release agent, 194 agent turns in one day, each
+    # resuming the profile's 700-message "Bot Chat" session on
+    # glm-5.3-flash (13.2M input tokens in that day alone).
+    first=$(date +%s)
     { printf '%s\n%s\n' "$key" "$first"; } > "$f" 2>/dev/null || true
     echo "$@"
     return 0

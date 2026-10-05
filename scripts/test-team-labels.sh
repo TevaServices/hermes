@@ -566,6 +566,33 @@ else
     bad "triage finding reprinted unchanged: $(printf '%s' "$out" | tr '\n' '|' | head -c 160)"
 fi
 
+# ...but after the retry TTL it is said ONCE MORE, and then silent again.
+# That "and then silent again" is the regression this pins: the reminder used
+# to leave the recorded first-seen at its ORIGINAL value, so once the TTL had
+# lapsed `now - first` stayed past it forever and the finding re-delivered on
+# EVERY tick. Observed live 2026-10-04 — ~19h of 5-minute re-deliveries to the
+# release agent, 194 agent turns in one day, each resuming the profile's
+# 700-message "Bot Chat" session on glm-5.3-flash. Age the recorded first-seen
+# rather than waiting 6h.
+st="$tmp/home/cache/team-queue-review-approved-release.state"
+if [ -f "$st" ]; then
+    { sed -n 1p "$st"; echo 1000000000; } > "$st.new" && mv "$st.new" "$st"
+    out=$(run_queue 0 "" "" releases)
+    case "$out" in
+        *"RELEASE TAGGED, NOT PUBLISHED"*|*"RELEASE WORKFLOW FAILED"*)
+            ok "a TTL-expired triage finding is reminded once" ;;
+        *)  bad "TTL-expired triage finding was not re-emitted (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))" ;;
+    esac
+    out=$(run_queue 0 "" "" releases)
+    if [ -z "$out" ]; then
+        ok "the reminder resets the retry clock (no per-tick re-delivery)"
+    else
+        bad "TTL reminder did not reset the clock — the finding re-emits every tick"
+    fi
+else
+    bad "release triage dedupe slot missing at $st"
+fi
+
 # A run still IN FLIGHT is the resumable "waiting on CI" state, not a fault —
 # otherwise a 6-minute release workflow would wake the agent every tick.
 rm -rf "$tmp/home"; mkdir -p "$tmp/home"
