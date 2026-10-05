@@ -27,14 +27,15 @@ log() { echo "[bootstrap-profiles] $*"; }
 # Resolve @@VAR@@ placeholders in the rendered overlays from the container
 # environment, BEFORE anything reads them. render.py runs at image build time
 # and cannot see runtime secrets, so per-deployment values (Discord channel
-# IDs) are rendered as placeholders and resolved here, at boot, where the
-# env_file values are present. Runs on the overlay in place: both
-# copy_overlay (config.yaml) and reconcile_cron (cron.json) read from there.
+# IDs, the Honcho user peer) are rendered as placeholders and resolved here,
+# at boot, where the env_file values are present. Runs on the overlay in
+# place: copy_overlay (config.yaml, honcho.json) and reconcile_cron
+# (cron.json) read from there.
 # Missing vars expand to empty and are reported — see expand-placeholders.py.
 expand_overlay() {
   overlay_dir="$1"
   files=""
-  for f in config.yaml cron.json; do
+  for f in config.yaml cron.json honcho.json; do
     [ -f "$overlay_dir/$f" ] && files="$files $overlay_dir/$f"
   done
   [ -n "$files" ] || return 0

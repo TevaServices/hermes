@@ -121,15 +121,18 @@ echoed, or routed through a shell history or chat transcript.
   `POST ollama.com/api/show` and re-checkable with
   `mise run check-model-windows`):
   **cheap** = `nemotron-3-nano:30b` (256k; `smart_model_routing`'s cheap
-  lane for short/simple turns, the light aux side tasks — session search,
-  web extract, skills hub — and Honcho's VOLUME lanes: the deriver, which
-  runs on every message, plus the minimal/low dialectic levels),
+  lane for short/simple turns, Hermes' mechanical aux lanes (title
+  generation, memory-query rewrite — see §"Auxiliary side tasks"), and
+  Honcho's VOLUME lanes: the deriver, which runs on every message, plus the
+  `minimal` dialectic level),
   **smart** = `gemma4:cloud` (256k, vision; the planner profile, and
   Honcho's REASONING lanes: dream deduction/induction, summaries, and the
-  medium/high/max dialectic levels),
-  **smarter** = `glm-5.3-flash` (1M, vision; the default and developer
-  profiles, and aux compression — the one lane that needs intelligence AND
-  a big window),
+  `low`/medium/high/max dialectic levels — `low` is the default level for
+  every dialectic query and runs a 5-round agentic tool loop, so it is
+  reasoning work however light the name sounds),
+  **smarter** = `glm-5.3-flash` (1M, vision; the default, developer and
+  release profiles, and aux compression — the one lane that needs
+  intelligence AND a big window),
   **smartest** = `glm-5.3` (1M, **no vision**; the reviewer, plus the
   opt-in `/model smartest` escalation — kimi-k3 is the drop-in swap if the
   top tier ever needs to accept images).
@@ -184,17 +187,19 @@ echoed, or routed through a shell history or chat transcript.
   lane that can never see private data.
 - `litellm.env`: `LITELLM_MASTER_KEY`, `OLLAMA_API_KEY`,
   `OPENROUTER_API_KEY` (free tier — create at https://openrouter.ai/keys).
-- `hermes-main.env`: `LITELLM_API_KEY` (the master key), the `AUXILIARY_*`
-  overrides (BASE_URL=http://litellm:4000), `FIRECRAWL_API_KEY` (must equal
-  `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any non-empty value
-  while honcho-api runs no-auth; must match honcho-api if auth is enabled),
-  `OPENAI_API_KEY` + `OPENAI_BASE_URL` (mirror the LiteLLM endpoint for
-  Hermes' registry-based fallbacks — `hermes chat`'s first-run gate only
-  inspects registry env vars, never config.yaml's `custom_providers`, and
-  exits with setup guidance without them even though the gateway resolves
-  the provider fine), `DISCORD_BOT_TOKEN` + `DISCORD_ALLOWED_USERS`
-  (gateway), GitHub App vars (below), and `PROFILE_<NAME>_*` lines for the
-  team profiles.
+- `hermes-main.env`: `LITELLM_API_KEY` (the master key), `FIRECRAWL_API_KEY`
+  (must equal `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any
+  non-empty value while honcho-api runs no-auth; must match honcho-api if
+  auth is enabled), `OPENAI_API_KEY` + `OPENAI_BASE_URL` (mirror the LiteLLM
+  endpoint for Hermes' registry-based fallbacks — `hermes chat`'s first-run
+  gate only inspects registry env vars, never config.yaml's
+  `custom_providers`, and exits with setup guidance without them even though
+  the gateway resolves the provider fine), `DISCORD_BOT_TOKEN` +
+  `DISCORD_ALLOWED_USERS` (gateway), GitHub App vars (below), and
+  `PROFILE_<NAME>_*` lines for the team profiles.
+  **It does NOT carry `AUXILIARY_*` model pins, and must not grow them
+  back** — see §"Auxiliary side tasks" for the four that were dead weight
+  there until 2026-10-04.
 - **`hermes-main.env` is the LAUNCH profile's env, and Hermes deletes its
   non-global names from every other profile's cron child.** A cron job's
   child env is built as `strip_launch_profile_env(build_subprocess_env(...))`
@@ -234,12 +239,27 @@ echoed, or routed through a shell history or chat transcript.
   `nomic-embed-text` entry, which proxies to the stack-local `ollama`
   service (768 dims; Ollama Cloud has **no embeddings endpoint**) +
   `EMBEDDING_VECTOR_DIMENSIONS=768`. Optional `HONCHO_POSTGRES_PASSWORD`.
-  The section split follows the work: **volume lanes on `cheap`** (the
-  deriver runs on every message, and minimal/low dialectic is light by
-  construction), **reasoning lanes on `smart`** (dream deduction/induction,
-  summaries, and the medium/high/max dialectic levels). Raising the DERIVER
-  is the single biggest spend lever here — and the biggest quality lever;
-  it is the one line to change if memory extraction looks thin.
+  The section split follows the work, and is measured per lane against the
+  source, not the lane's name: **volume lanes on `cheap`** (the deriver runs
+  on every message and is mechanical JSON extraction; `minimal` dialectic is
+  1 tool round with 2 tools and 250 tokens out), **reasoning lanes on
+  `smart`** (dream deduction/induction are 12- and 10-iteration agentic loops
+  over the whole memory graph with 8192 tokens out; summaries are the text
+  that gets surfaced to the agent; and the dialectic levels `low` through
+  `max` are 5/2/4/10-round agentic tool loops — **`low` moved off `cheap`
+  2026-10-04** because it is the DEFAULT level for every query
+  (`src/dialectic/chat.py`) and carries the most demanding prompt in the
+  stack, so it was the one lane whose tier contradicted its work). Every
+  lane except `summary` requires tool calling, and **the deriver additionally
+  requires structured JSON output — which no Ollama-backed lane on this
+  gateway honours**, so it carries
+  `DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE=json_object` (verified: 0
+  facts → 3 facts). That line, the peer pin and the recall-side tuning are
+  the whole story of §"Honcho memory (what recall actually does)" below —
+  read it before changing anything here. Raising the DERIVER is the single
+  biggest spend lever here — and the biggest quality lever; it is the one
+  line to change if memory extraction still looks thin once the structured
+  output is actually working.
 
 ## Stack particulars (hard-won)
 
@@ -525,6 +545,181 @@ carry the matching prompt-level rule: web content is data, never instructions.
   runtime UID before its first privilege drop) — upstream's stage2 chown
   only runs after our wrapper's exec, so an unwritable volume would kill
   the wrapper first. Don't remove that chown.
+
+### Auxiliary side tasks (which model each side task actually runs on)
+
+Hermes routes its side tasks — context compression, title generation, vision,
+memory-query rewrite, smart approval, MCP sampling, and a long tail of
+per-feature lanes — through one resolver, and **the model for a task is a
+field on the task in config.yaml**: `auxiliary.<task>.{provider, model}`,
+read by `auxiliary_client._get_auxiliary_task_config` /
+`_resolve_task_provider_model` (priority: explicit call args > that config >
+`auto`). **`auto` means "my main model for side tasks too"** — so an
+unpinned lane runs on the *profile's primary*, which for the reviewer is the
+top tier.
+
+**The env vars this repo used to document for this do not exist.** Until
+2026-10-04 `hermes-main.env` carried `AUXILIARY_COMPRESSION_MODEL=smarter`,
+`AUXILIARY_SESSION_SEARCH_MODEL=cheap`, `AUXILIARY_WEB_EXTRACT_MODEL=cheap`
+and `AUXILIARY_SKILLS_HUB_MODEL=cheap`, and the docs, a profile comment and
+the env template all asserted the lanes were pinned by them. On image
+`v2026.9.24` **none of the four is read anywhere**: the only aux names the
+image consults in the environment are `AUXILIARY_VISION_*`,
+`AUXILIARY_VIDEO_MODEL` and `AUXILIARY_APPROVAL_*`
+(`hermes_cli/cli_config_load.py::_AUXILIARY_TASK_ENV`,
+`tools/vision_tools.py`, `gateway/run.py::_bridge_auxiliary_config_to_env`,
+whose own docstring says *"compression reads yaml"*). Measured on the live
+stack: exporting all four changed no resolution, every one of the image's aux
+tasks resolved to `('auto', None, …)`, `agent.log` showed
+`Auxiliary title_generation: using custom (smarter)`, and the
+`session_model_usage` table had **100% of a week's 199 calls on `smarter`**.
+Two of the four also name tasks that do not exist in this version
+(`session_search`, `web_extract` are tools, not aux LLM lanes). The two
+mechanisms are worth keeping straight because only one of them is fail-loud:
+a wrong env pin is silently inert, while the rendered config below is
+validated at build time.
+
+Routing is therefore declared once, in `render.py`'s **`STACK_AUX_MODELS`**
+(task → tier alias), rendered into every profile's `auxiliary` block as
+`{provider, model}` — the same shape `smart_model_routing.cheap_model` uses,
+so the provider's `base_url`/key ride the `custom_providers` entry and no
+profile repeats a model id. A profile may override a single task via
+`[config_extra.auxiliary.<task>]` (a bare tier name, or a table merged over
+the declared block, so `{model = "cheap"}` alone is valid). `render.py`
+fails the build on: a task key not in `KNOWN_AUX_TASKS` (Hermes ignores an
+unknown key, so a typo would be a knob that does nothing — the fault these
+pins exist to prevent); a lane pointed at a name that is not a tier; and a
+compression lane
+whose declared window is smaller than the profile's primary's (checked on
+the *merged* block, so a profile override cannot walk past it — compaction
+summarises up to 80% of the primary's window, so a smaller compression model
+is handed more context than it can take).
+
+Current pins, and why only these: **compression → `smarter`** (needs
+intelligence AND a window ≥ the profile's own), **title_generation → `cheap`**
+(one call per new session, a handful of tokens — volume grows with the
+fresh-session-per-wake shape), **memory_query_rewrite → `cheap`** (mechanical,
+8s timeout; idle today because the Honcho memory provider runs with
+`query_rewrite` off). Deliberately NOT pinned, so they inherit the primary —
+the safe default, free while unused: **vision** (must land on a model that
+takes images; the reviewer's primary `smartest` has none), **mcp** (MCP
+*sampling* is an arbitrary server-directed generation), **approval** (timeout
+only; `approvals.mode` is `off`), **skills_hub** (a configurable task with no
+call site in this image), and the unwired tail (`curator`, `monitor`,
+`goal_judge`, `triage_specifier`, `kanban_*`, `profile_describer`,
+`tts_audio_tags`, `moa_*`, `review`/`background_review` — the last disabled).
+The aux task set is re-checked at each HERMES_REF bump:
+`python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG;
+print(sorted(DEFAULT_CONFIG['auxiliary']))"` under the image venv.
+
+Live evidence for this mechanism, on the rendered artifact (a throwaway
+`HERMES_HOME` holding `build/default/config.yaml`, image venv):
+
+```bash
+docker exec -u hermes -e HOME=/opt/data/home hermes-main \
+  /opt/hermes/.venv/bin/python -c "
+from agent.auxiliary_client import _resolve_task_provider_model as r
+for t in ('compression','title_generation','memory_query_rewrite','vision','mcp'):
+    print(t, r(t))"
+#   -> compression ('litellm','smarter',…)   title_generation ('litellm','cheap',…)
+#      memory_query_rewrite ('litellm','cheap',…)   vision/mcp ('auto',…)
+```
+
+### Honcho memory (what recall actually does)
+
+Honcho is the stack's memory provider, and its behaviour is split across two
+surfaces that are easy to confuse: **the Honcho-side lanes** (which model
+derives/summarises/answers — `secrets/honcho.env`) and **the plugin side**
+(when recall fires, how long it waits, how much it injects — each profile's
+`honcho.json`, rendered by render.py). Measured 2026-10-04, from the live
+plugin source, `honcho-db`, and 504 memory blocks recovered from stored
+turns; two independent defects were making recall look broken.
+
+**1. The deriver could not produce JSON, so there was almost nothing to
+recall.** The deriver asks for a typed extraction
+(`response_model=PromptRepresentation, json_mode=True`, `deriver.py:156`) and
+**every Ollama-backed lane on this gateway ignores `response_format:
+json_schema`** — measured directly: `cheap` truncates, `smart` returns
+markdown-fenced prose, and the schema changes the output not at all. Honcho's
+pydantic parse then rejects it, retries 3×, and parks the job. In `honcho-db`:
+84 queue rows, **70 errored, all 70 `task_type='representation'`, 65 of them
+`ValidationError: Invalid JSON … for PromptRepresentation`**; 28 documents
+total, all `explicit`, covering **5 of 188 messages (~2.7 %)**; zero
+deductive/inductive documents ever; `card` returns `null`. The fix is
+Honcho's own mode for providers without json_schema support —
+`structured_output_mode: json_object` (schema injected into the prompt,
+result repaired downstream). Verified by replaying the deriver's exact call:
+**default 0 facts vs `json_object` 3 correct facts**, same `cheap` tier, no
+provider change, no extra spend. That is the one line
+`DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE=json_object`. The `DREAM_*`
+lanes are deliberately NOT set: they call with `tools=` and no
+`response_model` (`src/dreamer/specialists.py`), so the mode does not apply —
+and they have never run here, because they need the ≥50 documents the broken
+deriver never produced. **Watch them the first time they fire.**
+
+**2. The plugin threw away recall it had already paid for.** A real dialectic
+call against the live instance returns genuine context (1 233 chars in 104 s,
+3 414 chars in 267 s), but the plugin's HTTP timeout defaults to **30 s**
+(`client_cache.py::_DEFAULT_HTTP_TIMEOUT`, since `honcho.json` set none)
+while the call really takes **90–270 s**. `session_context.py` catches the
+timeout, logs a WARNING, and **returns `""`** — 90 of those in `agent.log`
+across profiles — and each failure also widens the plugin's empty-streak
+backoff (up to 8× the cadence), so recall decays toward never firing. The
+rendered `honcho.json` now carries `timeout: 120` (injection is
+asynchronous, so a longer ceiling costs no turn latency),
+`dialecticReasoningLevel`/`reasoningLevelCap: minimal` (auto-injection is
+capped at `dialecticMaxChars: 1200`, so buying a 5-round `low` loop — 90–210 s
+measured — every turn only feeds the cap; an explicit `honcho_reasoning`
+tool call still picks its own level and returns in full), and `logging: true`
+for the per-turn injection audit at `~/.honcho/injection.log`, which records
+the reason and payload and is the only way to answer "is recall working?"
+from data rather than inference. It was off, which is why all of the above
+had to be reconstructed from the database.
+
+**3. Three of five profiles had no memory at all — by identity, not by
+failure.** With no declared `peerName` the peer is whatever the transport
+supplies: a Discord message carries one, a **cron / Bot-Chat / CLI turn
+carries none**, and on those the plugin raises `HonchoPeerUnresolvedError`,
+injects "Honcho memory is off for this session", and stores nothing. The
+four team profiles are cron-driven, so **327 of the 504 blocks ever injected
+across every profile were that notice** (release 274/274, reviewer 48/48,
+developer 163/168); `honcho_release` as a workspace does not even exist.
+Every profile now renders `peerName` + `pinUserPeer: true` — correct here
+because the stack is single-user behind `DISCORD_ALLOWED_USERS` (the plugin
+warns against pinning only on a *shared* gateway, where it would merge
+distinct users). It also unblocks the `MEMORY.md`/`USER.md` → Honcho seeding
+the plugin skips while no owner peer is declared. **The value is an
+identifier and does not belong in this public repo**: it travels the
+`BOOT_PLACEHOLDERS` path as `@@HONCHO_USER_PEER@@`, resolved at boot from
+`HONCHO_USER_PEER` in `/etc/hermes/hermes-main.env` (unset → `""` → the old
+transport-identity behaviour, reported on stderr). Set it to the peer id the
+transport already supplies (your Discord user id), **not** a friendly name —
+a different string is a different peer, and the two memories split.
+
+Checks, in the order they pay off:
+
+```bash
+# The plugin's own view: peer, recall mode, level, cap, connection.
+docker exec -u hermes -e HOME=/opt/data/home -e HERMES_HOME=/opt/data \
+  hermes-main /opt/hermes/bin/hermes honcho status      # "User peer:" must be set
+docker exec -u hermes -e HOME=/opt/data/home hermes-main \
+  /opt/hermes/bin/hermes honcho peers                   # per profile
+# Per-turn record of what recall injected and why (needs logging: true):
+docker exec hermes-main tail -3 /opt/data/home/.honcho/injection.log
+# The deriver's own health — the number that was 70 errored / 0 dream:
+docker exec honcho-db psql -U postgres -c \
+  "select task_type, count(*), count(*) filter (where error is not null) as errored from queue group by 1"
+# Live recall, read-only, timed (a real answer is ~1-3 KB; 30s = the old bug):
+docker exec honcho-api python3 -c "
+import httpx,os,time; t=time.time()
+r=httpx.post('http://127.0.0.1:8000/v3/workspaces/hermes/peers/hermes/chat',
+  json={'query':'What do you know about this user?','reasoning_level':'minimal'},timeout=200)
+print(round(time.time()-t,1),'s',len(r.text),r.status_code)"
+# What actually reached an agent's turn (every injected memory block):
+docker exec hermes-main python3 -c "
+import sqlite3;c=sqlite3.connect('/opt/data/state.db')
+print(c.execute(\"select count(*) from messages where content like '%memory-context%'\").fetchone())"
+```
 
 ### Discord
 
@@ -2022,6 +2217,33 @@ for m in cheap smart smarter smartest; do printf '%-9s ' "$m"; \
 # anywhere, needs the internet but no key) — the ONLY check that can catch
 # litellm.yaml and models.toml drifting apart, on tiers and fallbacks alike.
 mise run check-model-windows                        # all ok, exit 0
+# Honcho memory end to end: the plugin's own view (peer must be set), the
+# per-turn injection audit, the deriver's queue (0 errored), and one timed
+# recall. Commands and expected numbers: §"Honcho memory (what recall
+# actually does)". The deriver's queue is the one that was silently broken —
+# 70 errored rows, all `representation`.
+docker exec -u hermes -e HOME=/opt/data/home -e HERMES_HOME=/opt/data \
+  hermes-main /opt/hermes/bin/hermes honcho status | grep 'User peer'
+docker exec honcho-db psql -U postgres -c \
+  "select task_type, count(*) filter (where error is not null) as errored from queue group by 1"
+# Aux lanes resolve to the tiers render.py pins them to (see §"Auxiliary side
+# tasks"). Run against the DEPLOYED config, not the repo — this is the check
+# that would have caught four inert env pins: an unpinned lane answers
+# ('auto', …) and silently runs on the profile's primary.
+docker exec -e HOME=/opt/data/home hermes-main sh -c '
+  grep -A3 "^auxiliary:" /opt/data/config.yaml'
+docker exec -u hermes -e HOME=/opt/data/home hermes-main \
+  /opt/hermes/.venv/bin/python -c "
+from agent.auxiliary_client import _resolve_task_provider_model as r
+for t in ('compression','title_generation','memory_query_rewrite','vision'): print(t, r(t))"
+#   -> compression ('litellm','smarter',…) and title_generation /
+#      memory_query_rewrite ('litellm','cheap',…); vision ('auto',…) is
+#      correct (it must land on an image-capable model).
+# Honcho's lanes: the env the deriver/api were CREATED with (a restart does
+# not re-read env_file — an edited /etc/hermes/honcho.env lands on the next
+# recreate).
+docker inspect honcho-deriver --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E 'DERIVER|SUMMARY|DREAM|DIALECTIC'   # low must read smart, minimal cheap
 # Dashboard plumbing (true in BOTH states): the vendored plugin is seeded
 # into the default home, and the loopback port behaves per the gate.
 docker exec hermes-main test -f /opt/data/plugins/hermes-memory-ui/dashboard/manifest.json \

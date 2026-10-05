@@ -211,6 +211,78 @@ STACK_COMPRESSION_DEFAULTS = {
     "target_ratio": 0.50,
 }
 
+# Auxiliary side-task routing for EVERY profile: task -> tier alias from
+# config/models.toml. Rendered into each profile's `auxiliary.<task>` block
+# as {provider, model}; a profile may override one task via
+# [config_extra.auxiliary.<task>] (or name a tier directly, as
+# smart_model_routing does).
+#
+# WHY THIS LIVES IN config.yaml AND NOT IN THE ENV FILE (2026-10-04):
+# hermes-main.env used to carry AUXILIARY_COMPRESSION_MODEL /
+# _SESSION_SEARCH_ / _WEB_EXTRACT_ / _SKILLS_HUB_MODEL, and every one of them
+# is INERT on this image (v2026.9.24). The only aux env names the image reads
+# are AUXILIARY_VISION_*, AUXILIARY_VIDEO_MODEL and AUXILIARY_APPROVAL_*
+# (hermes_cli/cli_config_load.py _AUXILIARY_TASK_ENV,
+# tools/vision_tools.py, gateway/run.py _bridge_auxiliary_config_to_env —
+# whose own docstring says "compression reads yaml"). Measured on the live
+# stack: exporting those vars changed nothing, every aux task resolved to
+# ('auto', None, ...) = "my main model for side tasks too", and the
+# session_model_usage table showed 100% of a week's calls on 'smarter'.
+# So the pins below are the mechanism, and the env file must not grow them
+# back.
+#
+# WHICH LANES ARE PINNED, AND WHY ONLY THESE. Declared here: the lanes with a
+# real call site in this image AND work that is mechanical or window-bound.
+# Everything else is deliberately left to inherit the profile's primary —
+# that is the SAFE default (the strongest model the profile already pays
+# for), and it costs nothing while a lane is unused. Notably NOT pinned:
+#   vision          — must run on a model that actually takes images
+#                     (tools/vision_tools.py); the reviewers' primary
+#                     (`smartest`, glm-5.3) has none, so pinning one tier
+#                     here would be wrong for someone.
+#   mcp             — MCP *sampling* (tools/mcp_tool_sampling.py): an
+#                     arbitrary, server-directed generation.
+#   approval        — timeout only; `approvals.mode` is `off`, so the
+#                     guardian never runs (STACK_APPROVAL_DEFAULTS).
+#   skills_hub      — a configurable task with NO call site in this image
+#                     (it appears in the config UI's task list only), so
+#                     there is nothing to point at a tier yet.
+#   review / background_review / curator / monitor / goal_judge /
+#   triage_specifier / kanban_* / profile_describer / tts_audio_tags /
+#   moa_*           — unwired or disabled here; these are the ones to think
+#                     about when one is turned on, not to pin blind now.
+STACK_AUX_MODELS = {
+    # Compaction summarises a conversation that reached 80% of the profile's
+    # OWN window, so this lane needs intelligence AND a window >= the primary's
+    # (asserted per profile in render_profile) — the one aux lane where a small
+    # model silently breaks long work.
+    "compression": "smarter",
+    # One call per NEW session, and a title is a handful of tokens: the
+    # cheapest lane is right by construction. Volume grows with the
+    # fresh-session-per-cron-wake shape (one wake = one new session).
+    "title_generation": "cheap",
+    # Rewrites the latest user message into a retrieval query (8s timeout,
+    # ~4k chars in / 320 out) — mechanical. Idle today: the Honcho memory
+    # provider runs with query_rewrite off. Pinned so that turning it on is
+    # a plugin flag, not a new spend on the workhorse tier.
+    "memory_query_rewrite": "cheap",
+}
+
+# The aux task set of the base image, as a typo guard. A task key that is not
+# in this set is silently ignored by Hermes — a knob that does nothing while
+# looking like the pins that work — so an unknown key fails the BUILD instead.
+# Re-verify at a HERMES_REF bump:
+#   python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG; \
+#               print(sorted(DEFAULT_CONFIG['auxiliary']))"
+# (run under the image venv; v2026.9.24 list is reproduced below.)
+KNOWN_AUX_TASKS = {
+    "approval", "background_review", "compression", "curator", "goal_judge",
+    "kanban_decomposer", "kanban_estimator", "mcp", "memory_query_rewrite",
+    "moa_aggregator", "moa_reference", "monitor", "profile_describer",
+    "review", "skills_hub", "title_generation", "triage_specifier",
+    "tts_audio_tags", "vision",
+}
+
 # `profile` is dropped: the rendered file is already per-profile.
 _JOB_FIELDS = ("name", "schedule", "script", "no_agent", "deliver", "prompt")
 
@@ -232,6 +304,14 @@ BOOT_PLACEHOLDERS = {
     "DISCORD_CHANNEL_DEVELOPER",
     "DISCORD_CHANNEL_REVIEWER",
     "DISCORD_CHANNEL_RELEASE",
+    # The operator's own Honcho peer id (honcho.json -> peerName, with
+    # pinUserPeer). An identifier, and not one this public repo should carry,
+    # so it travels the same path as the channel ids: emitted as @@VAR@@,
+    # resolved at boot from the host env file. Unset expands to "" — the
+    # plugin then treats the peer as undeclared and falls back to the
+    # transport identity, which is the behaviour without this pin at all
+    # (see the honcho.json block in render_profile for why the pin matters).
+    "HONCHO_USER_PEER",
 }
 _PLACEHOLDER_RE = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 
@@ -601,6 +681,17 @@ def validate(models: dict, providers: dict, integrations: dict,
     # profile override still fails the build).
     validate_approvals(STACK_APPROVAL_DEFAULTS, "STACK_APPROVAL_DEFAULTS")
     validate_compression(STACK_COMPRESSION_DEFAULTS, "STACK_COMPRESSION_DEFAULTS")
+    # Aux routing is declared for every profile (STACK_AUX_MODELS) and merged
+    # per profile in render_profile; a typo'd task key or a lane pointed at a
+    # tier that does not exist must fail on the fast --check path too, where
+    # no profile is rendered. The per-profile half of the check (the
+    # compression lane must out-hold the profile's own window) needs the
+    # profile's primary, so it lives in render_profile.
+    stack_aux = {
+        task: aux_model_block("STACK_AUX_MODELS", task, alias, models)
+        for task, alias in STACK_AUX_MODELS.items()
+    }
+    validate_aux(stack_aux, models, "STACK_AUX_MODELS")
     for alias, model in models.items():
         prov = model.get("provider")
         if prov not in providers:
@@ -762,6 +853,78 @@ def cheap_model_block(profile: str, alias: str, models: dict) -> dict:
         )
     model = models[alias]
     return {"provider": model["provider"], "model": model["model"]}
+
+
+def aux_model_block(profile: str, task: str, alias: str, models: dict) -> dict:
+    """The `auxiliary.<task>` block Hermes reads, from a tier alias.
+
+    Same shape as cheap_model_block: the named provider plus the gateway's
+    model name, with base_url/key riding the `custom_providers` entry
+    render.py emits for that provider. Nothing is repeated here, so a
+    profile names a TIER and the backend stays in config/litellm.yaml.
+
+    The tier NAME matters beyond routing: `model_overrides` carries each
+    tier's true context window, which is how the compression lane sizes
+    itself — a raw upstream model id (or an `ollama/<id>` wildcard name)
+    would lose that and fall back to a guess.
+    """
+    if alias not in models:
+        raise ConfigError(
+            f"auxiliary task '{task}' (profile '{profile}') is pinned to "
+            f"'{alias}', which is not a tier in config/models.toml. Known: "
+            f"{', '.join(sorted(models))}"
+        )
+    model = models[alias]
+    return {"provider": model["provider"], "model": model["model"]}
+
+
+def validate_aux(cfg: dict, models: dict, where: str) -> None:
+    """Validate an `auxiliary` block before it is rendered.
+
+    The failure this catches is silence: Hermes ignores an unknown key under
+    `auxiliary`, so a typo'd task name is a knob that does nothing while
+    looking exactly like the pins that work — which is how this stack ended
+    up believing four env vars were routing four lanes. Unknown task keys are
+    therefore build errors. A task pointed at a tier alias is checked in
+    aux_model_block (the gateway must serve it).
+    """
+    for task, value in cfg.items():
+        if task not in KNOWN_AUX_TASKS:
+            raise ConfigError(
+                f"{where}: unknown auxiliary task '{task}'. Hermes ignores an "
+                f"unknown key, so this would be a knob that does nothing. "
+                f"Known tasks: {', '.join(sorted(KNOWN_AUX_TASKS))}. If the "
+                f"base image gained one, add it to KNOWN_AUX_TASKS in "
+                f"render.py (see the HERMES_REF checklist)."
+            )
+        if not isinstance(value, dict):
+            raise ConfigError(
+                f"{where}: auxiliary.{task} must be a table, got "
+                f"{type(value).__name__}. (A profile may write a bare tier "
+                f"name; render_profile expands it before this runs.)"
+            )
+
+
+def tier_window_for_block(block: dict | None, models: dict) -> int | None:
+    """The declared context window of the tier an aux block resolves to.
+
+    Matches a rendered {provider, model} block back to the tier it came from,
+    so a rule can be checked against the MERGED block (a profile override
+    included) rather than the stack default. Returns None when the block
+    names something not declared in models.toml — an undeclared window, which
+    callers treat as an error rather than a guess (see the compression check
+    in render_profile).
+    """
+    if not isinstance(block, dict) or not block.get("model"):
+        return None
+    provider = block.get("provider")
+    for model in models.values():
+        if model.get("model") != block["model"]:
+            continue
+        if provider and model.get("provider") != provider:
+            continue
+        return model.get("context_length")
+    return None
 
 
 def fallback_entry(alias: str, models: dict, providers: dict) -> dict:
@@ -1041,6 +1204,17 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     validate_compression(compression_cfg, f"profile '{name}' compression")
     config["compression"] = compression_cfg
 
+    # Auxiliary side-task routing for EVERY profile — see STACK_AUX_MODELS for
+    # which lanes are pinned, to what, and the live evidence that this
+    # config.yaml block (not an env var) is the mechanism.
+    #
+    # Merged PER TASK, so [config_extra.auxiliary.title_generation] can set
+    # just `model` without having to restate the provider, and a bare tier
+    # name is accepted the way smart_model_routing accepts one.
+    aux_cfg: dict = {}
+    for task, alias in STACK_AUX_MODELS.items():
+        aux_cfg[task] = aux_model_block(name, task, alias, models)
+
     # Smart-approval aux budget for EVERY profile.
     #
     # Phase 2.5 smart approval (tools/approval.py) asks the auxiliary LLM to
@@ -1050,15 +1224,68 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     # so a slow upstream burns ~90s and then the gate escalates anyway
     # ("Smart approvals: LLM call failed after 93.3s ... escalating") — the
     # latency of the aux model, not its verdict, decides whether a prompt
-    # reaches a human. 60s survives Ollama Cloud latency. Merged so a profile
-    # may override via [config_extra.auxiliary.approval].
+    # reaches a human. 60s survives Ollama Cloud latency. Inert while
+    # `approvals.mode` is `off` (the guardian never runs); kept as the value
+    # to restore if the posture is dialled back. Merged so a profile may
+    # override via [config_extra.auxiliary.approval].
     aux_extra = profile.get("config_extra", {}).get("auxiliary", {}) or {}
     approval_cfg = {"timeout": 60}
     approval_cfg.update(aux_extra.get("approval") or {})
-    aux_cfg = {"approval": approval_cfg}
-    for key, value in aux_extra.items():
-        if key != "approval":
-            aux_cfg[key] = value
+    aux_cfg["approval"] = approval_cfg
+    for task, value in aux_extra.items():
+        if task == "approval":
+            continue
+        if isinstance(value, str):
+            # A bare tier name, as smart_model_routing.cheap_model accepts one.
+            aux_cfg[task] = aux_model_block(name, task, value, models)
+            continue
+        if isinstance(value, dict):
+            merged = dict(aux_cfg.get(task) or {})
+            merged.update(value)
+            # A profile that names a tier but not a provider gets that
+            # tier's provider, so {model = "cheap"} alone is a valid override
+            # rather than a route the gateway cannot resolve.
+            if not merged.get("provider") and merged.get("model") in models:
+                merged["provider"] = models[merged["model"]]["provider"]
+            aux_cfg[task] = merged
+            continue
+        raise ConfigError(
+            f"profile '{name}': auxiliary.{task} must be a table or a tier "
+            f"name, got {type(value).__name__}"
+        )
+    validate_aux(aux_cfg, models, f"profile '{name}' auxiliary")
+
+    # The one aux lane whose model must out-hold the conversation it
+    # summarises: compaction fires at STACK_COMPRESSION_DEFAULTS.threshold of
+    # the profile's OWN window, so a compression model with a smaller window
+    # than the primary's would be handed more context than it can take — a
+    # failure that lands mid-long-turn, on the lane whose whole job is to
+    # rescue one. Checked on the MERGED block (not the stack default) because
+    # a profile override could otherwise walk past it — a pin that reads
+    # correct and routes somewhere else is the failure this check prevents.
+    primary_window = models[model_key].get("context_length")
+    compression_window = tier_window_for_block(aux_cfg.get("compression"), models)
+    if compression_window is None:
+        raise ConfigError(
+            f"profile '{name}': auxiliary.compression resolves to "
+            f"{aux_cfg.get('compression')!r}, which is not a declared tier in "
+            f"config/models.toml — so its context window is unknown, and a "
+            f"compression lane sized by a guess either compacts early or "
+            f"overruns the provider. Declare the model as a tier (with its "
+            f"true context_length) and pin the lane to that name."
+        )
+    if primary_window and compression_window < primary_window:
+        raise ConfigError(
+            f"profile '{name}': the compression lane resolves to a model with "
+            f"a {compression_window}-token window, but this profile's primary "
+            f"'{model_key}' declares {primary_window}. Compaction summarises "
+            f"up to "
+            f"{int(STACK_COMPRESSION_DEFAULTS['threshold'] * 100)}% of the "
+            f"PRIMARY's window, so the compression model must have at least "
+            f"that much context. Pin compression to a >= {primary_window} "
+            f"tier in STACK_AUX_MODELS, or override it for this profile via "
+            f"[config_extra.auxiliary.compression]."
+        )
     config["auxiliary"] = aux_cfg
 
     # Tirith pre-approvals (see TIRITH_PREAPPROVED_RULES). UNION with
@@ -1098,9 +1325,66 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     # provider plugin), so enabling this does not double-wire anything;
     # the honcho MCP server (config/integrations.toml) remains the
     # on-demand tool surface.
+    #
+    # THE TUNING BELOW IS MEASURED, NOT DEFAULTED (2026-10-04, all values
+    # from the live plugin source and the running stack — see AGENTS.md
+    # §"Honcho memory: what recall actually does"):
+    #
+    # peerName / pinUserPeer — WITHOUT these the peer is whatever user id
+    #   the transport supplies, so a Discord turn resolves one and a cron /
+    #   Bot-Chat / CLI turn resolves NONE: the plugin then raises
+    #   HonchoPeerUnresolvedError, tells the agent "Honcho memory is off for
+    #   this session" and stores nothing. Measured: 327 of 504 injected
+    #   memory blocks across every profile were that notice (release
+    #   274/274, reviewer 48/48, developer 163/168) — the four team profiles
+    #   are cron-driven, so their Honcho memory has effectively never been
+    #   on. Pinning ONE peer is right here because the stack is single-user
+    #   (DISCORD_ALLOWED_USERS gates every channel) — the plugin warns
+    #   against it on a shared gateway, where it would merge users. It also
+    #   unblocks the MEMORY.md/USER.md → Honcho seeding, which the plugin
+    #   skips while no owner peer is declared.
+    #   The VALUE is a runtime secret (the operator's own peer id), so it is
+    #   a BOOT_PLACEHOLDER, not a literal: unset it expands to "" and the
+    #   plugin falls back to today's transport-identity behaviour.
+    #
+    # timeout 120 — the plugin's default HTTP timeout is 30s
+    #   (client_cache.py _DEFAULT_HTTP_TIMEOUT) while a dialectic call on
+    #   this host's LLM stack really takes 90-270s. Every automatic recall
+    #   therefore died in a timeout that the plugin logs as a WARNING and
+    #   then swallows into "" (session_context.py) — 90 occurrences in
+    #   agent.log across profiles. Injection is asynchronous (the result
+    #   lands on a later turn), so a longer ceiling costs no turn latency.
+    #
+    # dialecticReasoningLevel/Cap "minimal" — the auto-injected supplement
+    #   is capped at 1200 chars, so spending a 5-round (level `low`) or
+    #   10-round (`high`, via the query-length heuristic) agentic loop on it
+    #   every turn buys latency and tokens that the cap then throws away: a
+    #   measured `low` call ran 90-210s server-side. Auto-injection runs
+    #   `minimal` (one tool round, measured 18-28s); an explicit
+    #   `honcho_reasoning` tool call is unaffected — the agent picks its own
+    #   level and the plugin returns those results in full.
+    #
+    # dialecticMaxChars 1200 — upstream's 600 truncates mid-sentence ("### …"
+    #   in the stored blocks) now that real answers measure 1.2-3.4 KB.
+    #   ~300 tokens/turn; the base representation layer rides separately and
+    #   is uncapped.
+    #
+    # logging true — one JSON record per turn (reason + payload) in
+    #   ~/.honcho/injection.log, owner-only. It is the ONLY per-turn record
+    #   of what recall did and why; it was off, which is why the failures
+    #   above had to be reconstructed from the database instead of read.
     (out_dir / "honcho.json").write_text(
-        json.dumps({"enabled": True, "baseUrl": "http://honcho-api:8000"},
-                   indent=2) + "\n"
+        json.dumps({
+            "enabled": True,
+            "baseUrl": "http://honcho-api:8000",
+            "peerName": "@@HONCHO_USER_PEER@@",
+            "pinUserPeer": True,
+            "timeout": 120,
+            "dialecticMaxChars": 1200,
+            "dialecticReasoningLevel": "minimal",
+            "reasoningLevelCap": "minimal",
+            "logging": True,
+        }, indent=2) + "\n"
     )
 
     soul = profile_dir / "SOUL.md"
@@ -1146,12 +1430,13 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
 
     # Fail the build on an @@VAR@@ placeholder the boot resolver does not
     # know. render.py cannot resolve these itself — the values (Discord
-    # channel IDs) are runtime secrets in the host env file, not in git — so
-    # they are emitted verbatim for docker/hermes/expand-placeholders.py to
-    # fill in at container boot. An unknown name is a typo that would ship a
-    # config with a literal @@VAR@@ where a channel id belongs, so it is a
-    # build error rather than a boot-time surprise.
-    for fname in ("config.yaml", "cron.json"):
+    # channel IDs, the Honcho user peer) are runtime secrets in the host env
+    # file, not in git — so they are emitted verbatim for
+    # docker/hermes/expand-placeholders.py to fill in at container boot. An
+    # unknown name is a typo that would ship a config with a literal @@VAR@@
+    # where a channel id belongs, so it is a build error rather than a
+    # boot-time surprise.
+    for fname in ("config.yaml", "cron.json", "honcho.json"):
         for var in _PLACEHOLDER_RE.findall((out_dir / fname).read_text()):
             if var not in BOOT_PLACEHOLDERS:
                 raise ConfigError(
