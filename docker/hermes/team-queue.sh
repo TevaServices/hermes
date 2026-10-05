@@ -644,10 +644,13 @@ release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
                      --jq '.[] | select(.isDraft | not) | .tagName' 2>/dev/null) || RELEASED=""
         # `conclusion` is null while a run is in flight and set once it ends,
         # so ONE call answers both the failed and the still-running question.
+        # An EMPTY conclusion is in-flight-class too — gh emits it for a run
+        # it is still writing — and classifying it BAD produces a finding
+        # whose prose differs between ticks for the same underlying state.
         RUNS=$(ogh run list -R "$R" --workflow release.yml --limit 30 \
                  --json headBranch,conclusion,url \
-                 --jq '(.[] | select(.conclusion == null) | "RUNNING \(.headBranch)"),
-                       (.[] | select(.conclusion != null
+                 --jq '(.[] | select(.conclusion == null or .conclusion == "") | "RUNNING \(.headBranch)"),
+                       (.[] | select(.conclusion != null and .conclusion != ""
                                      and .conclusion != "success"
                                      and .conclusion != "skipped"
                                      and .conclusion != "neutral")
@@ -677,7 +680,10 @@ release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
             fi
             # Still running is the resumable "waiting on CI" state, NOT a
             # finding — that is what keeps a 6-minute release workflow from
-            # waking the agent on every tick while it runs.
+            # waking the agent on every tick while it runs. An empty
+            # conclusion is IN-FLIGHT-CLASS too (the jq normalizes it above:
+            # gh emits one for a run it is still writing), so a half-written
+            # run is never reported as stuck.
             case "$(printf '%s\n' "$RUNS" | awk -v t="$T" \
                         '$1 == "RUNNING" && $2 == t { n++ } END { print n+0 }')" in
                 0) ;;
@@ -732,17 +738,25 @@ repo_slug() {  # owner/repo -> one filename token
 # re-emits after TEAM_RELEASE_RETRY_TTL (default 6h). A stalled release is
 # unattended work: if the one delivery that announced it was lost to a
 # container restart, silence would be indistinguishable from resolution.
+#
+# The key is the CALLER's stable per-finding id list — never the message
+# text. The prose of one finding is not stable: a run's conclusion can read
+# empty on one tick and "failure" on the next while gh finishes writing the
+# run, so each alternate spelling of the same finding would count as
+# "changed" and re-deliver long before the TTL said a reminder was due.
 release_state_file() {
     printf '%s/team-queue-%s-release.state' \
         "${HERMES_HOME:-/opt/data}/cache" "$LABEL_SLUG"
 }
 
-release_incident() {  # like incident(), plus the retry TTL
+release_incident() {  # $1 = STABLE key (finding ids); $2+ = the message
+    key=$1
+    shift
     if [ "$VERBOSE" -eq 1 ]; then
-        echo "$@"
+        printf '%s\n' "$*"
         return 0
     fi
-    key=$(printf '%s' "$*" | cksum | tr -d ' ')
+    key=$(printf '%s' "$key" | cksum | tr -d ' ')
     f=$(release_state_file)
     mkdir -p "$(dirname "$f")" 2>/dev/null || true
     if [ -f "$f" ]; then
@@ -765,7 +779,7 @@ release_incident() {  # like incident(), plus the retry TTL
     # glm-5.3-flash (13.2M input tokens in that day alone).
     first=$(date +%s)
     { printf '%s\n%s\n' "$key" "$first"; } > "$f" 2>/dev/null || true
-    echo "$@"
+    printf '%s\n' "$*"
     return 0
 }
 
@@ -1024,7 +1038,16 @@ if [ -n "$CODEOWNER_MISSING" ]; then
      so check the ruleset; otherwise ask a code owner to approve."
 fi
 if [ -n "$RELEASE_FINDINGS" ] || [ -n "$CODEOWNER_MISSING" ]; then
-    release_incident "RELEASE TRIAGE  a release or its deployment needs attention:$RELEASE_DETAIL_FULL
+    # The dedupe key: the FINDING IDS, sorted and deduped — never the prose
+    # above. A triage finding's paren-thetical is its TYPE and stays (a
+    # "(tagged)" -> "(bad-run)" change for the same tag is a real change);
+    # a codeowner item's paren-thetical is WHICH human approved — detail,
+    # and a differing spelling of the same finding — so it is stripped.
+    # See release_incident's comment for why the text must not be the key.
+    RELEASE_KEY=$({ [ -n "$RELEASE_FINDINGS" ] && printf '%s\n' $RELEASE_FINDINGS
+                    [ -n "$CODEOWNER_MISSING" ] && printf '%s\n' "$CODEOWNER_MISSING" | sed 's/(.*//'; } \
+                  2>/dev/null | sed '/^$/d' | LC_ALL=C sort -u)
+    release_incident "$RELEASE_KEY" "RELEASE TRIAGE  a release or its deployment needs attention:$RELEASE_DETAIL_FULL
   Said once, then again after the retry TTL: this is unattended work, and a
   delivery lost to a restart must not look like a resolution." || true
 fi

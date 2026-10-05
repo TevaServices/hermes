@@ -2036,10 +2036,15 @@ it survives until the next boot, then the reconciler overwrites it.
   published release, a `release.yml` run that concluded badly, and a
   published release that is not what the agent's own state file records as
   deployed. A run still IN FLIGHT is deliberately not a finding — that is
-  the resumable "waiting on CI" state. Findings use their own dedupe slot
+  the resumable "waiting on CI" state, and it includes a run with an EMPTY
+  `conclusion` (gh emits one while it is still writing the run; the jq
+  classifies it in-flight, because awk's field splitting collapses the empty
+  slot and cannot see it downstream). Findings use their own dedupe slot
   plus a first-seen epoch (`TEAM_RELEASE_RETRY_TTL`, 6h), because a stalled
   release is unattended work and a delivery lost to a restart must not read
-  as a resolution.
+  as a resolution — and the dedupe key is the FINDING IDS, never the
+  message text: the prose of one finding is not stable tick-to-tick, and
+  keying on it re-delivers unchanged work mid-TTL.
 - **The bot-chat delivery timeout is 900s stack-wide**
   (`render.py` → `cron.bot_chat_delivery_timeout_seconds`). A bot-chat
   delivery runs a full agent turn synchronously inside the job's execution,
