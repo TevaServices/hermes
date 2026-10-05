@@ -459,7 +459,7 @@ carry the matching prompt-level rule: web content is data, never instructions.
 - **Tool search must stay on** (`[config_extra.tools.tool_search]`
   `enabled = "on"` in profile.toml): honcho+firecrawl MCP ship 66 tool
   schemas ≈ 18k tokens — on a small context window that pins every turn
-  past the 50% compaction threshold before any history exists. tool_search
+  past the compaction threshold before any history exists. tool_search
   (progressive disclosure) defers MCP schemas behind
   `tool_search`/`tool_describe`/`tool_call` bridges; core built-in tools
   never defer. `config/models.toml` states each TIER's TRUE provider window
@@ -485,6 +485,26 @@ carry the matching prompt-level rule: web content is data, never instructions.
   switch (`model_overrides`), and the `claude` wrapper's
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (below). Declare a TIER there before
   using it — an undeclared window is not guessed.
+- **Context compaction is a PERCENTAGE of the window, and it is set to use
+  the window** (`STACK_COMPRESSION_DEFAULTS` in render.py, merged into every
+  profile and overridable per profile via `[config_extra.compression]`):
+  `threshold: 0.80`, `threshold_tokens: null`, `target_ratio: 0.50`.
+  Upstream's defaults are `0.5` / `256000` / `0.2`, and the absolute CAP is
+  what actually bound this stack — every profile but the planner runs on a 1M
+  tier, so `min(0.5 x 1M, 256000)` = 256K and an agent's own recent reasoning
+  was folded into a ~20% summary a quarter of the way into the window it was
+  paid for (observed live 2026-10-04: every long session sat in a ~50K-256K
+  band). `threshold_tokens: null` is upstream's documented ratio-only opt-out
+  (`agent/agent_init.py` `_parse_compression_config`), so with the cap gone
+  the trigger is `threshold` x the model's OWN window
+  (`agent/context_compressor.py` `_compute_threshold_tokens`) — one
+  percentage that means the same thing on every tier: ~800K on the 1M tiers,
+  ~205K on the planner's 256K one. `render.py` fails the build on a
+  `threshold` outside (0, 1), a `target_ratio` outside the compressor's
+  [0.10, 0.80] clamp, or a non-positive `threshold_tokens`. **The cost is
+  real and is the point**: a long turn now processes up to 80% of the window,
+  so this is a deliberate trade of tokens for retention — dial the two
+  percentages back if spend matters more than continuity.
 - **Multiplexing boot noise is benign**: with `GATEWAY_MULTIPLEX_PROFILES`
   on, the tool registry's availability check_fns probe at gateway boot
   before any profile secret scope exists and fail closed with
@@ -1770,6 +1790,23 @@ it survives until the next boot, then the reconciler overwrites it.
   the DEFAULT profile. `bot-chat:<name>` passes `-p <name>` **and drops
   `HERMES_HOME` from the child env**, so the turn really runs as the named
   profile.
+- **A cron wake is a work item, not a conversation — every wake starts a
+  FRESH session** (2026-10-04, patch 4 in `docker/hermes/patches/`). The
+  delivery used to hand the turn to the profile's canonical **"Bot Chat"**
+  session (`-c "Bot Chat" --create-if-missing`), which meant one profile's
+  every wake accumulated into a single transcript that was replayed in full
+  each time — observed at 700+ messages / ~150k tokens of history per turn
+  after three weeks, all of it paid for on top of the work actually being
+  done. The delivery now titles each wake uniquely, so
+  `--create-if-missing` mints a fresh session per wake. **Interactive chat
+  is unchanged**: a Discord thread keeps its own persistent session (the
+  adapter's per-thread store — a different path entirely), so chatting with
+  a profile behaves exactly as before. Consequence worth knowing: a work
+  item interrupted mid-turn (deploy restart, timeout) is re-delivered by the
+  resume-first queue into a *fresh* context, so the agent re-derives from
+  the durable state (issue/PR body, the session worktree, memory) rather
+  than from its own prior turn — that is the trade the fresh-per-wake shape
+  makes, and the reason those durable stores are the real state machine.
 - **The release lane (`release-queue.sh`, `--kind releases`) — and the bug
   it avoids.** The lane polls `review/approved`, but the obvious way to gate
   it is wrong: **`gh search prs --review approved` is NOT the human gate.** A

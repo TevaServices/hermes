@@ -43,7 +43,21 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # Each must be re-anchored at every HERMES_REF bump, and DELETED once
 # upstream adopts the fix (the build says so — see below).
 #
-# THREE patches currently.
+# FOUR patches currently.
+#
+# 4. cron/scheduler_delivery.py — a cron wake must start a FRESH session, not
+# resume the profile's canonical "Bot Chat". The delivery hardcodes
+# `-c "Bot Chat" --create-if-missing`, so every wake a profile ever took
+# landed in ONE transcript that only grew, and every later wake replayed all
+# of it (observed live 2026-10-04: a profile's Bot Chat held 700+ messages /
+# ~150k tokens of history and the release lane paid for it on every
+# 5-minute wake). These jobs are work items, not a conversation, so the
+# patch titles each wake uniquely (`Bot Chat - <job> - <run id>`), which makes
+# --create-if-missing mint a fresh session. Interactive chat is untouched:
+# a Discord thread keeps its own persistent session (a different session
+# store entirely), and the live-owner lane above the CLI fallback is
+# unchanged. The canonical Bot Chat is no longer written by cron at all.
+# (`grep -n '"Bot Chat"' on that file finds the one literal this anchors.)
 #
 # 3. plugins/platforms/discord/adapter.py — self-heal voice after Discord
 # externally terminates the session. Discord kicks voice sessions

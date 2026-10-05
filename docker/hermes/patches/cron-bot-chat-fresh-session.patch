@@ -1,0 +1,21 @@
+--- a/cron/scheduler_delivery.py
++++ b/cron/scheduler_delivery.py
+@@ -919,8 +919,17 @@
+             fh.write(message)
+             query_file = fh.name
+ 
++        # Each cron wake gets its OWN session. The canonical "Bot Chat" title is
++        # resumed forever, so a profile's wakes shared one ever-growing transcript
++        # that was replayed into every turn (observed 2026-10-04: one profile's
++        # Bot Chat held 700+ messages / ~150k tokens of history, and every wake paid
++        # for all of it). These jobs are work items, not a conversation, so a unique
++        # title makes --create-if-missing mint a fresh session per wake. Chat paths
++        # are untouched: a Discord thread keeps its own persistent session, and the
++        # live-owner lane above is unchanged.
++        session_title = f"Bot Chat - {job_name} - {uuid.uuid4().hex[:12]}"
+         argv += [
+-            "chat", "--in", "~", "-c", "Bot Chat", "--create-if-missing",
++            "chat", "--in", "~", "-c", session_title, "--create-if-missing",
+             "-Q", "--query-file", query_file,
+         ]
+         from hermes_cli.quiet_single_query import TURN_REPORT_FILE_ENV

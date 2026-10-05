@@ -174,6 +174,43 @@ STACK_DELEGATION_DEFAULTS = {
     # session's worktree — the isolation the stack needs it already has.
     "worktree_isolation": False,
 }
+
+# Context compaction for EVERY profile — a PERCENTAGE of the model's window,
+# never an absolute token count.
+#
+# Upstream DEFAULT_CONFIG["compression"] compacts at `threshold: 0.5` of the
+# window but caps that with `threshold_tokens: 256000`, and folds down to
+# `target_ratio: 0.2` (the compressor clamps target_ratio to [0.10, 0.80]).
+# The absolute CAP is what actually binds here: every profile but the planner
+# runs on a 1M-window tier (`smarter`), so min(0.5 x 1M, 256000) = 256000 and
+# the agent's own recent reasoning was folded into a ~20% summary as soon as a
+# session passed 256K — a quarter of the window it was paid for. Observed live
+# 2026-10-04: every long session sat in a ~50K-256K band.
+#
+# `threshold_tokens: None` is upstream's documented ratio-only opt-out
+# ("Explicit null is the ratio-only opt-out and stays None" —
+# agent/agent_init.py _parse_compression_config). With the cap gone the
+# trigger is derived from `threshold` x the model's OWN context window
+# (agent/context_compressor.py _compute_threshold_tokens), so a percentage
+# here means the same thing on every tier and needs no per-profile
+# arithmetic: the 1M tiers compact at 80% (~800K) and the planner's 256K
+# tier at 80% (~205K).
+#
+# Merged (not replaced) so a profile may override any key via
+# [config_extra.compression].
+STACK_COMPRESSION_DEFAULTS = {
+    "enabled": True,
+    # 80% of the window (upstream 50%). Compact late, so a long turn keeps its
+    # reasoning instead of losing it mid-task.
+    "threshold": 0.80,
+    # No absolute cap (upstream 256000, which is what pinned 1M tiers to a 256K
+    # trigger). null = the percentage above governs, per tier.
+    "threshold_tokens": None,
+    # Retain 50% of the trigger after folding (upstream 20%). The band that
+    # buys is ~40%-80% of the window instead of ~5%-25%.
+    "target_ratio": 0.50,
+}
+
 # `profile` is dropped: the rendered file is already per-profile.
 _JOB_FIELDS = ("name", "schedule", "script", "no_agent", "deliver", "prompt")
 
@@ -508,6 +545,54 @@ def validate_approvals(cfg: dict, where: str) -> None:
             )
 
 
+def validate_compression(cfg: dict, where: str) -> None:
+    """Fail the build on a compression posture the container would silently change.
+
+    Every value here decides how much of a paid-for context window an agent
+    may actually use, and two of them are clamped or ignored at apply time —
+    which would show up only as an agent that "forgets" mid-task, never as an
+    error. The compressor clamps `target_ratio` to [0.10, 0.80]
+    (agent/context_compressor.py), so an out-of-range value becomes the clamp;
+    `threshold` is used as a fraction of the model's window, so anything
+    outside (0, 1) is nonsense (0 compacts every turn, >= 1 never fires before
+    the hard limit); `threshold_tokens` is either null (ratio-only, upstream's
+    documented opt-out) or a positive int.
+    """
+    threshold = cfg.get("threshold")
+    if threshold is not None:
+        try:
+            tvalue = float(threshold)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"{where}: compression.threshold is {threshold!r}, not a number"
+            )
+        if not 0 < tvalue < 1:
+            raise ConfigError(
+                f"{where}: compression.threshold is {tvalue}, but it is a "
+                f"fraction of the context window and must be in (0, 1)"
+            )
+    ratio = cfg.get("target_ratio")
+    if ratio is not None:
+        try:
+            rvalue = float(ratio)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"{where}: compression.target_ratio is {ratio!r}, not a number"
+            )
+        if not 0.10 <= rvalue <= 0.80:
+            raise ConfigError(
+                f"{where}: compression.target_ratio is {rvalue}, but the "
+                f"compressor clamps it to [0.10, 0.80] — an out-of-range value "
+                f"would silently become the clamp"
+            )
+    cap = cfg.get("threshold_tokens")
+    if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap <= 0):
+        raise ConfigError(
+            f"{where}: compression.threshold_tokens is {cap!r}; it must be a "
+            f"positive integer, or null for ratio-only (no absolute cap)"
+        )
+
+
 def validate(models: dict, providers: dict, integrations: dict,
              gateway_names: set[str] | None = None) -> None:
     # `--check` returns before render_profile runs, so the stack-wide
@@ -515,6 +600,7 @@ def validate(models: dict, providers: dict, integrations: dict,
     # in render_profile (the image build runs the full render, so a bad
     # profile override still fails the build).
     validate_approvals(STACK_APPROVAL_DEFAULTS, "STACK_APPROVAL_DEFAULTS")
+    validate_compression(STACK_COMPRESSION_DEFAULTS, "STACK_COMPRESSION_DEFAULTS")
     for alias, model in models.items():
         prov = model.get("provider")
         if prov not in providers:
@@ -945,6 +1031,15 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     }
     memory_cfg.update(mem_extra)
     config["memory"] = memory_cfg
+
+    # Context compaction ceiling for EVERY profile — see
+    # STACK_COMPRESSION_DEFAULTS for the measurements behind these values.
+    # Merged (not replaced) so a profile may override any key via
+    # [config_extra.compression].
+    compression_cfg = dict(STACK_COMPRESSION_DEFAULTS)
+    compression_cfg.update(config.get("compression") or {})
+    validate_compression(compression_cfg, f"profile '{name}' compression")
+    config["compression"] = compression_cfg
 
     # Smart-approval aux budget for EVERY profile.
     #
