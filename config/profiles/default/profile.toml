@@ -15,11 +15,15 @@
 # channels carry images, and this profile has the longest-lived sessions and
 # the heaviest agentic chains). "smartest" is the opt-in escalation for hard
 # reasoning: `/model smartest` mid-session. smart_model_routing below sends
-# short/simple turns to "cheap", so chit-chat costs the minimum, and the
-# targeted side tasks route per task: compression (needs intelligence AND
-# the 1M window) rides the aux env pin on "smarter"; light side tasks (web
-# extract, skills hub) are pinned to "cheap". Honcho's consumers run on
-# "cheap" too (see honcho.env).
+# short/simple turns to "cheap", so chit-chat costs the minimum.
+#
+# Auxiliary side tasks are NOT routed from here or from the env file: their
+# tier is rendered into config.yaml's `auxiliary.<task>` block by render.py
+# (STACK_AUX_MODELS) — compression on "smarter", the mechanical lanes
+# (title generation, memory-query rewrite) on "cheap" — and anything not
+# declared there inherits this profile's primary. Override a single task
+# with [config_extra.auxiliary.<task>] if this profile needs to differ.
+# See AGENTS.md §"Auxiliary side tasks".
 model = "smarter"
 # No fallback_model: Hermes must not fail between tiers/models (2026-10-02 —
 # LiteLLM's router fallbacks own the failure path instead: a failing tier

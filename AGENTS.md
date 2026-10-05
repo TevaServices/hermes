@@ -121,15 +121,18 @@ echoed, or routed through a shell history or chat transcript.
   `POST ollama.com/api/show` and re-checkable with
   `mise run check-model-windows`):
   **cheap** = `nemotron-3-nano:30b` (256k; `smart_model_routing`'s cheap
-  lane for short/simple turns, the light aux side tasks — session search,
-  web extract, skills hub — and Honcho's VOLUME lanes: the deriver, which
-  runs on every message, plus the minimal/low dialectic levels),
+  lane for short/simple turns, Hermes' mechanical aux lanes (title
+  generation, memory-query rewrite — see §"Auxiliary side tasks"), and
+  Honcho's VOLUME lanes: the deriver, which runs on every message, plus the
+  `minimal` dialectic level),
   **smart** = `gemma4:cloud` (256k, vision; the planner profile, and
   Honcho's REASONING lanes: dream deduction/induction, summaries, and the
-  medium/high/max dialectic levels),
-  **smarter** = `glm-5.3-flash` (1M, vision; the default and developer
-  profiles, and aux compression — the one lane that needs intelligence AND
-  a big window),
+  `low`/medium/high/max dialectic levels — `low` is the default level for
+  every dialectic query and runs a 5-round agentic tool loop, so it is
+  reasoning work however light the name sounds),
+  **smarter** = `glm-5.3-flash` (1M, vision; the default, developer and
+  release profiles, and aux compression — the one lane that needs
+  intelligence AND a big window),
   **smartest** = `glm-5.3` (1M, **no vision**; the reviewer, plus the
   opt-in `/model smartest` escalation — kimi-k3 is the drop-in swap if the
   top tier ever needs to accept images).
@@ -184,17 +187,19 @@ echoed, or routed through a shell history or chat transcript.
   lane that can never see private data.
 - `litellm.env`: `LITELLM_MASTER_KEY`, `OLLAMA_API_KEY`,
   `OPENROUTER_API_KEY` (free tier — create at https://openrouter.ai/keys).
-- `hermes-main.env`: `LITELLM_API_KEY` (the master key), the `AUXILIARY_*`
-  overrides (BASE_URL=http://litellm:4000), `FIRECRAWL_API_KEY` (must equal
-  `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any non-empty value
-  while honcho-api runs no-auth; must match honcho-api if auth is enabled),
-  `OPENAI_API_KEY` + `OPENAI_BASE_URL` (mirror the LiteLLM endpoint for
-  Hermes' registry-based fallbacks — `hermes chat`'s first-run gate only
-  inspects registry env vars, never config.yaml's `custom_providers`, and
-  exits with setup guidance without them even though the gateway resolves
-  the provider fine), `DISCORD_BOT_TOKEN` + `DISCORD_ALLOWED_USERS`
-  (gateway), GitHub App vars (below), and `PROFILE_<NAME>_*` lines for the
-  team profiles.
+- `hermes-main.env`: `LITELLM_API_KEY` (the master key), `FIRECRAWL_API_KEY`
+  (must equal `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any
+  non-empty value while honcho-api runs no-auth; must match honcho-api if
+  auth is enabled), `OPENAI_API_KEY` + `OPENAI_BASE_URL` (mirror the LiteLLM
+  endpoint for Hermes' registry-based fallbacks — `hermes chat`'s first-run
+  gate only inspects registry env vars, never config.yaml's
+  `custom_providers`, and exits with setup guidance without them even though
+  the gateway resolves the provider fine), `DISCORD_BOT_TOKEN` +
+  `DISCORD_ALLOWED_USERS` (gateway), GitHub App vars (below), and
+  `PROFILE_<NAME>_*` lines for the team profiles.
+  **It does NOT carry `AUXILIARY_*` model pins, and must not grow them
+  back** — see §"Auxiliary side tasks" for the four that were dead weight
+  there until 2026-10-04.
 - **`hermes-main.env` is the LAUNCH profile's env, and Hermes deletes its
   non-global names from every other profile's cron child.** A cron job's
   child env is built as `strip_launch_profile_env(build_subprocess_env(...))`
@@ -234,12 +239,23 @@ echoed, or routed through a shell history or chat transcript.
   `nomic-embed-text` entry, which proxies to the stack-local `ollama`
   service (768 dims; Ollama Cloud has **no embeddings endpoint**) +
   `EMBEDDING_VECTOR_DIMENSIONS=768`. Optional `HONCHO_POSTGRES_PASSWORD`.
-  The section split follows the work: **volume lanes on `cheap`** (the
-  deriver runs on every message, and minimal/low dialectic is light by
-  construction), **reasoning lanes on `smart`** (dream deduction/induction,
-  summaries, and the medium/high/max dialectic levels). Raising the DERIVER
-  is the single biggest spend lever here — and the biggest quality lever;
-  it is the one line to change if memory extraction looks thin.
+  The section split follows the work, and is measured per lane against the
+  source, not the lane's name: **volume lanes on `cheap`** (the deriver runs
+  on every message and is mechanical JSON extraction; `minimal` dialectic is
+  1 tool round with 2 tools and 250 tokens out), **reasoning lanes on
+  `smart`** (dream deduction/induction are 12- and 10-iteration agentic loops
+  over the whole memory graph with 8192 tokens out; summaries are the text
+  that gets surfaced to the agent; and the dialectic levels `low` through
+  `max` are 5/2/4/10-round agentic tool loops — **`low` moved off `cheap`
+  2026-10-04** because it is the DEFAULT level for every query
+  (`src/dialectic/chat.py`) and carries the most demanding prompt in the
+  stack, so it was the one lane whose tier contradicted its work). Every
+  lane except `summary` requires tool calling and the deriver requires strict
+  JSON mode, so whatever a lane points at must support both. Raising the
+  DERIVER is the single biggest spend lever here — and the biggest quality
+  lever; it is the one line to change if memory extraction looks thin (live
+  signal to watch: deriver batches returning `observation_count=0`, and
+  100-475s calls, both seen 2026-10-02/03).
 
 ## Stack particulars (hard-won)
 
@@ -525,6 +541,85 @@ carry the matching prompt-level rule: web content is data, never instructions.
   runtime UID before its first privilege drop) — upstream's stage2 chown
   only runs after our wrapper's exec, so an unwritable volume would kill
   the wrapper first. Don't remove that chown.
+
+### Auxiliary side tasks (which model each side task actually runs on)
+
+Hermes routes its side tasks — context compression, title generation, vision,
+memory-query rewrite, smart approval, MCP sampling, and a long tail of
+per-feature lanes — through one resolver, and **the model for a task is a
+field on the task in config.yaml**: `auxiliary.<task>.{provider, model}`,
+read by `auxiliary_client._get_auxiliary_task_config` /
+`_resolve_task_provider_model` (priority: explicit call args > that config >
+`auto`). **`auto` means "my main model for side tasks too"** — so an
+unpinned lane runs on the *profile's primary*, which for the reviewer is the
+top tier.
+
+**The env vars this repo used to document for this do not exist.** Until
+2026-10-04 `hermes-main.env` carried `AUXILIARY_COMPRESSION_MODEL=smarter`,
+`AUXILIARY_SESSION_SEARCH_MODEL=cheap`, `AUXILIARY_WEB_EXTRACT_MODEL=cheap`
+and `AUXILIARY_SKILLS_HUB_MODEL=cheap`, and the docs, a profile comment and
+the env template all asserted the lanes were pinned by them. On image
+`v2026.9.24` **none of the four is read anywhere**: the only aux names the
+image consults in the environment are `AUXILIARY_VISION_*`,
+`AUXILIARY_VIDEO_MODEL` and `AUXILIARY_APPROVAL_*`
+(`hermes_cli/cli_config_load.py::_AUXILIARY_TASK_ENV`,
+`tools/vision_tools.py`, `gateway/run.py::_bridge_auxiliary_config_to_env`,
+whose own docstring says *"compression reads yaml"*). Measured on the live
+stack: exporting all four changed no resolution, every one of the image's aux
+tasks resolved to `('auto', None, …)`, `agent.log` showed
+`Auxiliary title_generation: using custom (smarter)`, and the
+`session_model_usage` table had **100% of a week's 199 calls on `smarter`**.
+Two of the four also name tasks that do not exist in this version
+(`session_search`, `web_extract` are tools, not aux LLM lanes). The two
+mechanisms are worth keeping straight because only one of them is fail-loud:
+a wrong env pin is silently inert, while the rendered config below is
+validated at build time.
+
+Routing is therefore declared once, in `render.py`'s **`STACK_AUX_MODELS`**
+(task → tier alias), rendered into every profile's `auxiliary` block as
+`{provider, model}` — the same shape `smart_model_routing.cheap_model` uses,
+so the provider's `base_url`/key ride the `custom_providers` entry and no
+profile repeats a model id. A profile may override a single task via
+`[config_extra.auxiliary.<task>]` (a bare tier name, or a table merged over
+the declared block, so `{model = "cheap"}` alone is valid). `render.py`
+fails the build on: a task key not in `KNOWN_AUX_TASKS` (Hermes ignores an
+unknown key, so a typo would be a knob that does nothing — the fault these
+pins exist to prevent); a lane pointed at a name that is not a tier; and a
+compression lane
+whose declared window is smaller than the profile's primary's (checked on
+the *merged* block, so a profile override cannot walk past it — compaction
+summarises up to 80% of the primary's window, so a smaller compression model
+is handed more context than it can take).
+
+Current pins, and why only these: **compression → `smarter`** (needs
+intelligence AND a window ≥ the profile's own), **title_generation → `cheap`**
+(one call per new session, a handful of tokens — volume grows with the
+fresh-session-per-wake shape), **memory_query_rewrite → `cheap`** (mechanical,
+8s timeout; idle today because the Honcho memory provider runs with
+`query_rewrite` off). Deliberately NOT pinned, so they inherit the primary —
+the safe default, free while unused: **vision** (must land on a model that
+takes images; the reviewer's primary `smartest` has none), **mcp** (MCP
+*sampling* is an arbitrary server-directed generation), **approval** (timeout
+only; `approvals.mode` is `off`), **skills_hub** (a configurable task with no
+call site in this image), and the unwired tail (`curator`, `monitor`,
+`goal_judge`, `triage_specifier`, `kanban_*`, `profile_describer`,
+`tts_audio_tags`, `moa_*`, `review`/`background_review` — the last disabled).
+The aux task set is re-checked at each HERMES_REF bump:
+`python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG;
+print(sorted(DEFAULT_CONFIG['auxiliary']))"` under the image venv.
+
+Live evidence for this mechanism, on the rendered artifact (a throwaway
+`HERMES_HOME` holding `build/default/config.yaml`, image venv):
+
+```bash
+docker exec -u hermes -e HOME=/opt/data/home hermes-main \
+  /opt/hermes/.venv/bin/python -c "
+from agent.auxiliary_client import _resolve_task_provider_model as r
+for t in ('compression','title_generation','memory_query_rewrite','vision','mcp'):
+    print(t, r(t))"
+#   -> compression ('litellm','smarter',…)   title_generation ('litellm','cheap',…)
+#      memory_query_rewrite ('litellm','cheap',…)   vision/mcp ('auto',…)
+```
 
 ### Discord
 
@@ -2022,6 +2117,24 @@ for m in cheap smart smarter smartest; do printf '%-9s ' "$m"; \
 # anywhere, needs the internet but no key) — the ONLY check that can catch
 # litellm.yaml and models.toml drifting apart, on tiers and fallbacks alike.
 mise run check-model-windows                        # all ok, exit 0
+# Aux lanes resolve to the tiers render.py pins them to (see §"Auxiliary side
+# tasks"). Run against the DEPLOYED config, not the repo — this is the check
+# that would have caught four inert env pins: an unpinned lane answers
+# ('auto', …) and silently runs on the profile's primary.
+docker exec -e HOME=/opt/data/home hermes-main sh -c '
+  grep -A3 "^auxiliary:" /opt/data/config.yaml'
+docker exec -u hermes -e HOME=/opt/data/home hermes-main \
+  /opt/hermes/.venv/bin/python -c "
+from agent.auxiliary_client import _resolve_task_provider_model as r
+for t in ('compression','title_generation','memory_query_rewrite','vision'): print(t, r(t))"
+#   -> compression ('litellm','smarter',…) and title_generation /
+#      memory_query_rewrite ('litellm','cheap',…); vision ('auto',…) is
+#      correct (it must land on an image-capable model).
+# Honcho's lanes: the env the deriver/api were CREATED with (a restart does
+# not re-read env_file — an edited /etc/hermes/honcho.env lands on the next
+# recreate).
+docker inspect honcho-deriver --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E 'DERIVER|SUMMARY|DREAM|DIALECTIC'   # low must read smart, minimal cheap
 # Dashboard plumbing (true in BOTH states): the vendored plugin is seeded
 # into the default home, and the loopback port behaves per the gate.
 docker exec hermes-main test -f /opt/data/plugins/hermes-memory-ui/dashboard/manifest.json \

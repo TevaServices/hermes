@@ -56,13 +56,16 @@
 #
 # Routing policy (who runs what):
 #   cheap    — the low-cost lane. Short/simple turns (smart_model_routing in
-#              the default profile), the light auxiliary side tasks (session
-#              search, web extract, skills hub), and Honcho's VOLUME lanes
-#              (the deriver, which runs on every message, and the minimal/low
-#              dialectic levels).
-#   smart    — everyday work: the planner profile, and Honcho's REASONING
-#              lanes (dream deduction/induction, summaries, and the
-#              medium/high/max dialectic levels).
+#              the default profile), Hermes' mechanical auxiliary side tasks
+#              (title generation, memory-query rewrite — the pinned set is
+#              STACK_AUX_MODELS in render.py), and Honcho's VOLUME lanes
+#              (the deriver, which runs on every message, and the minimal
+#              dialectic level).
+#   smart    — everyday work: the planner profile, Honcho's REASONING lanes
+#              (dream deduction/induction, summaries, and the medium/high/max
+#              dialectic levels) and the default dialectic level, `low` — a
+#              5-round agentic loop over the memory graph, which is reasoning
+#              work however light its name sounds.
 #   smarter  — the workhorse: a 1M window at flash economics. The default,
 #              developer and RELEASE profiles, and context compression —
 #              which summarizes a potentially ~1M context, so it needs BOTH
@@ -76,6 +79,11 @@
 #              `/model smartest`. No vision: fine for diff review, but
 #              kimi-k3 (1M, vision+tools+thinking) is the drop-in swap if
 #              that ever needs to change.
+#
+# An aux task with no pin anywhere inherits the profile's PRIMARY model (the
+# image resolves `auto` that way) — which is why the pins are declared rather
+# than left to a default: see STACK_AUX_MODELS in render.py for the live
+# measurement behind that.
 
 [models.cheap]
 provider = "litellm"
