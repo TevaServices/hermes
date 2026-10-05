@@ -614,6 +614,39 @@ case "$out" in
     *) bad "failed release workflow not reported (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))" ;;
 esac
 
+# A run gh is still WRITING can carry an EMPTY conclusion. The fix lives in
+# the script's own --jq — normalize "" to the in-flight class — because
+# awk's field splitting collapses the empty slot and cannot see it (which is
+# also how the broken prose was produced). The stub feeds post-jq lines, so
+# this is pinned structurally: the jq program must treat an empty conclusion
+# as RUNNING and must not classify it BAD.
+if grep -q 'conclusion == null or .conclusion == ""' "$queue" \
+   && grep -q 'select(.conclusion != null and .conclusion != ""' "$queue"; then
+    ok "an empty conclusion is normalized to the in-flight class, and never BAD"
+else
+    bad "the empty-conclusion guard is missing from the run-list jq — its prose flips every other tick"
+fi
+
+# ...and the SAME finding must not defeat the dedupe by changing its prose:
+# the triage's dedupe key is the FINDING IDS, not the text. First emit with
+# text A, then re-run with a DIFFERENT spelling of the same failure — the
+# second run must stay silent while the TTL is still fresh.
+rm -rf "$tmp/home"; mkdir -p "$tmp/home"
+STUB_RUNS='BAD v0.9.0 failure https://github.com/bcross/mach/actions/runs/1'
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"RELEASE WORKFLOW FAILED"*"bcross/mach#v0.9.0"*) : ;;
+    *) bad "seed run for the text-variation dedupe check did not emit (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))" ;;
+esac
+STUB_RUNS='BAD v0.9.0 failure https://github.com/bcross/mach/actions/runs/99'
+out=$(run_queue 0 "" "" releases)
+if [ -z "$out" ]; then
+    ok "the triage dedupe survives a text variation of the same finding"
+else
+    bad "same finding, new prose re-delivered: $(printf '%s' "$out" | tr '\n' '|' | head -c 160)"
+fi
+STUB_TAGS='v0.9.0'
+
 # ...but a PUBLISHED release ends the story. A failed run that was recovered
 # (a re-run, or a fixed workflow re-triggered) must NOT be reported forever:
 # observed live, v0.5.0 carries two failed runs AND a published release, and
