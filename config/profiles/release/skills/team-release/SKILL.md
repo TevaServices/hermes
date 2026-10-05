@@ -338,6 +338,12 @@ RELEASE_STATE=complete|tagged|released|deployed|failed:<what>
 published release, so it must be the version actually validated — never the
 version you intended.
 
+One more field pair the **queue's triage** reads back:
+
+```
+BUG_FOR_<tag>=<owner>/<repo>#<issue>      # one per failed release tag
+```
+
 ## When something fails
 
 Open **one** issue in the repo that failed — `type/bug` + `status/ready`, so
@@ -355,6 +361,21 @@ gh issue create -R "$R" \
   --label type/bug --label status/ready \
   --body-file /opt/data/profiles/release/cache/scratch/bug.md
 ```
+
+Then **record the bug in the state file** — this is the signal the release
+queue's triage acts on: while the linked issue is OPEN it stands down for
+that tag (no more re-notifications about it), and when the issue CLOSES the
+triage wakes you once more to cut the next tag. File the bug FIRST, record
+SECOND, in the same turn:
+
+```bash
+printf '\nBUG_FOR_%s=%s#%s\n' "<tag>" "$R" "<issue-number>" >> "$STATE_FILE"
+```
+
+Appending is deliberate: the queue reads the LAST `BUG_FOR_<tag>` line, so a
+recurrence is recorded by appending again (the failure's new issue becomes
+the live one). There is no third state — a failure you handled without
+recording is still reported, every retry TTL, forever.
 
 Then set `RELEASE_STATE=failed:<what>` in the state file, post one line to
 `#releases`, and comment `@hermes-planner` so the card stays honest. Never

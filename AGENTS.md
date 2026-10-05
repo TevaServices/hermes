@@ -2044,7 +2044,19 @@ it survives until the next boot, then the reconciler overwrites it.
   release is unattended work and a delivery lost to a restart must not read
   as a resolution — and the dedupe key is the FINDING IDS, never the
   message text: the prose of one finding is not stable tick-to-tick, and
-  keying on it re-delivers unchanged work mid-TTL.
+  keying on it re-delivers unchanged work mid-TTL. A failed-release finding
+  also has a **dealt-with path**, recorded by the release agent in its own
+  state file (the DEPLOYED file — `BUG_FOR_<tag>=<owner>/<repo>#<issue>`,
+  appended after filing the bug, last line wins): an OPEN linked bug means
+  the failure is the developer's tracked work and the lane stands down for
+  that tag (`TRACKED ELSEWHERE`, verbose-only); a CLOSED bug re-arms the
+  finding as its own type (`bug-closed`) — the fix is in, so it is release's
+  turn to cut the next tag. A dark record (issue deleted, API error) falls
+  back to the ordinary finding, never to silence; so does an unrecorded
+  failure. A tagged finding whose failure is resolved without a bug is
+  cleared mechanically: a NEWER tag publishing supersedes an older failed
+  one (`tag_newer` — the "cut a NEW tag" remedy has then happened, checked
+  from the repo rather than remembered in state).
 - **The bot-chat delivery timeout is 900s stack-wide**
   (`render.py` → `cron.bot_chat_delivery_timeout_seconds`). A bot-chat
   delivery runs a full agent turn synchronously inside the job's execution,
