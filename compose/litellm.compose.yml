@@ -11,7 +11,9 @@
 #
 # Secrets: /etc/hermes/litellm.env on the host (set HERMES_ENV_DIR to
 # override for local dev). Holds LITELLM_MASTER_KEY, OLLAMA_API_KEY,
-# OPENROUTER_API_KEY. NEVER commit real secret files.
+# OPENROUTER_API_KEY, the gateway DATABASE_URL, and the Zitadel SSO
+# credentials for the admin UI (/etc/hermes/litellm-db.env holds the DB
+# container's own POSTGRES_*). NEVER commit real secret files.
 #
 # Joins the shared external `hermes-net` network so the apps reach it by
 # service name.
@@ -28,6 +30,29 @@
 # then push (or RunBuild) to bake a fresh litellm:main.
 
 services:
+  litellm-db:
+    # Postgres for the gateway: virtual keys, teams, budgets, SSO users and
+    # the UI's state. Prisma migrations run during the litellm image's boot —
+    # the healthcheck's start_period below covers them. Password auth (this
+    # is not a trust-auth instance like honcho-db — anything on the mesh can
+    # reach hermes-net's containers via the netbird forwarders, so the DB
+    # holding every API credential is password-gated).
+    image: postgres:15-alpine
+    container_name: litellm-db
+    restart: unless-stopped
+    env_file:
+      - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/litellm-db.env
+    volumes:
+      - litellm-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - hermes-net
+
   litellm:
     build:
       # Repo-root context (the Dockerfile COPYs config/litellm.yaml from
@@ -38,6 +63,20 @@ services:
     container_name: litellm
     restart: unless-stopped
     command: ["--config", "/app/config.yaml"]
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+    # Redis wiring (non-secret): the shared valkey, logical DB /3 — /0 is
+    # Firecrawl's, /1 Honcho's, /2 the firecrawl-guard's cache. LLM response
+    # caching stays OFF on purpose (litellm_settings.cache is deliberately
+    # not set); Redis is
+    # for litellm's internal state, not for serving cached completions.
+    environment:
+      REDIS_HOST: valkey
+      REDIS_PORT: "6379"
+      REDIS_DB: "3"
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/litellm.env
     healthcheck:
@@ -64,3 +103,6 @@ services:
 networks:
   hermes-net:
     external: true
+
+volumes:
+  litellm-db-data:

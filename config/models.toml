@@ -109,6 +109,64 @@ model = "smartest"
 context_length = 1048576
 description = "GLM 5.3 via the gateway (1M) — judgment work (the reviewer) and the opt-in /model escalation; no vision, so it is never a profile's primary where images arrive. Fallback: the same GLM 5.3 on OpenRouter, kimi-k3 second (see litellm.yaml router_settings.fallbacks)"
 
+# ── Bare-name aliases (added 2026-10-06) ────────────────────────────────
+# Unprefixed model names a human or CLI may send directly
+# (`/model glm-5.3-flash`, or the bare id from Codex/anything OpenAI-format).
+# Each is a one-member LITELLM MODEL NAME served from Ollama Cloud, with a
+# fallbacks chain to its OpenRouter twin (see litellm.yaml — the alias table
+# there is the authority on the pairing rationale). Windows = the same
+# backend the tiers above run, re-stated per alias so
+# `mise run check-model-windows` can verify BOTH sides of every alias
+# (Ollama reports the window, OpenRouter's catalog must be >= it).
+
+[models."glm-5.3-flash"]
+provider = "litellm"
+model = "glm-5.3-flash"
+context_length = 1048576
+description = "GLM 5.3 flash bare alias — Ollama Cloud first, falls to openrouter/z-ai/glm-5.3-flash (same backend as the smarter tier)"
+
+[models."glm-5.3"]
+provider = "litellm"
+model = "glm-5.3"
+context_length = 1048576
+description = "GLM 5.3 bare alias — Ollama Cloud first, falls to openrouter/z-ai/glm-5.3 (same backend as the smartest tier)"
+
+[models.kimi-k3]
+provider = "litellm"
+model = "kimi-k3"
+context_length = 1048576
+description = "Kimi k3 bare alias — Ollama Cloud first, falls to openrouter/moonshotai/kimi-k3 (1M, vision+tools+thinking)"
+
+[models.gemma4]
+provider = "litellm"
+model = "gemma4"
+context_length = 262144
+description = "Gemma 4 bare alias (the cloud variant) — Ollama Cloud first, falls to openrouter/google/gemma-4-31b-it (same backend as the smart tier)"
+
+[models.nemotron-3-nano]
+provider = "litellm"
+model = "nemotron-3-nano"
+context_length = 262144
+description = "Nemotron 3 nano bare alias — the `:30b` variant is required at Ollama Cloud (bare 404s) and lives inside litellm_params; falls to openrouter/nvidia/nemotron-3-nano-30b-a3b (same backend as the cheap tier)"
+
+[models."deepseek-v4.1-flash"]
+provider = "litellm"
+model = "deepseek-v4.1-flash"
+context_length = 1048576
+description = "DeepSeek v4.1 flash bare alias — Ollama Cloud first, falls to openrouter/deepseek/deepseek-v4.1-flash"
+
+[models.minimax-m3]
+provider = "litellm"
+model = "minimax-m3"
+context_length = 512000
+description = "MiniMax M3 bare alias — Ollama Cloud first (512K window as Ollama reports it), falls to openrouter/minimax/minimax-m3"
+
+[models.nemotron-3-ultra]
+provider = "litellm"
+model = "nemotron-3-ultra"
+context_length = 262144
+description = "Nemotron 3 ultra bare alias — Ollama Cloud first, falls to openrouter/nvidia/nemotron-3-ultra-550b-a55b"
+
 # Outage behavior: a tier whose Ollama Cloud deployment fails (429 /
 # subscription limit / transport) is served by its OpenRouter fallback —
 # same tier, same capability class — while the gateway's cooldown expires,
