@@ -353,3 +353,20 @@ litellm_settings:
 # API-only from here on.
 general_settings:
   disable_env_credential_login: true
+
+# ── Firecrawl via the MCP gateway ─────────────────────────────────────────
+# Firecrawl's MCP surface rides the proxy: it exposes the server's tools at
+# /mcp on this same published port, so MCP-capable gateway clients (the
+# published-port callers — NOT the Hermes agents) can search/scrape with
+# only their LiteLLM key. The firecrawl-mcp service
+# (compose/firecrawl.compose.yml) holds the Firecrawl credential itself and
+# points at the firecrawl-guard, keeping the fence on the path. The Hermes
+# profiles deliberately stay on their integrations.toml stdio server
+# (tool-filtered for the tool_search budget); do not wire this path into
+# them as well. The /mcp tool registry has churned across LiteLLM versions —
+# verify listing + one tools/call scrape after every gateway rebuild.
+mcp_servers:
+  firecrawl:
+    url: "http://firecrawl-mcp:3000/mcp"
+    transport: "http"
+    description: "Self-hosted Firecrawl — web search, scrape, crawl, extract, map"

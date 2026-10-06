@@ -9,7 +9,9 @@
 # mise.toml [env] -> FIRECRAWL_VERSION. The self-host API is intentionally
 # minimal: USE_DB_AUTHENTICATION=false (trusted networks only — nothing
 # is published off-host here) and TEST_API_KEY acts as the API key the
-# firecrawl-mcp server sends (secrets/firecrawl.env -> FIRECRAWL_API_KEY).
+# MCP servers send (the agents' stdio firecrawl-mcp reads it as
+# FIRECRAWL_API_KEY from the Hermes envs; the compose firecrawl-mcp
+# service reads it from this same env file).
 #
 # The env wiring mirrors Firecrawl's upstream docker-compose.yaml, with
 # three deliberate departures: the broker is LavinMQ, NOT upstream's
@@ -147,6 +149,68 @@ services:
         limits:
           # Small host. It buffers and re-serialises one response at a time
           # (MAX_BODY caps that at 16 MB), so this is generous, not tight.
+          memory: 256m
+
+  # LiteLLM's MCP gateway fronts Firecrawl through this service: the proxy's
+  # `mcp_servers` (config/litellm.yaml) points at http://firecrawl-mcp:3000/mcp,
+  # and MCP-capable gateway clients (the published-port callers) reach
+  # Firecrawl's web surface with only their LiteLLM key. The Firecrawl
+  # credential stays inside the stack, and the guard stays in the path:
+  # FIRECRAWL_API_URL names firecrawl-guard:3003, NEVER firecrawl-api — the
+  # guard sees plain /v2 REST from here, so its egress filter and sanitiser
+  # apply exactly as they do for the agents' own stdio firecrawl-mcp
+  # (config/integrations.toml), which deliberately remains the agents' path.
+  # This package has no EXCLUDED_TOOLS in 3.x: only the two feedback tools
+  # are droppable from the environment; the residual cloud-only surface
+  # (research_*, monitor_*, developer/gov/usage search) is registered
+  # unconditionally and fails at call time on the self-hosted API — tune it
+  # out at the MCP client if the extra schemas matter.
+  firecrawl-mcp:
+    image: node:22-alpine
+    container_name: firecrawl-mcp
+    restart: unless-stopped
+    # Version pinned deliberately here in the command: a baked image would
+    # mean a new Komodo Build resource for a pure-JS package, so this is a
+    # runtime npx fetch on every recreate instead (seconds; needs registry
+    # egress at boot — the agent-side npx makes the same call). Bump this
+    # literal on purpose; integrations.toml runs the package unpinned
+    # agent-side and does not move with it.
+    command: ["npx", "-y", "firecrawl-mcp@3.28.1"]
+    environment:
+      HTTP_STREAMABLE_SERVER: "true"
+      # The same HOST trap as firecrawl-api: the default here is
+      # "localhost", which binds container loopback only — the proxy would
+      # ECONNREFUSED against it forever.
+      HOST: 0.0.0.0
+      PORT: "3000"
+      FIRECRAWL_API_URL: http://firecrawl-guard:3003
+      # Self-hosted mode tolerates a missing key at boot, but the API
+      # behind the guard accepts only TEST_API_KEY — firecrawl.env carries
+      # that value as FIRECRAWL_API_KEY for this file's env_file wiring.
+      FIRECRAWL_NO_SEARCH_FEEDBACK: "1"
+      FIRECRAWL_NO_ENDPOINT_FEEDBACK: "1"
+    env_file:
+      - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/firecrawl.env
+    depends_on:
+      firecrawl-guard:
+        condition: service_started
+    networks:
+      - hermes-net
+    healthcheck:
+      # FastMCP ships /health (no auth); node is the probe (this image has
+      # no curl either).
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Covers the npx registry fetch on boot.
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          # Small host: one node process (its search-companion listener
+          # included) + the npx cache. Same generosity-not-tightness note
+          # as the guard above.
           memory: 256m
 
   firecrawl-playwright:

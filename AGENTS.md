@@ -230,7 +230,10 @@ through a shell history or chat transcript.
   the stack `environment:` (komodo `resources.toml`, mirrored in
   `mise.toml`). The per-profile `.env` copies KEEP their `TEAM_*` lines —
   those homes are not the launch home.
-- `firecrawl.env`: `TEST_API_KEY`, `POSTGRES_*`, `OPENAI_API_KEY` +
+- `firecrawl.env`: `TEST_API_KEY`, `FIRECRAWL_API_KEY` (same value — what
+  the MCP servers send to the guard; the agents' read it from the Hermes
+  envs, the compose `firecrawl-mcp` from this file), `POSTGRES_*`,
+  `OPENAI_API_KEY` +
   `OPENAI_BASE_URL` (LiteLLM) + `MODEL_NAME=firecrawl` (LLM extract/generate).
 - `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (LiteLLM — bare
   `OPENAI_API_KEY` is NOT read; every default model config reuses the client
@@ -301,6 +304,26 @@ resources.
   services start at all — the ordering is the point, and `start_period`
   (180s) covers the boot needed. Gateway state: `docker inspect <c> --format
   '{{.State.Health.Status}}'`.
+- **Firecrawl rides the gateway's MCP surface** (`mcp_servers` in
+  `config/litellm.yaml` → service `firecrawl-mcp`, `compose/firecrawl.
+  compose.yml`): the proxy serves Firecrawl's MCP tools at `/mcp` on its own
+  published port, so MCP-capable gateway clients get web search/scrape with
+  only their LiteLLM key — the Firecrawl credential never leaves the stack,
+  and `firecrawl-mcp` points at `firecrawl-guard:3003` (never the API),
+  keeping the fence on the path (the guard sees plain `/v2` REST either
+  way). Deliberate choices: **the Hermes agents stay on their
+  `integrations.toml` stdio server** — do not wire the gateway path into
+  profiles too (the doubled toolset schema bill; and the gateway registry is
+  not tool-filterable server-side: the package registers everything, only
+  the two feedback tools drop via env, and the cloud-only remainder fails at
+  call time self-hosted — tune at the MCP client). The version is pinned in
+  the compose command as a boot-time `npx` fetch (a baked image would need a
+  new Komodo Build resource for no gain), and `HOST=0.0.0.0` there is the
+  API's loopback trap over again. The `/mcp` registry is
+  LiteLLM-version-dependent — verify listing + one `tools/call` scrape after
+  every gateway rebuild (the runbook's checklist), and note the posture
+  change: a LiteLLM API key now buys web fetch, so virtual-key scoping
+  decides who gets it.
 - **firecrawl**: the real concurrency knobs are `NUQ_WORKER_COUNT=1`
   (`NUM_WORKERS_PER_QUEUE` only affects the legacy worker),
   `MAX_CONCURRENT_JOBS=2`, `CRAWL_CONCURRENT_REQUESTS=2`,

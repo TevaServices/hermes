@@ -9,7 +9,14 @@
 #   honcho-api  — FastAPI server (port 8000)
 #   honcho-mcp  — Honcho's MCP server for agent clients (port 3000)
 # Firecrawl runs via compose/firecrawl.compose.yml:
-#   firecrawl-api — Firecrawl API server (port 3002)
+#   firecrawl-api   — Firecrawl API server (port 3002)
+#   firecrawl-guard — the egress/injection fence in front of it (port 3003)
+#   firecrawl-mcp   — HTTP-mode MCP server the LiteLLM gateway fronts
+#                     (litellm.yaml mcp_servers) for gateway clients; the
+#                     agents' OWN firecrawl MCP server is the npx stdio
+#                     invocation below, pointed at the guard.
+#                     (firecrawl-mcp does not talk to firecrawl-api; it
+#                     talks to the guard, which forwards to the API.)
 
 [integrations.honcho]
 label = "Honcho durable memory"
