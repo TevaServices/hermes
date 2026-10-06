@@ -231,3 +231,13 @@ litellm_settings:
   # nomic-embed-text calls were failing on it. Dropping is safe here: the
   # ollama provider returns floats regardless.
   drop_params: true
+
+# ── Proxy/UI settings ────────────────────────────────────────────────────
+# The admin UI must not fall back to environment credentials (UI_USERNAME/
+# UI_PASSWORD — or the master key when UI_PASSWORD is unset) as a proxy-admin
+# login: that is one shared static secret for everything. Login paths kept:
+# Zitadel SSO (the normal one) and DB-stored account passwords (the
+# break-glass one — the proxy_admin user's own password). The master key is
+# API-only from here on.
+general_settings:
+  disable_env_credential_login: true
