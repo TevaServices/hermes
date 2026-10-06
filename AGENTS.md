@@ -321,7 +321,11 @@ resources.
   new Komodo Build resource for no gain), and `HOST=0.0.0.0` there is the
   API's loopback trap over again. The `/mcp` registry is
   LiteLLM-version-dependent — verify listing + one `tools/call` scrape after
-  every gateway rebuild (the runbook's checklist), and note the posture
+  every gateway rebuild (the runbook's checklist); a boot-time
+  `Error listing tools from firecrawl: ConnectError` in litellm's log is the
+  benign shape — the MCP service is mid-`npx`-fetch while the gateway
+  finishes startup, and the first client connect re-lists lazily (verified
+  live: tools served after startup with no restart). Note the posture
   change: a LiteLLM API key now buys web fetch, so virtual-key scoping
   decides who gets it.
 - **firecrawl**: the real concurrency knobs are `NUQ_WORKER_COUNT=1`
