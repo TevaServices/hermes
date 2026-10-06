@@ -149,6 +149,24 @@ model = "nemotron-3-nano"
 context_length = 262144
 description = "Nemotron 3 nano bare alias — the `:30b` variant is required at Ollama Cloud (bare 404s) and lives inside litellm_params; falls to openrouter/nvidia/nemotron-3-nano-30b-a3b (same backend as the cheap tier)"
 
+[models."deepseek-v4.1-flash"]
+provider = "litellm"
+model = "deepseek-v4.1-flash"
+context_length = 1048576
+description = "DeepSeek v4.1 flash bare alias — Ollama Cloud first, falls to openrouter/deepseek/deepseek-v4.1-flash"
+
+[models.minimax-m3]
+provider = "litellm"
+model = "minimax-m3"
+context_length = 512000
+description = "MiniMax M3 bare alias — Ollama Cloud first (512K window as Ollama reports it), falls to openrouter/minimax/minimax-m3"
+
+[models.nemotron-3-ultra]
+provider = "litellm"
+model = "nemotron-3-ultra"
+context_length = 262144
+description = "Nemotron 3 ultra bare alias — Ollama Cloud first, falls to openrouter/nvidia/nemotron-3-ultra-550b-a55b"
+
 # Outage behavior: a tier whose Ollama Cloud deployment fails (429 /
 # subscription limit / transport) is served by its OpenRouter fallback —
 # same tier, same capability class — while the gateway's cooldown expires,
