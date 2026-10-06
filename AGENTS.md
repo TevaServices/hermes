@@ -186,7 +186,15 @@ echoed, or routed through a shell history or chat transcript.
   SmartScrape extraction works. It is also the shape to copy for any other
   lane that can never see private data.
 - `litellm.env`: `LITELLM_MASTER_KEY`, `OLLAMA_API_KEY`,
-  `OPENROUTER_API_KEY` (free tier — create at https://openrouter.ai/keys).
+  `OPENROUTER_API_KEY` (free tier — create at https://openrouter.ai/keys),
+  `OPENROUTER_FREE_KEY` (the `firecrawl` group's second key), the gateway's
+  `DATABASE_URL` (DB-backed since 2026-10-06), and the admin-UI SSO block:
+  `PROXY_BASE_URL`, `GENERIC_CLIENT_ID`/`_SECRET` (Zitadel OIDC app), the
+  three `GENERIC_*_ENDPOINT`s (the issuer's OIDC discovery values),
+  `GENERIC_USER_ID_ATTRIBUTE=sub`, `ALLOWED_EMAIL_DOMAINS`.
+- `litellm-db.env` (paired with the above — one generated
+  `DATABASE_URL` password): `POSTGRES_USER=litellm`, `POSTGRES_PASSWORD`,
+  `POSTGRES_DB=litellm`. See `secrets/litellm-db.env.example`.
 - `hermes-main.env`: `LITELLM_API_KEY` (the master key), `FIRECRAWL_API_KEY`
   (must equal `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any
   non-empty value while honcho-api runs no-auth; must match honcho-api if
@@ -268,12 +276,29 @@ these stacks assume a real server and will starve a small host into
 crash-loops. Do not "fix" the small numbers in the compose files without
 checking the host's actual resources.
 
-- **litellm** runs DB-less (no `DATABASE_URL`) — fine for pure routing;
-  key management/budgeting features need a DB and are unused here. The
-  image is a thin build over upstream (`docker/litellm/Dockerfile` FROMs
-  the multi-arch `ghcr.io/berriai/litellm:main-latest` — the versioned
-  `main-v1.x.y` tags are amd64-only; pre-pull the base on the host before
-  the first build and re-pull on gateway upgrades).
+- **litellm is DB-backed, and the admin UI is the Zitadel-SSO surface.**
+  Since 2026-10-06 the gateway runs with a dedicated Postgres
+  (`compose/litellm.compose.yml` service `litellm-db`, volume
+  `litellm-db-data`, password auth via `/etc/hermes/litellm-db.env` — NOT
+  trust auth like honcho-db; the DB holds every API credential) and wires
+  the shared Valkey as Redis at logical DB **/3** via `REDIS_HOST/PORT/DB`
+  in the compose (`/0` Firecrawl, `/1` Honcho, `/2` firecrawl-guard).
+  `DATABASE_URL` + the SSO env (`GENERIC_*`, `PROXY_BASE_URL`) live in
+  `/etc/hermes/litellm.env`. Prisma migrations run during the gateway's own
+  boot — the first DB-backed boot takes longer, the 180s `start_period`
+  covers it; rollback to DB-less = remove `DATABASE_URL` from
+  `litellm.env` and redeploy. The admin UI is the gateway's own process
+  (same port 4000: `/ui`, callback `/sso/callback`), logged in via a Zitadel
+  OIDC application (LiteLLM's generic-OIDC client — free for up to 5 SSO
+  users on this version; the master key still authenticates the API and
+  the UI's fallback login). Response caching stays OFF
+  (`litellm_settings.cache` unset) — Redis serves the gateway's internal
+  state only; do not enable `cache: true` without deciding the response
+  caching trade-off deliberately. The image is a thin build over upstream
+  (`docker/litellm/Dockerfile` FROMs the multi-arch
+  `ghcr.io/berriai/litellm:main-latest` — the versioned `main-v1.x.y` tags
+  are amd64-only; pre-pull the base on the host before the first build and
+  re-pull on gateway upgrades).
 - **Nothing may start before litellm is SERVING, not merely alive.** The
   gateway binds its port only after app startup completes, and startup
   fetches the provider catalogue (`check_provider_endpoint`) — observed ~1–2
@@ -2237,6 +2262,17 @@ for m in cheap smart smarter smartest; do printf '%-9s ' "$m"; \
 # anywhere, needs the internet but no key) — the ONLY check that can catch
 # litellm.yaml and models.toml drifting apart, on tiers and fallbacks alike.
 mise run check-model-windows                        # all ok, exit 0
+# The gateway's DB + Redis + admin UI (DB-backed since 2026-10-06; see
+# §"Stack particulars"):
+docker inspect litellm-db --format '{{.State.Health.Status}}'   # healthy
+docker logs litellm 2>&1 | grep -iE 'prisma|migrat|redis' | tail -5
+docker exec litellm-db psql -U litellm -d litellm -c '\dt' | head -8
+#   -> LiteLLM_* tables (LiteLLM_VerificationToken, LiteLLM_UserTable, ...)
+docker exec valkey valkey-cli -n 3 dbsize                        # grows in use
+# Admin UI over the reverse proxy (the sso/callback redirect URI is pinned
+# to $PROXY_BASE_URL in /etc/hermes/litellm.env; the SSO user count is free
+# up to 5 on this version):
+curl -sI https://<your-proxy-host>/ui                            # 200 or 30x
 # Honcho memory end to end: the plugin's own view (peer must be set), the
 # per-turn injection audit, the deriver's queue (0 errored), and one timed
 # recall. Commands and expected numbers: §"Honcho memory (what recall
