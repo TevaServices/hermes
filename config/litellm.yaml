@@ -171,6 +171,23 @@ model_list:
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
 
+  # ── OpenRouter wildcard — every OpenRouter model, callable as
+  #    "openrouter/<model-id>" (e.g. openrouter/openai/gpt-4o-mini) with no
+  #    config change. Mirrors the "ollama/*" wildcard above: the
+  #    try-before-promoting affordance, single passthrough, no load
+  #    balancing, no fallbacks. It rides the SHARED OpenRouter key
+  #    (non-free, ZDR-guarded) — NOT OPENROUTER_FREE_KEY, which is scoped to
+  #    the firecrawl group only. The five explicit openrouter/<id> entries
+  #    above are the router's fallback ids and always win over this wildcard
+  #    (exact match before pattern). NOTE the window caveat, same as the
+  #    ollama wildcard: a model reached through this wildcard has no
+  #    declared context window (config/models.toml declares windows per
+  #    TIER) — promote a model to a tier before relying on it.
+  - model_name: "openrouter/*"
+    litellm_params:
+      model: openrouter/*
+      api_key: os.environ/OPENROUTER_API_KEY
+
 router_settings:
   # Pick the fastest healthy member of a group per request, and retry the
   # others on failure. Inert for the single-member tiers; it matters for the
@@ -231,7 +248,6 @@ litellm_settings:
   # nomic-embed-text calls were failing on it. Dropping is safe here: the
   # ollama provider returns floats regardless.
   drop_params: true
-
 # ── Proxy/UI settings ────────────────────────────────────────────────────
 # The admin UI must not fall back to environment credentials (UI_USERNAME/
 # UI_PASSWORD — or the master key when UI_PASSWORD is unset) as a proxy-admin
