@@ -110,6 +110,21 @@ echoed, or routed through a shell history or chat transcript.
   the same for OpenRouter (`openrouter/<model-id>`), on the shared
   (non-free, ZDR-guarded) key — the firecrawl group's `:free`-only rule and
   its separate key are untouched; explicit ids always beat the wildcard.
+  **Bare-name aliases are the DEFAULT vocabulary** (also 2026-10-06):
+  `glm-5.3-flash`, `glm-5.3`, `kimi-k3`, `gemma4`, `nemotron-3-nano` —
+  unprefixed, no `:cloud` suffix (`nemotron-3-nano`'s `:30b` variant is
+  required by Ollama Cloud and lives inside `litellm_params`, never in the
+  caller's string). Each alias is a one-member Ollama Cloud group whose
+  `router_settings.fallbacks` chain names its OpenRouter twin — the
+  provider namespaces genuinely differ (z-ai/…, moonshotai/…), so the
+  pairing is an explicit table (litellm.yaml alias block + models.toml
+  rows, all in the same change; check-model-windows verifies both sides).
+  It is deliberately NOT heuristic catalog matching: a wrong silent
+  auto-pair would serve the WRONG model, while a missing pair fails
+  loudly. The `ollama/`-prefixed spelling shares the alias's chain
+  (litellm strips the provider prefix); an undeclared bare name, the
+  wildcards, and openrouter/-typed ids are still chain-less and fail
+  loudly — no `default_fallbacks`.
   Apps authenticate with the master key
   (`LITELLM_MASTER_KEY`, generate with `openssl rand -hex 32`), mirrored
   into each app's env as `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` /

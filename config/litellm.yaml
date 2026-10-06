@@ -118,6 +118,61 @@ model_list:
       model: openrouter/moonshotai/kimi-k3
       api_key: os.environ/OPENROUTER_API_KEY
 
+  # ── The bare-name aliases — the DEFAULT vocabulary: unprefixed, no
+  #    provider/vendor prefix, no Ollama Cloud suffix. Each alias is a
+  #    one-member group served from Ollama Cloud first, with a
+  #    router_settings.fallbacks chain (below) to its OpenRouter twin —
+  #    same model, same capability class — consulted when Ollama Cloud is
+  #    down, unavailable or out of usage (429). The namespacing differs
+  #    (Ollama: bare ids, sometimes with a size variant like `:30b`;
+  #    OpenRouter: vendor-prefixed ids), which is exactly what THIS table
+  #    owns: the caller says `glm-5.3-flash`, the gateway knows the Ollama
+  #    id AND the OpenRouter id. Adding an alias = an entry here (the
+  #    Ollama id as `openai/<id>`), a fallbacks line naming its OpenRouter
+  #    twin, and a context_length row in config/models.toml — all three in
+  #    the same change; check-model-windows then verifies the pair against
+  #    both providers.
+  #
+  #    Deliberately NOT attempted: heuristic catalog matching (strip a
+  #    vendor prefix / model-name fuzz to auto-pair the two catalogs). A
+  #    wrong silent match serves the WRONG model — an explicit table is
+  #    the one shape where a missing pair fails LOUDLY instead of
+  #    serving badly. The wildcards above remain the catch-alls with the
+  #    prefixes; `ollama/glm-5.3-flash` even takes the alias's fallback
+  #    (the resolver strips the literal `ollama/` provider prefix), so
+  #    both spellings behave identically; a bare id with NO alias (and no
+  #    tier) is a loud 400.
+  #
+  #    Ollama Cloud answers bare ids directly ("gemma4" without ":cloud";
+  #    measured live 2026-10-06) — except ids whose variant selector IS
+  #    the identity ("nemotron-3-nano" bare 404s), where the real id
+  #    stays inside litellm_params and never reaches the caller.
+  - model_name: glm-5.3-flash
+    litellm_params:
+      model: openai/glm-5.3-flash
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: glm-5.3
+    litellm_params:
+      model: openai/glm-5.3
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: kimi-k3
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: gemma4
+    litellm_params:
+      model: openai/gemma4
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  - model_name: nemotron-3-nano
+    litellm_params:
+      model: openai/nemotron-3-nano:30b
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+
   # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). NOT a tier: it
   #    serves one app that only ever ingests PUBLIC web pages, and is
   #    OpenRouter ONLY because schema-bound extraction needs
@@ -234,6 +289,17 @@ router_settings:
     - smart: ["openrouter/google/gemma-4-31b-it"]
     - smarter: ["openrouter/z-ai/glm-5.3-flash"]
     - smartest: ["openrouter/z-ai/glm-5.3", "openrouter/moonshotai/kimi-k3"]
+    # The bare-name aliases (see the model_list block): same semantics as
+    # the tiers — Ollama Cloud first, then the OpenRouter twin. Deliberate
+    # per-NAME chains; there is still NO "*" default_fallbacks, so an
+    # undeclared name (or the unprefixed wildcards) fails loudly. An
+    # "ollama/"-prefixed spelling of an alias shares the chain via
+    # stripped-match; an "openrouter/"-prefixed spelling never does.
+    - glm-5.3-flash: ["openrouter/z-ai/glm-5.3-flash"]
+    - glm-5.3: ["openrouter/z-ai/glm-5.3"]
+    - kimi-k3: ["openrouter/moonshotai/kimi-k3"]
+    - gemma4: ["openrouter/google/gemma-4-31b-it"]
+    - nemotron-3-nano: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
 
 litellm_settings:
   # Expand the "ollama/*" wildcard in /v1/models by querying the
