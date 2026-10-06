@@ -290,8 +290,11 @@ checking the host's actual resources.
   `litellm.env` and redeploy. The admin UI is the gateway's own process
   (same port 4000: `/ui`, callback `/sso/callback`), logged in via a Zitadel
   OIDC application (LiteLLM's generic-OIDC client — free for up to 5 SSO
-  users on this version; the master key still authenticates the API and
-  the UI's fallback login). Response caching stays OFF
+  users on this version). `general_settings.disable_env_credential_login:
+  true` turns off the env-credential login path (UI_USERNAME/UI_PASSWORD and
+  the master-key fallback) — UI login is SSO plus each DB account's own
+  password; **the master key is API-only from then on** and never works in
+  the UI login box. Response caching stays OFF
   (`litellm_settings.cache` unset) — Redis serves the gateway's internal
   state only; do not enable `cache: true` without deciding the response
   caching trade-off deliberately. The image is a thin build over upstream
