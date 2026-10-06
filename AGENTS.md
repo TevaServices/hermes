@@ -645,7 +645,8 @@ not a stall. `pending_items` on the deriver's metrics endpoint is the honest
 measure. Do not "fix" it by lowering the batch size without weighing the
 deriver call each batch triggers (measured: 45 s, 2 facts).
 
-The checks — plugin status/peer, the `injection.log` audit, the deriver
+The checks — the plugin's own status view, the `injection.log` audit, the
+deriver
 queue with expected counts, one timed live recall — live in the
 **hermes-ops-runbook** skill (`.claude/skills/hermes-ops-runbook/SKILL.md`),
 alongside the full post-deploy verification checklist. The deriver's queue
@@ -806,10 +807,10 @@ routed by repo owner.**
   the release skill's failure-filing moved to `--body-file` in the same
   change.)
 - **The shim's CI GATE** — a write that ASSERTS a verdict on a PR is refused
-  while a check is red or still running: `gh pr edit <PR#> --add-label
-  review/ready` (the handoff), `--add-label review/approved`, the
-  `gh pr review <PR#> --approve` that IS the GitHub approval, and
-  `gh pr merge`. It is the one gate making a network call (`pr checks --json
+  while a check is red or still running: the handoff write `gh pr edit <PR#>
+  --add-label review/ready`, the verdict write `gh pr edit <PR#> --add-label
+  review/approved`, the `gh pr review <PR#> --approve` that IS the GitHub
+  approval, and `gh pr merge`. It is the one gate making a network call (`pr checks --json
   bucket`; no jq dependency), which is why owner resolution sits ABOVE the
   `GH_TOKEN` passthrough — a preset token is the documented way to force an
   org token, so a gate below that line would fence nothing. It **fails
