@@ -106,7 +106,11 @@ echoed, or routed through a shell history or chat transcript.
   `litellm_settings.check_provider_endpoint`), so a model can be tried
   before it is promoted to a tier — but a wildcard id has NO declared
   window (models.toml declares windows per TIER), so it is not something an
-  agent should rely on. Apps authenticate with the master key
+  agent should rely on. An `openrouter/*` wildcard (added 2026-10-06) does
+  the same for OpenRouter (`openrouter/<model-id>`), on the shared
+  (non-free, ZDR-guarded) key — the firecrawl group's `:free`-only rule and
+  its separate key are untouched; explicit ids always beat the wildcard.
+  Apps authenticate with the master key
   (`LITELLM_MASTER_KEY`, generate with `openssl rand -hex 32`), mirrored
   into each app's env as `LITELLM_API_KEY` / `LLM_OPENAI_API_KEY` /
   `OPENAI_API_KEY` — same value everywhere.
