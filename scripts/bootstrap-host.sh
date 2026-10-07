@@ -96,6 +96,39 @@ else
   echo "capped journald at 500M"
 fi
 
+# --- scheduled fuller trims (systemd timer) ---------------------------------
+# The daemon's BuildKit GC above caps the cache; dangling images and orphaned
+# anonymous volumes drift slower (~700 MB / 5 weeks observed) and get one
+# daily oneshot. This is the host's timer, not a Komodo Action: Actions run
+# as sandboxed deno scripts and cannot spawn the docker CLI at all — ENOENT
+# even by absolute path (tested live 2026-10-07 + deleted the experiment;
+# a Procedure's Exec is komodo-managed work only). `--reserved-space` needs
+# docker 29+; on an older engine, spell it `--keep-storage` instead.
+install -m 644 /dev/stdin /etc/systemd/system/trim-docker.service <<'UNIT'
+[Unit]
+Description=Trim docker build cache (keep 10 GB), dangling images, orphaned anonymous volumes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker builder prune --reserved-space 10GB -f
+ExecStart=/usr/bin/docker image prune -f
+ExecStart=/usr/bin/docker volume prune -f
+UNIT
+install -m 644 /dev/stdin /etc/systemd/system/trim-docker.timer <<'UNIT'
+[Unit]
+Description=Run trim-docker.service daily at 05:17
+
+[Timer]
+OnCalendar=*-*-* 05:17:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now trim-docker.timer
+echo "enabled trim-docker.timer (daily 05:17)"
+
 # The host was found once with /dev/null at 664 (2026-10-07), which
 # silently breaks every non-root `>/dev/null` redirect — the command its
 # redirection fails is not run at all, so probe outputs went missing
