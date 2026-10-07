@@ -363,8 +363,19 @@ general_settings:
 # points at the firecrawl-guard, keeping the fence on the path. The Hermes
 # profiles deliberately stay on their integrations.toml stdio server
 # (tool-filtered for the tool_search budget); do not wire this path into
-# them as well. The /mcp tool registry has churned across LiteLLM versions —
-# verify listing + one tools/call scrape after every gateway rebuild.
+# them as well.
+#
+# The catalog is the service's own registration (compose pins it to
+# firecrawl-mcp@3.20.1 — versions 3.21+ register the cloud-only surface
+# this API does not implement, research_*/monitor_*/gov+developer_search/
+# credit_usage/find_tools, which then fail at call time), and these
+# mcp_servers entries carry NO tool-filtering keys in this LiteLLM version —
+# the agent-side exclude list in integrations.toml is the only config seam.
+# What remains advertised but cloud-only here: agent(+status),
+# interact(+stop), monitor_* — loud-failing, self-hosted-dead. The guard
+# normalises cloud-era /v2/search bodies, so search behaves on whichever
+# package version sits in front of it. After a gateway rebuild, verify the
+# listing plus (at least) one tools/call search AND scrape.
 mcp_servers:
   firecrawl:
     url: "http://firecrawl-mcp:3000/mcp"

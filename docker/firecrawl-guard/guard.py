@@ -25,6 +25,11 @@ the `json` format object, `firecrawl-mcp`'s `jsonOptions` schema carries only
 {prompt, schema} and so drops it, and Firecrawl has no force-env for it. See
 AGENTS.md for the full findings.
 
+It also NORMALISES search-call drift: recent `firecrawl-mcp` versions
+default cloud-era `/v2/search` arguments the self-hosted API strictly
+rejects (see normalize_search for the finding), so search works from every
+MCP surface no matter which package version sits in front of the guard.
+
 Finally it owns the operator brake. Firecrawl's own `lockdown: true` is a true
 no-egress guarantee but self-hosted it can only ever miss (it reads index
 engines, and there is no INDEX_DATABASE_URL here), so a cache-backed
@@ -426,6 +431,68 @@ def inject_policy(path: str, body: bytes) -> bytes:
     return json.dumps(payload).encode() if touched else body
 
 
+# ---------------------------------------------------- cloud-drift normalising
+
+# The official firecrawl-mcp models Firecrawl CLOUD's search contract, and
+# since 3.21 it also DEFAULTS cloud-era arguments in: `sources: ["web",
+# "alexandria"]` (when a caller sends none) alongside `domainTools` /
+# `toolDetail`. None of that exists self-hosted — the v2 API's strict zod
+# schema rejects the whole request ("Invalid request body": `alexandria` is
+# outside {web, images, news}; `domainTools`/`toolDetail` are unrecognized
+# keys; observed live 2026-10-07 from the api log). Normalising here keeps
+# search working from BOTH MCP surfaces — the agents' stdio server (which
+# fetches the package unpinned, so its version moves under us) and the
+# gateway-fronted one — regardless of which package version sits in front of
+# the guard. Interop, not defense, so fail-open: an unparseable body passes
+# through untouched and the API gets to speak for itself.
+SEARCH_STRIP_KEYS = {"domainTools", "toolDetail"}
+SEARCH_SOURCE_KINDS = {"web", "images", "news"}
+
+
+def normalize_search(path: str, body: bytes) -> bytes:
+    """Coerce a cloud-era /v2/search body to the self-hosted API's shape.
+
+    Only the plain path is touched — the /v2/search/<kind> sub-searches are
+    cloud-only routes and 404 upstream no matter how they arrive.
+    """
+    if path.split("?", 1)[0].rstrip("/") != "/v2/search":
+        return body
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return body
+    if not isinstance(payload, dict):
+        return body
+
+    # A present-but-null key still has to go — and still count as a change.
+    dropped = [k for k in list(payload) if k in SEARCH_STRIP_KEYS]
+    for k in dropped:
+        payload.pop(k)
+    changed = bool(dropped)
+    kept: list[str] = []
+
+    sources = payload.get("sources")
+    if isinstance(sources, list):
+        kept = sorted(
+            {s for s in sources
+             if isinstance(s, str) and s in SEARCH_SOURCE_KINDS}
+        )
+        if len(kept) != len(sources):
+            changed = True
+        if kept:
+            payload["sources"] = kept
+        else:
+            payload.pop("sources")  # let the API's own default apply
+            changed = True
+    elif "sources" in payload:
+        payload.pop("sources")  # any non-list shape is cloud-drift too
+        changed = True
+
+    if changed:
+        log("search_normalized", dropped=dropped, sources=kept)
+    return json.dumps(payload).encode() if changed else body
+
+
 # -------------------------------------------------------------------- cache
 
 
@@ -658,8 +725,14 @@ class Handler(BaseHTTPRequestHandler):
                        sanitize_response(self.path, ctype, payload))
             return
 
+        # --- request normalising (enforce only) ------------------------------
+        outbound = normalize_search(self.path, body) if ENFORCING else body
+
         # --- egress filter ------------------------------------------------
-        violation = check_egress(self.path, body)
+        # Scanned on what actually goes out, not on what arrived: a
+        # normalised-away field can no longer carry a secret past the scanner
+        # (monitor mode normalises nothing, so it scans the caller's body).
+        violation = check_egress(self.path, outbound)
         if violation and ENFORCING:
             status, payload = refused(violation["rule"], violation["detail"])
             self._send(status, {"Content-Type": "application/json"}, payload)
@@ -667,7 +740,8 @@ class Handler(BaseHTTPRequestHandler):
         if violation:
             log("egress_would_block", path=self.path, **violation)
 
-        outbound = inject_policy(self.path, body) if ENFORCING else body
+        if ENFORCING:
+            outbound = inject_policy(self.path, outbound)
 
         try:
             status, headers, payload = forward(self.command, self.path,

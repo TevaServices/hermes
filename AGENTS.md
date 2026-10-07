@@ -313,15 +313,28 @@ resources.
   keeping the fence on the path (the guard sees plain `/v2` REST either
   way). Deliberate choices: **the Hermes agents stay on their
   `integrations.toml` stdio server** — do not wire the gateway path into
-  profiles too (the doubled toolset schema bill; and the gateway registry is
-  not tool-filterable server-side: the package registers everything, only
-  the two feedback tools drop via env, and the cloud-only remainder fails at
-  call time self-hosted — tune at the MCP client). The version is pinned in
-  the compose command as a boot-time `npx` fetch (a baked image would need a
-  new Komodo Build resource for no gain), and `HOST=0.0.0.0` there is the
+  profiles too (the doubled toolset schema bill; and the mcp_servers
+  entries in `litellm.yaml` carry NO tool-filtering keys in this LiteLLM
+  version, so the catalog is curated at the service that registers it).
+  The gateway-fronted package is therefore **pinned in the compose command
+  at `firecrawl-mcp@3.20.1`** (2026-10-07): 3.21–3.28 register the
+  cloud-only surface self-hosted does not implement (`research_*`,
+  `monitor_*`, `gov/developer_search`, `credit_usage`, `find_tools`) and
+  default cloud-era `/v2/search` arguments (`sources:
+  ["web","alexandria"]`, `domainTools`, `toolDetail`) that the API's strict
+  zod schema rejects — gateway search 400s. What stays advertised but
+  cloud-only even at 3.20.1 — `agent(+status)`, `interact(+stop)`,
+  `monitor_*` — has no env off-switch (only the two feedback tools) and
+  fails loudly at call time; the agents' unpinned stdio server is curated
+  instead by `mcp_tools_exclude` (refreshed 2026-10-07 against the live
+  catalog) + the guard's search normalisation
+  (`docker/firecrawl-guard/guard.py` `normalize_search` — keeps search
+  working on whichever package version sits in front of it). A baked image
+  would need a new Komodo Build resource (a boot-time `npx` fetch needs
+  only registry egress), and `HOST=0.0.0.0` there is the
   API's loopback trap over again. The `/mcp` registry is
-  LiteLLM-version-dependent — verify listing + one `tools/call` scrape after
-  every gateway rebuild (the runbook's checklist); a boot-time
+  LiteLLM-version-dependent — verify listing + one `tools/call` scrape
+  AND search after every gateway rebuild (the runbook's checklist); a boot-time
   `Error listing tools from firecrawl: ConnectError` in litellm's log is the
   benign shape — the MCP service is mid-`npx`-fetch while the gateway
   finishes startup, and the first client connect re-lists lazily (verified
@@ -418,6 +431,13 @@ Firecrawl's own two defenses were evaluated first (live image +
 
 What the guard does, in the order the bytes travel:
 
+- **Search normalisation** (ENFORCE only) — recent `firecrawl-mcp` versions
+  default cloud-era `/v2/search` arguments the self-hosted API strictly
+  rejects (`domainTools`/`toolDetail` keys, `sources` entries like
+  "alexandria"; observed live 2026-10-07). The guard strips the keys,
+  filters `sources` to the {web, images, news} enum and drops the key when
+  nothing survives, so search works from every MCP surface on every package
+  version; the egress scan below runs on this normalised body.
 - **Policy injection** — forces `checkPromptInjection: true` onto every
   `json` format in a scrape (a caller's explicit value is left alone).
 - **Egress filter** (fail-CLOSED) — refuses a fetch aimed at the stack's own

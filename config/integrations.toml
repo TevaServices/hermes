@@ -49,17 +49,26 @@ mcp_env = { FIRECRAWL_API_URL = "http://firecrawl-guard:3003", FIRECRAWL_API_KEY
 # TEST_API_KEY is what the self-hosted Firecrawl API accepts when
 # USE_DB_AUTHENTICATION=false.
 required_env = ["FIRECRAWL_API_KEY"]
-# The firecrawl-mcp server exposes ~27 tools, but the SELF-HOSTED API
+# The firecrawl-mcp server exposes ~30 tools, but the SELF-HOSTED API
 # only implements part of the /v2 surface (verified against the running
-# API + upstream controllers, 2026-09-10). Working: scrape, search,
-# crawl (+status), map, extract, parse, batch/scrape. Everything keyed to
-# cloud-only backends fails here — excluded so their schemas don't pin
-# every turn behind tool_search and never get called:
+# API + upstream logs, 2026-10-07; the catalog churns between releases —
+# refresh this list against a live tools/list whenever the package moves).
+# Working: scrape, search (the guard normalises the cloud-era search
+# arguments newer package versions default in — docker/firecrawl-guard/
+# guard.py `normalize_search`), crawl (+status), map, extract, parse,
+# batch/scrape. Everything keyed to cloud-only backends fails here —
+# excluded so their schemas don't pin every turn behind tool_search and
+# never get called:
 #   agent, agent_status            → cloud agent-orchestrator (+browser)
 #   interact, interact_stop        → /v2/browser needs BROWSER_SERVICE_URL
 #                                    (503 "feature is not configured")
 #   developer_search               → proxies Firecrawl's hosted search index
+#   gov_search                     → /v2/search/gov (cloud-only route, 404)
 #   research_* (5)                 → /v2/search/research proxy (cloud-only)
+#   find_tools                     → Alexandria provider catalogue (cloud-only)
+#   credit_usage                   → /v2/team/credit-usage 500s self-hosted
+#                                    (no AUTUMN_SECRET_KEY: billing is cloud-
+#                                    only by design)
 #   monitor_* (8)                  → monitor store needs cloud artifacts
 #                                    (GCS); controller 500s self-hosted
 #   feedback, search_feedback      → quality-telemetry for hosted search
@@ -69,6 +78,9 @@ mcp_tools_exclude = [
     "firecrawl_interact",
     "firecrawl_interact_stop",
     "firecrawl_developer_search",
+    "firecrawl_gov_search",
+    "firecrawl_credit_usage",
+    "firecrawl_find_tools",
     "firecrawl_research_search_papers",
     "firecrawl_research_read_paper",
     "firecrawl_research_related_papers",
