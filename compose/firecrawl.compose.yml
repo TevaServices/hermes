@@ -160,11 +160,20 @@ services:
   # guard sees plain /v2 REST from here, so its egress filter and sanitiser
   # apply exactly as they do for the agents' own stdio firecrawl-mcp
   # (config/integrations.toml), which deliberately remains the agents' path.
-  # This package has no EXCLUDED_TOOLS in 3.x: only the two feedback tools
-  # are droppable from the environment; the residual cloud-only surface
-  # (research_*, monitor_*, developer/gov/usage search) is registered
-  # unconditionally and fails at call time on the self-hosted API — tune it
-  # out at the MCP client if the extra schemas matter.
+  #
+  # Pinned to 3.20.1 DELIBERATELY (live-verified 2026-10-07): 3.21-3.28 of the
+  # package register the Firecrawl *cloud* surface the self-hosted API does
+  # not implement (research_*, gov/developer_search, credit_usage,
+  # find_tools) and default cloud-era /v2/search arguments (sources
+  # ["web","alexandria"], domainTools, toolDetail) that the API's strict zod
+  # schema rejects — gateway search 400s. At 3.20.1 the catalog is the plain
+  # scrape/map/search/crawl(+status)/extract/parse surface (plus the
+  # cloud-only agent/interact/monitor_* residue, which has no env off-switch
+  # and no filtering seam in the proxy's config schema — it fails loudly at
+  # call time instead, like the guard's own doctrine states). Search still
+  # works across later package versions too: the guard normalises the drift
+  # keys for the agents' unpinned stdio server — docker/firecrawl-guard/
+  # guard.py `normalize_search`.
   firecrawl-mcp:
     image: node:22-alpine
     container_name: firecrawl-mcp
@@ -173,9 +182,10 @@ services:
     # mean a new Komodo Build resource for a pure-JS package, so this is a
     # runtime npx fetch on every recreate instead (seconds; needs registry
     # egress at boot — the agent-side npx makes the same call). Bump this
-    # literal on purpose; integrations.toml runs the package unpinned
-    # agent-side and does not move with it.
-    command: ["npx", "-y", "firecrawl-mcp@3.28.1"]
+    # literal on purpose, against the live API (tools/list + one search
+    # tools/call); integrations.toml runs the package unpinned agent-side
+    # and does not move with it.
+    command: ["npx", "-y", "firecrawl-mcp@3.20.1"]
     environment:
       HTTP_STREAMABLE_SERVER: "true"
       # The same HOST trap as firecrawl-api: the default here is

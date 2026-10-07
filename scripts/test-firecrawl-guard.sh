@@ -27,6 +27,10 @@
 #   8. cache-only serves a previously fetched page with no upstream call and
 #      refuses an unknown one with the lockdown-shaped error
 #   9. the caller's Authorization header reaches the upstream intact
+#  10. cloud-era /v2/search bodies are normalised to the self-hosted API's
+#      shape (domainTools/toolDetail dropped, sources filtered to the enum,
+#      an empty result dropped entirely) while clean and non-search bodies
+#      pass through untouched, and monitor mode changes nothing
 #
 # Offline: no Docker, no network. Run: $ mise run test
 #                                       (or: sh scripts/test-firecrawl-guard.sh)
@@ -290,7 +294,64 @@ status, raw = call(closed_port, "/v2/scrape", scrape("https://example.com"))
 check("closed mode refuses everything", status == 403, "status %s" % status)
 check("closed mode never reaches upstream", Stub.hits == 0)
 
-# --- 8. cache-only: a warmed page is served, an unknown one is refused -----
+# --- 8. search normalisation: cloud-era bodies meet the self-hosted API ----
+Stub.hits = 0
+status, raw = call(port, "/v2/search",
+                   {"query": "test", "limit": 3, "domainTools": True,
+                    "toolDetail": "compact",
+                    "sources": ["web", "alexandria"]})
+sent = json_of(Stub.last_body)
+check("a cloud-shaped search call succeeds", status == 200,
+      "status %s" % status)
+check("domainTools/toolDetail are dropped",
+      "domainTools" not in sent and "toolDetail" not in sent,
+      "sent %r" % sorted(sent))
+check("non-enum sources are filtered from the list",
+      sent.get("sources") == ["web"], "sent %r" % sent.get("sources"))
+
+status, _ = call(port, "/v2/search", {"query": "test", "domainTools": None})
+check("a present-but-null cloud-era key is still dropped",
+      "domainTools" not in json_of(Stub.last_body), "sent %r" % Stub.last_body)
+
+status, _ = call(port, "/v2/search",
+                 {"query": "test", "sources": ["alexandria", ["x"]]})
+sent = json_of(Stub.last_body)
+check("a sources key that filters empty is dropped entirely",
+      "sources" not in sent, "sent %r" % sent)
+
+clean = {"query": "test", "limit": 3}
+stub_hits_before = Stub.hits
+status, raw = call(port, "/v2/search", dict(clean))
+check("a clean search body passes through byte-identical",
+      status == 200 and Stub.hits == stub_hits_before + 1
+      and Stub.last_body == json.dumps(clean).encode(),
+      "sent %r" % Stub.last_body)
+
+status, raw = call(port, "/v2/search/gov", {"query": "test"})
+sent = json_of(Stub.last_body)
+check("the /v2/search sub-paths are not normalised",
+      "sources" not in sent, "sent %r" % sent)
+
+garbage = b'{"query": "test", "sources": not json'
+req = urllib.request.Request(
+    "http://127.0.0.1:%d/v2/search" % port, data=garbage, method="POST",
+    headers={"Content-Type": "application/json",
+             "Authorization": "Bearer test-key"})
+with urllib.request.urlopen(req, timeout=15) as r:
+    r.read()
+check("an unparseable search body passes through untouched",
+      Stub.last_body == garbage, "sent %r" % Stub.last_body)
+
+mon_proc2, mon2_port = start_guard(mode="monitor")
+status, _ = call(mon2_port, "/v2/search",
+                 {"query": "test", "domainTools": True,
+                  "sources": ["web", "alexandria"]})
+sent = json_of(Stub.last_body)
+check("monitor mode does not normalise",
+      "domainTools" in sent and sent.get("sources") == ["web", "alexandria"],
+      "sent %r" % sent)
+
+# --- 9. cache-only: a warmed page is served, an unknown one is refused -----
 cache_file = os.path.join(tmp, "cache.json")
 warm_proc, warm_port = start_guard(cache="memory:" + cache_file)
 Stub.response = {"success": True,
