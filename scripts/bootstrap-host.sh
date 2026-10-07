@@ -7,6 +7,8 @@
 #   /etc/hermes/*.env          — secret env files, copied from secrets/*.env.example
 #                                if not already present (chmod 600)
 #   docker network hermes-net  — shared network the three stacks join
+#   /etc/docker/daemon.json    — BuildKit GC cap + json-file log rotation
+#   /etc/systemd/journald.conf.d/size-cap.conf — journald 500M cap
 #
 # Idempotent: safe to re-run; existing env files are never overwritten.
 
@@ -49,6 +51,57 @@ else
   docker network create hermes-net
   echo "created docker network hermes-net"
 fi
+
+# --- host disk hygiene ------------------------------------------------------
+# Written once per host; never overwrites an existing file (merge by hand if
+# a host already carries other daemon.json content). A daemon restart is
+# what applies daemon.json to a host that already runs workloads — this
+# script is not the place to bounce stack containers, so it prints the step
+# and leaves it to the operator:
+#   sudo systemctl restart docker
+#   (stops containers briefly; their restart policies bring them back —
+#   every container in this stack runs unless-stopped for exactly this)
+#
+#   * json-file rotation — the daemon default is UNBOUNDED container logs;
+#     Komodo's MongoDB held 394 MB of a month's boot noise. 10 MB x 3 is
+#     the default for every NEW container (existing ones pick it up at
+#     their next recreate).
+#   * BuildKit GC — the webhook-driven builds accumulate build cache
+#     without bound (59 GB in four weeks on this host, 55 GB reclaimable);
+#     the GC keeps the newest 10 GB, which is what the config-only
+#     cache-hit deploys need to stay cheap.
+if [ -f /etc/docker/daemon.json ]; then
+  echo "keep existing /etc/docker/daemon.json — check it carries log-opts + builder.gc"
+else
+  cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" },
+  "builder": { "gc": { "enabled": true, "defaultKeepStorage": "10GB" } }
+}
+JSON
+  echo "wrote /etc/docker/daemon.json (log rotation + BuildKit GC) — restart docker to apply"
+fi
+
+# journald's own default cap is none — it held 3.3 GB here; 500 MB is
+# several weeks of volume for a low-throughput host. vacuum once by hand
+# (journalctl --rotate && journalctl --vacuum-size=500M); the cap keeps the
+# future in place from the first boot.
+if [ -f /etc/systemd/journald.conf.d/size-cap.conf ]; then
+  echo "keep existing /etc/systemd/journald.conf.d/size-cap.conf"
+else
+  install -d -m 755 /etc/systemd/journald.conf.d
+  printf "[Journal]\nSystemMaxUse=500M\n" > /etc/systemd/journald.conf.d/size-cap.conf
+  systemctl restart systemd-journald
+  echo "capped journald at 500M"
+fi
+
+# The host was found once with /dev/null at 664 (2026-10-07), which
+# silently breaks every non-root `>/dev/null` redirect — the command its
+# redirection fails is not run at all, so probe outputs went missing
+# without an error naming it. udev restores 666 at boot; enforce it here
+# too so a hand-run bootstrap heals it immediately.
+chmod 666 /dev/null
 
 cat <<EOF
 
