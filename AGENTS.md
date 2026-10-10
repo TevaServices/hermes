@@ -881,6 +881,43 @@ routed by repo owner.**
   `gh auth git-credential`. Prefer a fine-grained PAT scoped to the specific
   repos (Contents/Issues/Pull requests read+write).
 
+### NetLock RMM API (ENT fleet access, default profile)
+
+The default profile can drive the ENT practice's NetLock RMM — the server runs
+in AWS `teva_hipaa` (us-east-2, instance `netlockrmm`) behind Traefik + CrowdSec,
+serving its Public API v1 at `https://netlockrmm-backend.tevaservices.com/v1`
+(257 endpoints; Swagger at `/docs`, OpenAPI at `/openapi/v1.json`; the
+authoritative reference is docs.netlockrmm.com/docs/part-v/x9-public-api). The
+web console is `https://netlockrmm.tevaservices.com`. Auth is a Bearer token
+minted in the console (`Settings → API tokens`; form `nlk_<id>_<secret>`,
+shown once, account permissions checked on every request).
+
+- **The token is a host FILE, not an env var** — the same split as
+  `KOMODO_AUTH_HEADER`, for the same reason (Hermes strips credential env vars
+  from tool subprocesses, GHSA-rhgp-j443-p4rf): `/etc/hermes/netlock-api-token`
+  (root:group 640, riding the env-dir mount visible in-container at
+  `/run/hermes-pem/netlock-api-token`) → the entrypoint copies it into the
+  default profile's tool-home (`$HERMES_HOME/home/netlock-api-token`, 600) on
+  every boot, and compose declares `NETLOCK_API_TOKEN_FILE` pointing at that
+  copy. Call shape: `curl -H "Authorization: Bearer $(cat
+  "$NETLOCK_API_TOKEN_FILE")" "$NETLOCK_API_URL/v1/devices"` — the non-secret
+  base URL rides `hermes-main.env` as `NETLOCK_API_URL` (launch-profile env:
+  visible to the default profile's agent turns and cron children; other
+  profiles' cron children strip it, which is correct — they don't hold the
+  token either). **Default profile only**, mirroring komodo-ops; widening is
+  the `KOMODO_ALT_AUTH_HEADER` two-line move.
+- **CrowdSec fronts the API and is stricter than the token's own rate limit.**
+  Pace calls ≥1.2 s, strictly sequential, no parallel fan-out; a 403 with an
+  EMPTY body (no `server:`/`x-request-id:` headers — unlike every app
+  response) is a CrowdSec ban: back off 45 s then 90 s, and stop for minutes
+  after a third. Bursts earn temporary IP bans that extend on repeat. Prefer
+  fewer, larger paginated calls (`pageSize=500`).
+- Out-of-scope tenants/locations answer `404` (not 403); the live scope
+  catalog is `GET /v1/scopes` and the token's own identity is `GET /v1/me`.
+  The token mirrors the user's existing "Bryan Claude Code" key (tenant ENT,
+  id 8): fleet inventory/events/patch/sensor reads, custom fields, catalogue
+  script create+run with read-only bodies, port-scanner management.
+
 ### Contribution requirements (DCO) — the gate a test run cannot see
 
 A target repo can require the **Developer Certificate of Origin**: a

@@ -78,6 +78,16 @@ services:
       # by the agent, so `-H @$KOMODO_ALT_AUTH_HEADER` (the copy) is the form
       # to use — see the team-release skill.
       KOMODO_ALT_AUTH_HEADER: /opt/data/profiles/release/home/komodo-alt-auth-header
+      # The NetLock RMM Public API token — the same file-vs-var split as
+      # KOMODO_AUTH_HEADER above: the token lives on the host in the env dir
+      # (/etc/hermes/netlock-api-token, which compose mounts read-only at
+      # /run/hermes-pem), the entrypoint copies it into the default profile's
+      # tool-home on every boot (hermes can never read the mount itself), and
+      # THIS var points at that copy. The base URL is not a credential: it
+      # rides hermes-main.env as NETLOCK_API_URL. Token is created/rotated in
+      # the web console (Settings → API tokens). Default profile only — see
+      # AGENTS.md §"NetLock RMM API".
+      NETLOCK_API_TOKEN_FILE: /opt/data/home/netlock-api-token
       # Where the release agent keeps its per-repo deployment state. Explicit
       # because a cron child's HERMES_HOME is not guaranteed to be the profile
       # home; read by release-queue.sh, so it lives in the stack environment

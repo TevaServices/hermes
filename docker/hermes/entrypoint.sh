@@ -390,6 +390,27 @@ else
   echo "hermes-stack: warning: release profile home missing; alternate komodo header not copied" >&2
 fi
 
+# --- 3e. NetLock RMM API token (default profile only) ----------------------
+# The ENT fleet's RMM Public API (https://netlockrmm-backend.tevaservices.com/v1)
+# is called with a Bearer token minted in the web console (Settings → API
+# tokens). Same trap as every credential above: the token lives on the host in
+# the env dir (which compose mounts read-only at /run/hermes-pem, root:group
+# 640 — unreadable by the s6 services), so the entrypoint copies it into the
+# runtime-owned tool-home on every boot. The var that POINTS at the copy is
+# declared in compose (NETLOCK_API_TOKEN_FILE) for the s6-environment reason
+# documented at the Komodo block — an export here would never reach them.
+# The base URL itself is not a credential: it rides hermes-main.env as
+# NETLOCK_API_URL (env_file), like the other app-level config.
+#
+# DEFAULT PROFILE ONLY, deliberately — the credential sits next to
+# komodo-auth-header, and the team profiles (planner/developer/reviewer/
+# release) are GitHub-workflow roles with no RMM need; each extra copy is
+# another place a credential can be read from. Widening is a two-line change
+# here plus a compose var, exactly like KOMODO_ALT_AUTH_HEADER.
+install_secret_file /run/hermes-pem/netlock-api-token \
+  "$HERMES_HOME/home/netlock-api-token" \
+  "netlock api token"
+
 # --- 4. git + gh for the runtime user, per tool-home -----------------------
 # Tool subprocesses (git, gh, ...) run with HOME=$HERMES_HOME/home for
 # the default profile (hermes_constants.get_subprocess_home, container
