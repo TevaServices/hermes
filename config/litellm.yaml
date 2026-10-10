@@ -381,3 +381,21 @@ mcp_servers:
     url: "http://firecrawl-mcp:3000/mcp"
     transport: "http"
     description: "Self-hosted Firecrawl — web search, scrape, crawl, extract, map"
+  # mach — the teva machine-exec/secrets MCP, fronted like firecrawl but with
+  # CLIENT-FORWARDED auth (auth_type: true_passthrough): the gateway holds NO
+  # mach credential. Every caller request carries the upstream credential
+  # verbatim in x-mcp-mach-authorization (full header value, e.g.
+  # "Bearer <mach-api-key>") and authenticates to the gateway itself via
+  # x-litellm-api-key — Authorization is reserved for the forwarded token in
+  # passthrough mode. Tool listing for a passthrough server happens at the
+  # caller's connect time with the caller's credential (there is no boot-time
+  # upstream listing in this build), so a credential-less client simply sees
+  # no mach tools. Per-server URL: this entry is reachable at /mach/mcp, so a
+  # client pointed there sees mach's three tools and never the firecrawl set
+  # (no filtering keys needed — mach serves exactly machines_list,
+  # secrets_list, exec).
+  mach:
+    url: "https://mach.teva.services/v2/mcp"
+    transport: "http"
+    auth_type: "true_passthrough"
+    description: "mach — teva fleet exec + secrets (caller forwards its own mach key per request)"

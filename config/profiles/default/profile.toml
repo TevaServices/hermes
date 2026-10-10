@@ -33,7 +33,7 @@ model = "smarter"
 # than escaping onto a bigger tier.
 
 # Enabled integrations from config/integrations.toml
-integrations = ["honcho", "firecrawl"]
+integrations = ["honcho", "firecrawl", "mach"]
 
 # Messaging platforms for `hermes gateway`. Verified wiring (not
 # guesswork): gateway/config.py enables a platform from the mere
