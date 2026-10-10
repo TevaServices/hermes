@@ -83,18 +83,6 @@ services:
       # home; read by release-queue.sh, so it lives in the stack environment
       # rather than the launch profile's env file (see AGENTS.md §Secrets).
       TEAM_RELEASE_STATE_DIR: /opt/data/profiles/release/cache/release
-      # mach console client: where this machine's console identity lives
-      # (API key + E2E pin pins, 0600 on the host at /var/lib/mach-console)
-      # and which control plane it talks to. The binary is bind-mounted from
-      # the host below; upgrading `mach` means replacing it on the host and
-      # restarting this container (a bind-mounted file's inode is fixed at
-      # container create). The exec-scoped key is the grant by which this
-      # agent reaches mach-enrolled machines per SECURITY-NOTES.md there.
-      # Values are the Komodo stack environment's to set (komodo repo
-      # resources.toml; same pattern as HERMES_REF) — these defaults match,
-      # so local `mise run up` works without a stack environment.
-      MACH_STATE_DIR: ${MACH_STATE_DIR:-/opt/data/mach-state}
-      MACH_SERVER: ${MACH_SERVER:-https://mach.teva.services}
       # Headless Chromium CDP sidecar for the browser tools — see
       # docker/hermes/s6-rc.d/chromium-cdp/ (binds 127.0.0.1 only; the
       # rendered browser.cdp_url points the agent at it).
@@ -169,11 +157,6 @@ services:
       # The entrypoint copies it into the release profile's home because this
       # mount is 600 and not readable by the agent.
       - ${KOMODO_ALT_AUTH_HEADER_MOUNT:-/etc/hermes/komodo-alt-auth-header}:/etc/komodo-alt-auth-header:ro
-      # The mach CLI, host-installed and bind-mounted read-only, plus the
-      # console state dir (root:0700 with uid 10000 ownership on the host).
-      # See the MACH_STATE_DIR/MACH_SERVER env notes above.
-      - /usr/local/bin/mach:/usr/local/bin/mach:ro
-      - /var/lib/mach-console:/opt/data/mach-state
       # Uncomment to enable Hermes' "docker" terminal backend, letting
       # the agent run sibling containers on the host docker daemon.
       # This is a wide grant of host privilege — only do it for
