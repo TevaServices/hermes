@@ -200,7 +200,10 @@ through a shell history or chat transcript.
 - `hermes-main.env`: `LITELLM_API_KEY` (the master key), `FIRECRAWL_API_KEY`
   (must equal `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any
   non-empty value while honcho-api runs no-auth; must match honcho-api if
-  auth is enabled), `OPENAI_API_KEY` + `OPENAI_BASE_URL` (mirror the LiteLLM
+  auth is enabled), `MACH_MCP_KEY` (the agent's mach API key — forwarded
+  per-request through the gateway's true_passthrough mach MCP entry as
+  `x-mcp-mach-authorization`; the gateway holds no copy), `OPENAI_API_KEY` +
+  `OPENAI_BASE_URL` (mirror the LiteLLM
   endpoint for Hermes' registry-based fallbacks — `hermes chat`'s first-run
   gate only inspects registry env vars, never config.yaml's
   `custom_providers`, and exits with setup guidance without them even though

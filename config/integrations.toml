@@ -97,6 +97,24 @@ mcp_tools_exclude = [
     "firecrawl_feedback",
     "firecrawl_search_feedback",
 ]
+[integrations.mach]
+label = "mach — teva fleet exec + secrets (via the LiteLLM gateway)"
+enabled = true
+# The gateway fronts mach (litellm.yaml mcp_servers, auth_type
+# true_passthrough): it holds no mach credential, so every request carries
+# the agent's own mach key, forwarded verbatim as the upstream credential.
+# Gateway admission rides x-litellm-api-key because Authorization carries the
+# upstream token in passthrough mode. Both env vars live in hermes-main.env.
+# Replaces the hand-edited mach block that lived in the default profile's
+# runtime config.yaml (out-of-band until 2026-10-10) — a runtime edit is
+# wiped by every container recreation; this renders from the repo.
+mcp_url = "http://litellm:4000/mach/mcp"
+mcp_headers = { "x-litellm-api-key" = "${LITELLM_API_KEY}", "x-mcp-mach-authorization" = "Bearer ${MACH_MCP_KEY}" }
+required_env = ["LITELLM_API_KEY", "MACH_MCP_KEY"]
+# Same toolset posture as the out-of-band entry this replaces. The per-server
+# URL already serves only mach, so this is belt-and-braces.
+mcp_tools_include = ["machines_list", "secrets_list", "exec"]
+
 # Add further MCP integrations the same way — either url-based (see
 # honcho) or stdio command-based (see firecrawl) — then list the
 # integration key in a profile's `integrations = [...]`.
