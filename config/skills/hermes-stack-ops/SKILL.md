@@ -160,10 +160,21 @@ in per-SESSION worktrees under `/opt/data/worktrees/<session-slug>/<repo>/`
 every tool subprocess, so two sessions never share a checkout). Use the
 baked helper — do NOT `git clone` into your own space:
 - `git-repo.sh worktree <git-url> [branch] [dest]` → prints your session's
-  checkout path (idempotent central clone + worktree add).
-- If the branch is already checked out in another session's worktree, the
-  helper creates a session branch `s/<slug>` instead — publish it with
-  `git-publish.py` (see below), not `git push`.
+  checkout path (idempotent central clone + worktree add). With no branch
+  argument your worktree is ALWAYS on a session branch `s/<slug>` cut from
+  the default branch — never on the default branch itself (a commit on it
+  would advance the shared bare's ref, which `git-publish.py` then refuses
+  and `fetch` can no longer fast-forward). Resume after a pruned checkout
+  reattaches the same `s/<slug>`. An explicit branch argument is honored
+  as-is (session-branch fallback if it's checked out elsewhere) — publish
+  it with `git-publish.py` (see below), not `git push`.
+- The helper self-heals the bare-clone wedge at creation: worktrees cut
+  from a `--bare` clone inherit `core.bare=true` and `git status` fails
+  ("this operation must be run in a work tree") until `core.bare=false`
+  is set in that worktree's config.worktree — the helper writes it for
+  you. An OLDER worktree (created before this fix) may still be wedged;
+  repair it in place with:
+  `git -C <worktree> config --worktree core.bare false`.
 - **Publishing: `git-publish.py`, never `git push`.** A repo can require
   signed commits, and a GitHub App's commits are only verified when
   GitHub creates them server-side through the API — a pushed commit

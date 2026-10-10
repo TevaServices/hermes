@@ -18,11 +18,22 @@
 # Rules:
 #   - Profiles/sessions NEVER clone into their own space and NEVER commit
 #     in the central bare repo — they add worktrees.
-#   - Git refuses to check the same branch out in two worktrees. If the
-#     requested branch is already checked out anywhere, the worktree gets
-#     its own branch `s/<slug>` created from that branch instead; publish
-#     a session branch with `git-publish.py -b <sbranch>` (never `git
-#     push` — a bot's pushed commits are unsigned and unfixable in place).
+#   - A session worktree is ALWAYS on its own branch `s/<slug>`, created
+#     from the requested branch (default: the remote default branch). The
+#     shared refs/heads/<default> mirror is never checked out in a session
+#     worktree — a commit there would advance the central bare's ref, which
+#     git-publish.py refuses and fetch can then not fast-forward under.
+#     Reattach when the branch already exists (resume after a pruned
+#     worktree). An explicit branch argument is honored as-is (with the
+#     same s/<slug> fallback when that branch is checked out elsewhere).
+#     Publish a session branch with `git-publish.py -b <sbranch>` (never
+#     `git push` — a bot's pushed commits are unsigned and unfixable in
+#     place).
+#   - Worktrees of a bare clone inherit core.bare=true (git never writes
+#     core.bare=false into the new worktree's config.worktree itself), so
+#     `git status` fails until it is fixed. The worktree command self-heals
+#     that at creation (and enables extensions.worktreeConfig first, which
+#     the per-org commit identity also needs).
 #
 # Usage:
 #   git-repo.sh ensure <git-url>
@@ -150,6 +161,10 @@ case "$cmd" in
       branch="$(git -C "$bare" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
       branch="${branch:-main}"
     fi
+    # extensions.worktreeConfig must be ON before the add: (a) the per-worktree
+    # org identity below only lands in this worktree's config.worktree with it,
+    # and (b) the bare-worktree wedge repair below writes through it. Idempotent.
+    git -C "$bare" config extensions.worktreeConfig true 2>/dev/null || true
     # Refresh the clone BEFORE cutting the worktree: this is the whole
     # point — a worktree from a stale local branch defeats the shared
     # clone. Failure is non-fatal (offline session still gets a worktree;
@@ -162,12 +177,28 @@ case "$cmd" in
       exit 1
     fi
     mkdir -p "$(dirname "$dest")"
-    if ! git -C "$bare" worktree add "$dest" "$branch" 2>/tmp/git-repo-wt.err; then
-      # Branch already checked out in another worktree ("is already used
-      # by worktree at ..." / "already checked out") — give this session
+    # Session worktrees are ALWAYS on their own s/<slug> branch. The default
+    # branch must never be checked out here: refs/heads/<default> is the SHARED
+    # mirror that fetch fast-forwards and every other worktree cuts from — a
+    # session commit on it advances the central bare's ref, which git-publish.py
+    # then refuses (publish-a-topic-branch) and the ref has to be rewound by
+    # hand (observed 2026-10-09: a print-server commit left bare main one ahead
+    # of origin/main). Reattach when the branch already exists (resume after a
+    # pruned worktree). An EXPLICIT branch argument is still honored as-is.
+    sbranch="s/$(session_slug | cut -c1-40)"
+    if [ -z "${2:-}" ]; then
+      if git -C "$bare" show-ref --verify --quiet "refs/heads/$sbranch"; then
+        git -C "$bare" worktree add "$dest" "$sbranch"
+        echo "git-repo: reattached existing session branch '$sbranch'" >&2
+      else
+        git -C "$bare" worktree add -b "$sbranch" "$dest" "$branch"
+        echo "git-repo: session branch '$sbranch' created from '$branch' (publish with: git-publish.py -b $sbranch)" >&2
+      fi
+    elif ! git -C "$bare" worktree add "$dest" "$branch" 2>/tmp/git-repo-wt.err; then
+      # Explicit branch already checked out in another worktree ("is already
+      # used by worktree at ..." / "already checked out") — give this session
       # its own branch off the same commit instead of failing.
       if grep -qiE "already used by worktree|already checked out" /tmp/git-repo-wt.err 2>/dev/null; then
-        sbranch="s/$(session_slug | cut -c1-40)"
         git -C "$bare" worktree add -b "$sbranch" "$dest" "$branch"
         echo "git-repo: branch '$branch' was taken; session branch '$sbranch' created (publish with: git-publish.py -b $sbranch)" >&2
       else
@@ -177,6 +208,19 @@ case "$cmd" in
       fi
     fi
     rm -f /tmp/git-repo-wt.err
+    # Bare-worktree wedge self-heal: a worktree cut from a `clone --bare`
+    # inherits core.bare=true from the common config — git never writes
+    # core.bare=false into the new worktree's config.worktree on its own —
+    # so `git status` dies with "this operation must be run in a work tree"
+    # until someone fixes it by hand. Every session was re-fixing this
+    # inline (observed 2026-10-09 on ent-network). Write it at creation.
+    if [ "$(git -C "$dest" rev-parse --is-bare-repository 2>/dev/null)" = "true" ]; then
+      git -C "$dest" config --worktree core.bare false
+    fi
+    if [ "$(git -C "$dest" rev-parse --is-bare-repository 2>/dev/null)" != "false" ] \
+       || ! git -C "$dest" status --porcelain >/dev/null 2>&1; then
+      echo "git-repo: warning: worktree still wedged (bare=true or status fails)" >&2
+    fi
 
     # Org commit identity: a worktree of an ORG-owned repo commits as the
     # ORG bot (e.g. acmecorp-hermes-dev[bot]), not the personal one.
@@ -186,12 +230,11 @@ case "$cmd" in
     # worktree gets its own local identity when the repo's owner matches
     # an org descriptor.
     #
-    # extensions.worktreeConfig is REQUIRED for the scoping: without it,
-    # `git config` inside a worktree writes the COMMON bare config and
-    # the org bot identity would leak onto every session's worktree of
-    # that repo. With it, values land in this worktree's own
-    # worktrees/<id>/config.worktree. Idempotent.
-    git -C "$bare" config extensions.worktreeConfig true 2>/dev/null || true
+    # extensions.worktreeConfig (enabled before the add above) is REQUIRED
+    # for the scoping: without it, `git config` inside a worktree writes the
+    # COMMON bare config and the org bot identity would leak onto every
+    # session's worktree of that repo. With it, values land in this
+    # worktree's own worktrees/<id>/config.worktree.
     owner="$(printf '%s' "$(repo_id "$url")" | cut -d/ -f2)"
     oslug="$(printf '%s' "$owner" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
     creds_dir="${ORG_CREDS_DIR:-}"
