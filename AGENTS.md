@@ -1304,13 +1304,16 @@ control-plane resources (that's the komodo repo, human-reviewed via push).
 
 **A SECOND, separate control plane: `<org>/komodo`.** Its own core, servers
 and key (no shared state with the homelab one). The release profile is the
-only role that drives it, with the identical plumbing —
-`KOMODO_ALT_AUTH_HEADER_MOUNT` on the host mounting
-`/etc/komodo-alt-auth-header`, the entrypoint copying it into release's home
-(`$HERMES_HOME/profiles/release/home/komodo-alt-auth-header`, 600), and
-`KOMODO_ALT_AUTH_HEADER` declared in the container `environment:`. Use
-`-H @$KOMODO_ALT_AUTH_HEADER`; the same unreadable-mount symptom applies.
-The agent's boundary there is tighter: it writes **exactly one Komodo
+only role that drives it, and since 2026-10-10 it reaches that control
+plane **through mach**: the release profile carries the mach integration
+(via the LiteLLM gateway, `config/integrations.toml`), and every Komodo API
+call is a mach `exec` tool call on the control-plane host with the Komodo
+service-user pair injected by NAME from mach's sealed store — the agent
+holds no credential file for it (the old two-header file, its compose mount
+and its entrypoint copy are all gone). The machine name and the two secret
+names ride the release state file (`MACH_MACHINE`/`MACH_SECRET_NAMES`,
+seeded by the operator — see the team-release skill §7). The agent's
+boundary there is tighter: it writes **exactly one Komodo
 Variable** (the released image tag for the stack it is releasing) and runs
 `DeployStack` on that one stack — everything else (declaring the stack, its
 compose file, variables) is the komodo repo, human-reviewed. **`TEAM_RELEASE_*`

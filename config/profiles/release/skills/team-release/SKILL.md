@@ -74,6 +74,8 @@ The fields you will find there:
 | `KOMODO_VARIABLE` | the image-tag variable to move |
 | `KOMODO_HOST` | the Komodo server name the stack runs on |
 | `KOMODO_CONTAINER` | the container whose image tag proves what is running |
+| `MACH_MACHINE` | the mach machine the Komodo API calls exec on |
+| `MACH_SECRET_NAMES` | comma-separated mach secret names carrying the Komodo service-user pair (key first, then secret) |
 | `INTERNAL_URL` | the public URL to validate against |
 | `DEPLOYED_VERSION` | what is actually running (you keep this current) |
 
@@ -234,31 +236,48 @@ against the downloaded artifacts, and record the result in the state file.
 ## 7. Deploy to the internal environment (the alternate control plane)
 
 Everything target-specific comes from your state file (see the registry
-section) — the base URL, the stack name and the variable. Nothing here is
-hardcoded, precisely so this public repo carries no deployment details.
+section) — the base URL, the stack name, the variable, and the mach machine
+and secret names. Nothing here is hardcoded, precisely so this public repo
+carries no deployment details.
+
+Every Komodo API call goes through **mach**: one `exec` tool call (the mach
+MCP server, reached through the LiteLLM gateway like every other tool) that
+runs the call ON the control-plane host with the Komodo service-user pair
+injected by NAME. The agent never holds the credential: the pair lives only
+in mach's sealed store on that machine (names and usage in the private
+control-plane repo's `mach-secrets.md`), and mach scrubs every output byte
+of stored values. The state file names the machine (`MACH_MACHINE`) and the
+two secrets in key-then-secret order (`MACH_SECRET_NAMES`, comma-separated).
+
+Each call is one `exec` tool call: `machine` = `MACH_MACHINE`'s value,
+`inject` = the two names from `MACH_SECRET_NAMES`, and `command` =
 
 ```bash
-AUTH=${KOMODO_ALT_AUTH_HEADER:-$HERMES_HOME/home/komodo-alt-auth-header}
-K() { curl -sS -X POST -H "@$AUTH" -H 'Content-Type: application/json' -d "$2" \
-        "$KOMODO_URL/$1"; }
-# KOMODO_URL / KOMODO_STACK / KOMODO_VARIABLE read from the state file.
-# The AUTH file must carry BOTH headers, one per line — `X-Api-Key: <key>`
-# and `X-Api-Secret: <secret>`. Komodo API keys are a key+secret PAIR sent
-# as those two headers; `Authorization: Bearer <key>` is read as a JWT and
-# answers "Invalid user credentials" (the shape that blocked every mach
-# deploy 2026-10-03..10, hermes#39 — the file was one placeholder line).
+curl -sS -X POST -H "X-Api-Key: $<KEY_NAME>" -H "X-Api-Secret: $<SECRET_NAME>" \
+  -H 'Content-Type: application/json' -d '<json body>' "$KOMODO_URL/<Variant>"
+```
 
+Komodo API keys are a key+secret PAIR sent as those two headers;
+`Authorization: Bearer <key>` is read as a JWT and answers "Invalid user
+credentials" (the shape that blocked every mach deploy 2026-10-03..10,
+hermes#39). `<KEY_NAME>`/`<SECRET_NAME>` are the literal names from
+`MACH_SECRET_NAMES`, referenced as environment variables — mach resolves the
+values on the machine and never prints them. The call sequence:
+
+```bash
 # 0. confirm the variable exists and is NOT secret (a secret cannot be read back)
-K read/ListVariables '{}'
+#    exec: curl … "$KOMODO_URL/read/ListVariables" -d '{}'
 # 1. never fight a running operation
-K read/GetStackActionState '{"id":"<stack id>"}'   # busy -> wait 60-90s, retry
+#    exec: curl … "$KOMODO_URL/read/GetStackActionState" -d '{"id":"<stack id>"}'
+#          busy -> wait 60-90s, retry
 # 2. move the pin
-K write/UpdateVariableValue '{"name":"'"$KOMODO_VARIABLE"'","value":"'"$VER"'"}'
+#    exec: curl … "$KOMODO_URL/write/UpdateVariableValue" \
+#          -d '{"name":"<KOMODO_VARIABLE>","value":"<VER>"}'
 # 3. READ IT BACK — a status code is not evidence
-K read/ListVariables '{}'
+#    exec: curl … "$KOMODO_URL/read/ListVariables" -d '{}'
 # 4. deploy, then follow it
-K execute/DeployStack '{"stack":"'"$KOMODO_STACK"'"}'
-K read/GetUpdate '{"id":"<_id.$oid from the response>"}'
+#    exec: curl … "$KOMODO_URL/execute/DeployStack" -d '{"stack":"<KOMODO_STACK>"}'
+#    exec: curl … "$KOMODO_URL/read/GetUpdate" -d '{"id":"<_id.$oid from the response>"}'
 ```
 
 Notes that will otherwise cost you a turn (all verified against Komodo 2.3.3):
@@ -301,7 +320,12 @@ curl -s -o /dev/null -w '%{http_code}\n' "$B/ui"                      # -> 302
   are in the state file too):
 
 ```bash
-K read/InspectDockerContainer '{"server":"'"$KOMODO_HOST"'","container":"'"$KOMODO_CONTAINER"'"}'
+# the same mach-mediated exec shape as §7 — machine = MACH_MACHINE,
+# inject = MACH_SECRET_NAMES, command =
+curl -sS -X POST -H "X-Api-Key: $<KEY_NAME>" -H "X-Api-Secret: $<SECRET_NAME>" \
+  -H 'Content-Type: application/json' \
+  -d '{"server":"<KOMODO_HOST>","container":"<KOMODO_CONTAINER>"}' \
+  "$KOMODO_URL/read/InspectDockerContainer"
 #   -> Config.Image must end with ":<ver>"
 ```
 
@@ -323,6 +347,8 @@ KOMODO_STACK=<stack name>                # seeded once
 KOMODO_HOST=<host>                       # seeded once
 KOMODO_CONTAINER=<container name>        # seeded once
 KOMODO_VARIABLE=<image-tag variable>     # seeded once
+MACH_MACHINE=<mach machine name>         # seeded once
+MACH_SECRET_NAMES=<key name>,<secret name>  # seeded once
 INTERNAL_URL=<public url to validate>    # seeded once
 LAST_RELEASE_TAG=vX.Y.Z
 LAST_RELEASE_VERSION=X.Y.Z
