@@ -692,8 +692,8 @@ not a stall. `pending_items` on the deriver's metrics endpoint is the honest
 measure. Do not "fix" it by lowering the batch size without weighing the
 deriver call each batch triggers (measured: 45 s, 2 facts).
 
-The checks — plugin status/peer, the `injection.log` audit, the deriver
-queue with expected counts, one timed live recall — live in the
+The checks — the plugin's peer-resolution status, the `injection.log`
+audit, the deriver queue with expected counts, one timed live recall — live in the
 **hermes-ops-runbook** skill (`.claude/skills/hermes-ops-runbook/SKILL.md`),
 alongside the full post-deploy verification checklist. The deriver's queue
 is the one that was silently broken (70 errored representation rows).
@@ -854,7 +854,8 @@ routed by repo owner.**
   change.)
 - **The shim's CI GATE** — a write that ASSERTS a verdict on a PR is refused
   while a check is red or still running: `gh pr edit <PR#> --add-label
-  review/ready` (the handoff), `--add-label review/approved`, the
+  review/ready` (the handoff),
+  `gh pr edit <PR#> --add-label review/approved`, the
   `gh pr review <PR#> --approve` that IS the GitHub approval, and
   `gh pr merge`. It is the one gate making a network call (`pr checks --json
   bucket`; no jq dependency), which is why owner resolution sits ABOVE the
@@ -1382,8 +1383,12 @@ comes from `HERMES_SESSION_KEY`, bridged into every tool subprocess — one
 messaging session = one slug, stable across its turns). The `git-repo.sh`
 helper (baked at `/usr/local/bin/git-repo.sh`) manages both: `ensure`
 (idempotent bare clone), `worktree <url> [branch] [dest]` (session checkout;
-auto-creates a session branch `s/<slug>` when the requested branch is
-checked out elsewhere), `list`, and `prune --days N` — run weekly via
+ALWAYS on a session branch `s/<slug>` when no branch argument is given — the
+default branch is never checked out in a session worktree, because a commit
+there would advance the shared bare's ref that fetch fast-forwards and
+git-publish.py refuses to publish; resume reattaches the same `s/<slug>`,
+an explicit branch argument is honored with the session-branch fallback),
+`list`, and `prune --days N` — run weekly via
 `docker/hermes/prune-repos.sh` (a no-agent cron job), with the daily
 `docker/hermes/refresh-repos.sh` fetch sweep keeping the branch mirrors
 current. Both live in `docker/hermes/` because they are cron JOB scripts —
