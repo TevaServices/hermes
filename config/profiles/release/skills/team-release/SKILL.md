@@ -242,6 +242,11 @@ AUTH=${KOMODO_ALT_AUTH_HEADER:-$HERMES_HOME/home/komodo-alt-auth-header}
 K() { curl -sS -X POST -H "@$AUTH" -H 'Content-Type: application/json' -d "$2" \
         "$KOMODO_URL/$1"; }
 # KOMODO_URL / KOMODO_STACK / KOMODO_VARIABLE read from the state file.
+# The AUTH file must carry BOTH headers, one per line — `X-Api-Key: <key>`
+# and `X-Api-Secret: <secret>`. Komodo API keys are a key+secret PAIR sent
+# as those two headers; `Authorization: Bearer <key>` is read as a JWT and
+# answers "Invalid user credentials" (the shape that blocked every mach
+# deploy 2026-10-03..10, hermes#39 — the file was one placeholder line).
 
 # 0. confirm the variable exists and is NOT secret (a secret cannot be read back)
 K read/ListVariables '{}'
