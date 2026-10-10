@@ -19,7 +19,7 @@ model = "smarter"
 # LiteLLM's router fallbacks own the failure path instead: a failing tier
 # deployment cools down and the SAME tier is served by its OpenRouter
 # fallback, config/litellm.yaml router_settings.fallbacks).
-integrations = ["honcho", "firecrawl"]
+integrations = ["honcho", "firecrawl", "mach"]
 platforms = ["discord"]
 
 [config_extra]

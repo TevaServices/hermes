@@ -370,25 +370,12 @@ install_secret_file() {  # <src> <dest> <label>
 install_secret_file "$KOMODO_MOUNT" "$HERMES_HOME/home/komodo-auth-header" \
   "komodo auth header"
 
-# --- 3d. the ALTERNATE control plane's auth header (release profile only) ----
-# A SEPARATE Komodo from the one above: its own core, its own servers, its
-# own key. Same FILE-vs-CONFIG split and the same non-readable mount, so the
-# same treatment applies (copy it to the runtime-owned home; the var that
-# points here lives in compose).
-#
-# RELEASE PROFILE ONLY, deliberately — the release agent is the only role
-# that deploys, and each extra copy is another place a credential can be read
-# from. The named-profile home is created by bootstrap-profiles.sh before
-# this runs; if it does not exist yet (a first boot ordering surprise), say
-# so rather than failing, because the rest of the container is unaffected.
-KOMODO_ALT_MOUNT="${KOMODO_ALT_AUTH_HEADER_MOUNT:-/etc/komodo-alt-auth-header}"
-if [ -d "$HERMES_HOME/profiles/release" ]; then
-  install_secret_file "$KOMODO_ALT_MOUNT" \
-    "$HERMES_HOME/profiles/release/home/komodo-alt-auth-header" \
-    "alternate komodo auth header"
-else
-  echo "hermes-stack: warning: release profile home missing; alternate komodo header not copied" >&2
-fi
+# The ALTERNATE control plane's credential used to ride this file-copy
+# machinery too (a header file copied into the release profile's home);
+# since 2026-10-10 the release profile reaches that control plane THROUGH
+# mach instead — its Komodo calls are mach exec tool calls with the
+# service-user pair injected by NAME, and no credential file exists here
+# (see the team-release skill).
 
 # --- 3e. NetLock RMM API token (default profile only) ----------------------
 # The ENT fleet's RMM Public API (https://netlockrmm-backend.tevaservices.com/v1)
