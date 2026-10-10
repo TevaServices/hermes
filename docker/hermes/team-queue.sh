@@ -548,6 +548,12 @@ AWAITING=""
 CODEOWNER_MISSING=""
 RELEASE_FINDINGS=""
 RELEASE_DETAIL=""
+# RELEASE-TRIAGE items the lane holds back because the failure is already
+# tracked — a filed-and-open bug read from the release agent's state file
+# (the BUG_FOR linkage inside release_triage). Re-notifying tracked work
+# costs the profile tokens for nothing; --verbose names what is held, so
+# silence is explained to whoever debugs the queue.
+TRACKED=""
 
 # The most recent non-bot review on a PR: "<login>|<state>", or "|NONE".
 latest_human_review() {  # $1 = repo, $2 = number
@@ -642,6 +648,11 @@ release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
         RELEASED=$(ogh release list -R "$R" --limit 30 \
                      --json tagName,isDraft \
                      --jq '.[] | select(.isDraft | not) | .tagName' 2>/dev/null) || RELEASED=""
+        # The release agent's own state file — the same one the DEPLOYED pass
+        # reads. It is where the agent RECORDS a filed bug (see the tag loop):
+        # the agent's state is the only place that mapping lives, on the
+        # principle the DEPLOYED lane already states, never the target repo.
+        STATE_FILE="$(release_state_dir)/$(repo_slug "$R").state"
         # `conclusion` is null while a run is in flight and set once it ends,
         # so ONE call answers both the failed and the still-running question.
         # An EMPTY conclusion is in-flight-class too — gh emits it for a run
@@ -667,15 +678,71 @@ release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
             case " $(printf '%s' "$RELEASED" | tr '\n' ' ') " in
                 *" $T "*) continue ;;
             esac
+            # ...and so does a PUBLISHED NEWER release: the remedy for a
+            # failed tag is "cut a NEW tag", and a newer release being out
+            # means it was cut and it SHIPPED. Machine-checkable from the
+            # repo, so the agent's state never has to record the resolution.
+            SUPERSEDED=""
+            for RT in $RELEASED; do
+                if [ "$RT" != "$T" ] && tag_newer "$RT" "$T"; then
+                    SUPERSEDED="1"
+                    break
+                fi
+            done
+            [ -n "$SUPERSEDED" ] && continue
+            # When something fails, the agent files ONE bug (type/bug +
+            # status/ready — the developer's queue takes it from there) and
+            # records it in the state file: BUG_FOR_<tag>=<repo#issue>. The
+            # record IS the "properly dealt with" signal this lane honours:
+            #   bug open      -> the failure is tracked; this queue stands
+            #                    down for the tag (named only under
+            #                    --verbose — an open bug must cost zero
+            #                    release-agent tokens).
+            #   bug closed    -> the remedy re-arms as its own finding type:
+            #                    the fix is in but the tag still published
+            #                    nothing, so it is release's turn again.
+            #   no record     -> the ordinary finding, remedy text telling
+            #                    the agent to file and record. A failure the
+            #                    agent handled WITHOUT recording keeps
+            #                    reporting — silence must reflect a recorded
+            #                    or published resolution, and nothing else.
+            #   record unreadable (issue deleted / API error) -> treated as
+            #                    no record: a dark linkage fails toward work,
+            #                    never toward silence.
+            if [ -s "$STATE_FILE" ]; then
+                escT=$(printf '%s' "$T" | sed 's/[.]/\\./g')
+                BUG=$(sed -n "s/^BUG_FOR_${escT}=//p" "$STATE_FILE" 2>/dev/null | tail -1)
+                if [ -n "$BUG" ]; then
+                    BSTATE=$(ogh api "repos/${BUG%#*}/issues/${BUG##*#}" \
+                                 --jq '.state' 2>/dev/null) || BSTATE=""
+                    case "$BSTATE" in
+                        open)
+                            TRACKED="$TRACKED $key(bug-open:$BUG)"
+                            continue ;;
+                        closed)
+                            RELEASE_FINDINGS="$RELEASE_FINDINGS $key(bug-closed)"
+                            RELEASE_DETAIL="$RELEASE_DETAIL
+  !! RELEASE BUG CLOSED, NO RELEASE: $key — the bug recorded for this
+     failed release is CLOSED ($BUG), but no release was published for the
+     tag. If the fix landed, cut the next tag and release it (never this
+     one: the Release tags ruleset forbids moving it); if the failure
+     recurred, file a fresh bug and REPLACE this tag's BUG_FOR line."
+                            continue ;;
+                    esac
+                fi
+            fi
             BAD=$(printf '%s\n' "$RUNS" | awk -v t="$T" \
                     '$1 == "BAD" && $2 == t { print $3 " " $4; exit }')
             if [ -n "$BAD" ]; then
                 RELEASE_FINDINGS="$RELEASE_FINDINGS $key(bad-run)"
                 RELEASE_DETAIL="$RELEASE_DETAIL
   !! RELEASE WORKFLOW FAILED: $key — concluded ${BAD%% *} (${BAD#* }).
-     No release was published for it. Triage the run, fix the cause, then
-     cut a NEW tag: the Release tags ruleset forbids moving this one, so
-     're-tagging' is not an available remedy."
+     No release was published for it. Triage the run; if the cause is a
+     defect in the code or the workflow, file ONE issue (type/bug +
+     status/ready) and record it in the state file as BUG_FOR_$T=<repo#N> —
+     the queue stands down for this tag while that bug is open. When the
+     fix lands, cut a NEW tag: the Release tags ruleset forbids moving this
+     one, so 're-tagging' is not an available remedy."
                 continue
             fi
             # Still running is the resumable "waiting on CI" state, NOT a
@@ -696,14 +763,15 @@ release_triage() {  # $1 = owner (for the message); uses $REPOS_TEXT
             RELEASE_DETAIL="$RELEASE_DETAIL
   !! RELEASE TAGGED, NOT PUBLISHED: $key — the tag exists, no GitHub
      release was published for it, and no release run is in flight. Either
-     the workflow never triggered, or it was cancelled."
+     the workflow never triggered, or it was cancelled. The bug-record rule
+     above covers this finding too: file and record, and the queue stands
+     down while the bug is open."
         done
         # Released vs DEPLOYED. Only where the release agent's own state file
         # exists — which is itself the declaration that this repo has an
         # internal deployment. Nothing is inferred about a repo nobody
         # handed over, and the release agent's state is the only place that
         # mapping lives (never the target repo).
-        STATE_FILE="$(release_state_dir)/$(repo_slug "$R").state"
         [ -f "$STATE_FILE" ] || continue
         NEWEST=$(printf '%s' "$RELEASED" | head -1)
         DEPLOYED=$(sed -n 's/^DEPLOYED_VERSION=//p' "$STATE_FILE" 2>/dev/null | tail -1)
@@ -728,6 +796,32 @@ release_state_dir() {
 
 repo_slug() {  # owner/repo -> one filename token
     printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed 's/-*$//'
+}
+
+# True when tag $1 is strictly newer than tag $2 (vMAJOR.MINOR.PATCH; any
+# other shape falls back to refusing to call it newer, which keeps the
+# callers' behaviour conservative). The release agent's state does not have
+# to remember a resolution that is machine-checkable from the repo itself.
+tag_newer() {  # exit 0 when tag $1 is strictly newer than tag $2
+    case "$1" in v[0-9]*) ;; *) return 1 ;; esac
+    case "$2" in v[0-9]*) ;; *) return 1 ;; esac
+    _a=${1#v}; _b=${2#v}
+    _a1=$(printf '%s' "$_a" | cut -d. -f1); _a2=$(printf '%s' "$_a" | cut -d. -f2)
+    _b1=$(printf '%s' "$_b" | cut -d. -f1); _b2=$(printf '%s' "$_b" | cut -d. -f2)
+    _a3=$(printf '%s' "$_a" | cut -d. -f3); _b3=$(printf '%s' "$_b" | cut -d. -f3)
+    # A missing patch field (a two-part tag) counts as 0; anything NOT
+    # numeric is refused — conservative: an unparsed tag is never "newer"
+    # for the caller.
+    for _x in "$_a1" "$_a2" "$_b1" "$_b2"; do
+        case "$_x" in ''|*[!0-9]*) return 1 ;; esac
+    done
+    case "$_a3" in '') _a3=0 ;; *[!0-9]*) return 1 ;; esac
+    case "$_b3" in '') _b3=0 ;; *[!0-9]*) return 1 ;; esac
+    if   [ "$_a1" -gt "$_b1" ]; then return 0
+    elif [ "$_a1" -eq "$_b1" ] && [ "$_a2" -gt "$_b2" ]; then return 0
+    elif [ "$_a1" -eq "$_b1" ] && [ "$_a2" -eq "$_b2" ] && [ "$_a3" -gt "$_b3" ]; then return 0
+    fi
+    return 1
 }
 
 # The release findings keep their OWN dedupe slot, for the reason the
@@ -1143,6 +1237,10 @@ if [ "$N" -gt 0 ]; then
             log ""
             log "  AWAITING HUMAN (dropped from the queue — a human's wait must cost zero tokens):$AWAITING"
         fi
+        if [ "$VERBOSE" -eq 1 ] && [ -n "$TRACKED" ]; then
+            log ""
+            log "  TRACKED ELSEWHERE (not re-notified — the failure's reported bug is open):$TRACKED"
+        fi
     fi
     # A broken or blind owner NEXT TO a working one must still surface
     # (its items would otherwise silently vanish from the merge) — but
@@ -1330,5 +1428,6 @@ for O in $ORGS; do OWNERS_DISPLAY="$OWNERS_DISPLAY $O"; done
 log "QUEUE EMPTY  query healthy: $NR_TOTAL onboarded repo(s), all labelled"
 log "  $LABELS, nothing routed to $OWNERS_DISPLAY right now."
 [ -z "$AWAITING" ] || log "  AWAITING HUMAN (routed, but the approval on record is not a human's):$AWAITING"
+[ -z "$TRACKED" ] || log "  TRACKED ELSEWHERE (not re-notified — the failure's reported bug is open):$TRACKED"
 [ -z "$BLIND_NOTE" ] || log "$BLIND_NOTE"
 exit 0

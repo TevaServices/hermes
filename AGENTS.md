@@ -692,7 +692,8 @@ not a stall. `pending_items` on the deriver's metrics endpoint is the honest
 measure. Do not "fix" it by lowering the batch size without weighing the
 deriver call each batch triggers (measured: 45 s, 2 facts).
 
-The checks — plugin status/peer, the `injection.log` audit, the deriver
+The checks — the plugin's own status view, the `injection.log` audit, the
+deriver
 queue with expected counts, one timed live recall — live in the
 **hermes-ops-runbook** skill (`.claude/skills/hermes-ops-runbook/SKILL.md`),
 alongside the full post-deploy verification checklist. The deriver's queue
@@ -853,10 +854,10 @@ routed by repo owner.**
   the release skill's failure-filing moved to `--body-file` in the same
   change.)
 - **The shim's CI GATE** — a write that ASSERTS a verdict on a PR is refused
-  while a check is red or still running: `gh pr edit <PR#> --add-label
-  review/ready` (the handoff), `--add-label review/approved`, the
-  `gh pr review <PR#> --approve` that IS the GitHub approval, and
-  `gh pr merge`. It is the one gate making a network call (`pr checks --json
+  while a check is red or still running: the handoff write `gh pr edit <PR#>
+  --add-label review/ready`, the verdict write `gh pr edit <PR#> --add-label
+  review/approved`, the `gh pr review <PR#> --approve` that IS the GitHub
+  approval, and `gh pr merge`. It is the one gate making a network call (`pr checks --json
   bucket`; no jq dependency), which is why owner resolution sits ABOVE the
   `GH_TOKEN` passthrough — a preset token is the documented way to force an
   org token, so a gate below that line would fence nothing. It **fails
@@ -1579,7 +1580,18 @@ use their own dedupe slot plus a first-seen epoch (`TEAM_RELEASE_RETRY_TTL`,
 6h) — a stalled release is unattended work and a delivery lost to a restart
 must not read as a resolution — and the dedupe key is the FINDING IDS,
 never the message text (prose is not stable tick-to-tick; keying on it
-re-delivers unchanged work mid-TTL).
+re-delivers unchanged work mid-TTL). A filed bug is the **dealt-with path**:
+the release agent records it in its state file
+(`BUG_FOR_<tag>=<owner>/<repo>#<issue>`, last line wins — the release skill
+carries the file-then-record step); an OPEN linked bug stands the lane down
+for that tag (`TRACKED ELSEWHERE`, verbose-only — tracked work must cost
+zero tokens), a CLOSED bug re-arms the finding (`bug-closed`: fix in, no
+release published — release's turn to cut the next tag; a failure that
+recurred means file a fresh bug and append a new record), and a
+dark/unreadable record falls back to the ordinary finding, never silence;
+so does an unrecorded failure. A failed tag needs no record once the remedy
+happened: a NEWER published release supersedes it mechanically (`tag_newer`,
+checked from the repo, not state).
 
 **The bot-chat delivery timeout is 900s stack-wide** (`render.py` →
 `cron.bot_chat_delivery_timeout_seconds`): a bot-chat delivery runs a full

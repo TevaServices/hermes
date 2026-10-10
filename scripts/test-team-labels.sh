@@ -267,6 +267,10 @@ case "$args" in
     *"repos/bcross/mach/tags"*) printf '%s' "${STUB_TAGS:-}" ;;
     "release list"*|*"release list -R"*) printf '%s' "${STUB_RELEASED:-}" ;;
     "run list"*"--workflow release.yml"*) printf '%s' "${STUB_RUNS:-}" ;;
+    # the state-file linkage's read-back: is the recorded bug still open?
+    # Default open; '' (an API error/404) is the "record is dark" state.
+    *"repos/bcross/mach/issues/"* ) printf '%s' "${STUB_ISSUE_STATE-open}" ;;
+    *"repos/bcross/mach2/issues/"*) printf '%s' "${STUB_ISSUE_STATE2-open}" ;;
     # the release lane's own search
     *"--label review/approved"*)
         printf '%s' "${STUB_APPROVED_PRS:-}"; ;;
@@ -496,6 +500,7 @@ esac
 # reviewer bot 23:00:59Z, bcross 08:22:50Z). A lane gated on
 # `gh search --review approved` would merge on the bot's verdict.
 export STUB_APPROVED_PRS STUB_HUMAN_REVIEW STUB_CODEOWNERS STUB_TAGS STUB_RELEASED STUB_RUNS
+export STUB_ISSUE_STATE STUB_ISSUE_STATE2
 STUB_APPROVED_PRS='bcross/mach#27  Fix the thing  https://github.com/bcross/mach/pull/27'
 STUB_CODEOWNERS='* @bcross'
 STUB_TAGS=""; STUB_RELEASED=""; STUB_RUNS=""
@@ -660,9 +665,67 @@ if [ -z "$out" ]; then
 else
     bad "a recovered failure still reports (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))"
 fi
+# --- 9b. release triage: the filed-bug linkage -----------------------------
+# A failed release whose bug the agent FILED and RECORDED is dealt with as
+# far as the release lane can take it: the failure is the developer's open
+# work item, and re-notifying the release agent about it must cost zero
+# tokens. The record is read from the agent's own state file:
+#   BUG_FOR_<tag>=<repo>#<issue>   (last line wins — a recurrence appends)
+st="$tmp/home/cache/release"
+mkdir -p "$st" && printf 'BUG_FOR_v0.9.0=bcross/mach#12\n' > "$st/bcross-mach.state"
+STUB_TAGS='v0.9.0'
+STUB_RELEASED=''
+STUB_RUNS='BAD v0.9.0 failure https://github.com/bcross/mach/actions/runs/1'
+rm -rf "$tmp/home/cache"; mkdir -p "$tmp/home/cache/release"
+printf 'BUG_FOR_v0.9.0=bcross/mach#12\n' > "$tmp/home/cache/release/bcross-mach.state"
+out=$(run_queue 0 "" "" releases)
+if [ -z "$out" ]; then
+    ok "a filed-and-open bug stands the triage finding down for its tag"
+else
+    bad "an open linked bug did not suppress the finding (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))"
+fi
+# The queue must verify the bug's state, not trust the record: a CLOSED bug
+# with still no published release re-arms as its own finding type.
+STUB_ISSUE_STATE='closed'
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"BUG CLOSED, NO RELEASE"*"bcross/mach#v0.9.0"*"bcross/mach#12"*)
+        ok "a closed linked bug re-arms the triage to release the fix" ;;
+    *) bad "the closed-bug re-arm did not fire (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 200))" ;;
+esac
+unset STUB_ISSUE_STATE
+# A record whose issue cannot be read (deleted, API error) is DARK, and a
+# dark linkage fails toward work, never toward silence: the ordinary
+# bad-run finding stands.
+rm -rf "$tmp/home/cache"; mkdir -p "$tmp/home/cache/release"
+printf 'BUG_FOR_v0.9.0=bcross/mach#12\n' > "$tmp/home/cache/release/bcross-mach.state"
+# Exported EMPTY on purpose: in the stub that prints the issue state, an
+# exported-empty var means "API returned nothing" (404 shape), while an
+# unset one falls to the stub's open default — two different dark/record
+# states. unset clears the export attribute, so export the assignment.
+export STUB_ISSUE_STATE=''
+out=$(run_queue 0 "" "" releases)
+case "$out" in
+    *"RELEASE WORKFLOW FAILED"*"bcross/mach#v0.9.0"*)
+        ok "a dark BUG_FOR record falls back to the ordinary finding" ;;
+    *) bad "a dark record silenced the lane (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))" ;;
+esac
+unset STUB_ISSUE_STATE
+# A failed tag's finding is HISTORY once a NEWER tag has published — the
+# remedy ("cut a NEW tag") has then happened; the resolution is checked in
+# the repo, not remembered in the agent's state.
+rm -rf "$tmp/home/cache"
+STUB_RELEASED='v0.10.0'
+out=$(run_queue 0 "" "" releases)
+if [ -z "$out" ]; then
+    ok "a failed tag superseded by a newer published release is not a finding"
+else
+    bad "a superseded failed tag still reports (got: $(printf '%s' "$out" | tr '\n' '|' | head -c 160))"
+fi
 STUB_RELEASED=''
 unset STUB_APPROVED_PRS STUB_HUMAN_REVIEW STUB_CODEOWNERS STUB_TAGS STUB_RELEASED STUB_RUNS
 unset STUB_LANE_INPROG_BUG STUB_LANE_READY_BUG STUB_LANE_PLAIN STUB_ISSUE_LABELS
+rm -rf "$tmp/home/cache/release"
 
 # --- summary ---------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
