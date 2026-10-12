@@ -394,6 +394,13 @@ mcp_servers:
   # client pointed there sees mach's three tools and never the firecrawl set
   # (no filtering keys needed — mach serves exactly machines_list,
   # secrets_list, exec).
+  # The gateway's AGGREGATE /mcp surface never serves mach in this version
+  # (it lists passthrough servers without the forwarded header → mach 403
+  # "invalid api key" + OAuth-discovery noise — expected, not a fault;
+  # observed 2026-10-12), so point external MCP clients at /mach/mcp with
+  # both per-server headers. mach idles: litellm expires streamable sessions
+  # after ~3 min and the client transparently re-initializes on the next
+  # call (benign log noise).
   mach:
     url: "https://mach.teva.services/v2/mcp"
     transport: "http"
