@@ -198,7 +198,11 @@ through a shell history or chat transcript.
   password): `POSTGRES_USER=litellm`, `POSTGRES_PASSWORD`,
   `POSTGRES_DB=litellm`. See `secrets/litellm-db.env.example`.
 - `hermes-main.env`: `LITELLM_API_KEY` (the master key), `FIRECRAWL_API_KEY`
-  (must equal `TEST_API_KEY` in `firecrawl.env`), `HONCHO_API_KEY` (any
+  (must equal `TEST_API_KEY` in `firecrawl.env`) + `FIRECRAWL_API_URL`
+  (`http://firecrawl-guard:3003` — the **built-in web plugin** reads the
+  process env, not the MCP integration's `mcp_env`; without it the Firecrawl
+  SDK defaults to `api.firecrawl.dev` and the self-hosted key is rejected
+  with "Invalid token" — observed 2026-10-12), `HONCHO_API_KEY` (any
   non-empty value while honcho-api runs no-auth; must match honcho-api if
   auth is enabled), `MACH_MCP_KEY` (the agent's mach API key — forwarded
   per-request through the gateway's true_passthrough mach MCP entry as
