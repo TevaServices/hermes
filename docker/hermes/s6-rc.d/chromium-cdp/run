@@ -26,7 +26,7 @@ CDP_PORT="${HERMES_CHROMIUM_CDP_PORT:-9333}"
 CDP_DATA=/opt/data/chromium-cdp
 
 if [ ! -x "$SHELL_BIN" ]; then
-    echo "[chromium-cdp] $SHELL_BIN missing — is this the hermes-agent image?" >&2
+    echo "[chromium-cdp] $SHELL_BIN missing — no pm-store Chromium and no Playwright layout in this base" >&2
     exit 0
 fi
 
