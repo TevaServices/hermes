@@ -151,7 +151,7 @@ check("known tasks match the image's aux task set",
               "memory_query_rewrite", "moa_aggregator", "moa_reference",
               "monitor", "profile_describer", "review", "skills_hub",
               "title_generation", "triage_specifier", "tts_audio_tags",
-              "vision"}))
+              "vision", "voice_chat"}))
 
 # ---------------------------------------------------------------------------
 # 2. the rendered shape

@@ -101,6 +101,9 @@ STACK_CRON_DEFAULTS = {
 # WHAT THIS GIVES UP, stated plainly: Tirith still scans and still logs, but
 # with mode off a finding no longer gates anything, so `command_allowlist`
 # (TIRITH_PREAPPROVED_RULES) is now belt-and-braces rather than the control.
+# (v0.22.0 note: the bundled tirith scanner left Hermes — no findings fire
+# any more at all; the tirith:* keys are kept here harmlessly for continuity.
+# Do not extend them from audit data; that source is gone.)
 # Credential READS stay permitted on purpose — AGENTS.md's own verification
 # checklist reads /etc/hermes/litellm.env, so a glob on that path would break
 # documented work. To dial this back: set `mode: smart` here (or per profile)
@@ -220,7 +223,7 @@ STACK_COMPRESSION_DEFAULTS = {
 # WHY THIS LIVES IN config.yaml AND NOT IN THE ENV FILE (2026-10-04):
 # hermes-main.env used to carry AUXILIARY_COMPRESSION_MODEL /
 # _SESSION_SEARCH_ / _WEB_EXTRACT_ / _SKILLS_HUB_MODEL, and every one of them
-# is INERT on this image (v2026.9.24). The only aux env names the image reads
+# is INERT on this image (re-verified at v0.22.0 in the tree: the only aux env names the image reads
 # are AUXILIARY_VISION_*, AUXILIARY_VIDEO_MODEL and AUXILIARY_APPROVAL_*
 # (hermes_cli/cli_config_load.py _AUXILIARY_TASK_ENV,
 # tools/vision_tools.py, gateway/run.py _bridge_auxiliary_config_to_env —
@@ -274,13 +277,14 @@ STACK_AUX_MODELS = {
 # Re-verify at a HERMES_REF bump:
 #   python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG; \
 #               print(sorted(DEFAULT_CONFIG['auxiliary']))"
-# (run under the image venv; v2026.9.24 list is reproduced below.)
+# (run under the image venv; v0.22.0 list is reproduced below — v0.22.0 gained
+# voice_chat.)
 KNOWN_AUX_TASKS = {
     "approval", "background_review", "compression", "curator", "goal_judge",
     "kanban_decomposer", "kanban_estimator", "mcp", "memory_query_rewrite",
     "moa_aggregator", "moa_reference", "monitor", "profile_describer",
     "review", "skills_hub", "title_generation", "triage_specifier",
-    "tts_audio_tags", "vision",
+    "tts_audio_tags", "voice_chat", "vision",
 }
 
 # `profile` is dropped: the rendered file is already per-profile.
@@ -465,7 +469,7 @@ def gateway_fallback_targets() -> set[str] | None:
 # Config schema version used when the base image's own value can't be read
 # (local preview runs, where hermes_cli isn't installed). Keep in sync with
 # the HERMES_REF pin — the authoritative stamp is derived at build time.
-_FALLBACK_CONFIG_VERSION = 46
+_FALLBACK_CONFIG_VERSION = 50
 
 
 def latest_config_version() -> int:
