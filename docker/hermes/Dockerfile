@@ -35,7 +35,7 @@
 #      plugins.enabled config key, not this copy); see AGENTS.md
 #      §"Dashboard + the memory-UI plugin".
 #
-ARG HERMES_REF=v2026.9.24
+ARG HERMES_REF=v0.22.0
 FROM nousresearch/hermes-agent:${HERMES_REF}
 
 # ── Source patches over upstream ──────────────────────────────────────
@@ -190,6 +190,32 @@ RUN set -e \
             /tmp/hermes-memory-ui/tests /tmp/hermes-memory-ui/desktop \
             /tmp/hermes-memory-ui/docs
 
+# Vendored memory-provider plugin: honcho (plastic-labs/honcho, subdir
+# hermes-plugin-honcho). v0.22.0 removed the bundled plugins/memory/honcho —
+# the provider moved to the plugin catalog (plugin-catalog/honcho.yaml) — but
+# this stack renders memory.provider: honcho into EVERY profile, and the
+# runtime auto-migration would resolve that by cloning the catalog entry from
+# the network at first agent start, per profile home: nondeterministic
+# provisioning a GitOps stack cannot rely on. So vendor it like the dashboard
+# plugin above: catalog-pinned SHA, extracted from the monorepo subdir, staged
+# for the overlay layer below. Integrity: same object-model argument as the
+# clone above, plus the version grep. The plugin ships ENABLED BY SELECTION
+# (memory.provider); no plugins.enabled entry is needed — PM's plugin discovery
+# adds the active memory provider's dir to the dependency union itself, and its
+# Python deps (honcho-ai, httpx — declared in the plugin's pyproject.toml) are
+# resolved by the boot-time PM sync (entrypoint section 1d).
+# Desktop/API-server extras in the repo stay unextracted (docs/ only).
+ARG HERMES_HONCHO_REF=e2d2aba182862deeb846e5cd4a30a41bce0ed82a  # plugin-catalog pin, plugin version 1.0.0
+RUN set -e \
+ && git clone --quiet --no-checkout \
+      https://github.com/plastic-labs/honcho /tmp/honcho-src \
+ && git -C /tmp/honcho-src fetch --quiet --depth 1 origin "$HERMES_HONCHO_REF" \
+ && git -C /tmp/honcho-src checkout --quiet --detach FETCH_HEAD \
+ && test "$(git -C /tmp/honcho-src rev-parse HEAD)" = "$HERMES_HONCHO_REF" \
+ && grep -q '^version: 1\.0\.0$' /tmp/honcho-src/hermes-plugin-honcho/plugin.yaml \
+ && cp -a /tmp/honcho-src/hermes-plugin-honcho /tmp/honcho-plugin \
+ && rm -rf /tmp/honcho-plugin/docs /tmp/honcho-src
+
 # Stack helpers (each a separate layer so script-only pushes stay cheap).
 COPY docker/hermes/github-app-token.sh /usr/local/bin/github-app-token.sh
 COPY docker/hermes/bootstrap-profiles.sh /usr/local/bin/hermes-bootstrap-profiles.sh
@@ -319,17 +345,17 @@ RUN python3 /tmp/render.py --build-root /overlay \
     done \
  && rm -rf /tmp/render.py /tmp/config /tmp/docker
 
-# Install the vendored dashboard plugin into the overlay (stack-wide,
-# at the overlay ROOT — not under default/ or profiles/<name>/; the
-# arrange loop above would otherwise sweep a pre-created plugins/ dir
-# into /overlay/profiles/plugins, which is why the clone stages in /tmp
-# and this layer sits after the render). This layer re-runs on
-# config-only pushes by design — it is a local cp, no network — and
-# stays BEFORE the entrypoint COPY so the entrypoint layer remains the
-# config-change boundary.
+# Install the vendored plugins into the overlay (stack-wide, at the overlay
+# ROOT — not under default/ or profiles/<name>/; the arrange loop above would
+# otherwise sweep a pre-created plugins/ dir into /overlay/profiles/plugins,
+# which is why the clones stage in /tmp and this layer sits after the render).
+# This layer re-runs on config-only pushes by design — it is a local cp, no
+# network — and stays BEFORE the entrypoint COPY so the entrypoint layer
+# remains the config-change boundary.
 RUN mkdir -p /overlay/plugins \
  && cp -a /tmp/hermes-memory-ui /overlay/plugins/hermes-memory-ui \
- && rm -rf /tmp/hermes-memory-ui
+ && cp -a /tmp/honcho-plugin /overlay/plugins/honcho \
+ && rm -rf /tmp/hermes-memory-ui /tmp/honcho-plugin
 
 COPY docker/hermes/entrypoint.sh /usr/local/bin/hermes-stack-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/hermes-stack-entrypoint.sh

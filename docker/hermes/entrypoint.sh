@@ -73,6 +73,40 @@ if [ -x /opt/claude-hermes/claude-provision.sh ]; then
     chown -R "$RUNTIME_UID:$RUNTIME_UID" "$HERMES_HOME/tools/claude-hermes" 2>/dev/null || true
 fi
 
+# --- 1d. PM dependency sync (vendored plugins' Python deps) -----------------
+# Upstream's stage2 refresh_dependencies(root) only acts when
+# $HERMES_HOME/installs/<sha>/facts.json already exists — nothing writes it on
+# a volume that has never run a PM sync, so a vendored plugin's declared
+# dependencies (today: the honcho memory provider's honcho-ai/httpx; the
+# dashboard plugin declares none) would never install and the provider would
+# report its ImportError on every boot, forever. Run the sync here, after the
+# overlay seeded every home: pm.sync_venv(explicit=True) is a fast no-op when
+# the recorded selection matches (one stamp comparison) and otherwise prepares
+# a fresh dependency generation (PM's atomic publication — failure preserves
+# the previous environment) including the enabled plugin union, which PM's
+# discovery derives from every dependency home's config.yaml
+# (memory.provider: honcho + the seeded plugins/<honcho> dir) and resolves from
+# PyPI. Runs as the runtime user because the generation tree it creates under
+# $HERMES_HOME must be owned by them. Non-fatal: boot continues on the image's
+# own environment (PM's fallback), the next boot retries.
+if [ -f /opt/hermes/.venv/bin/python ]; then
+  if $S6_SETUIDGID "$RUNTIME_UID:$RUNTIME_UID" /opt/hermes/.venv/bin/python - <<'PYEOF'
+from pathlib import Path
+import sys
+
+sys.path.insert(0, "/opt/hermes")
+
+try:
+    import pm
+    pm.sync_venv(explicit=True, evict_incompatible_plugins=True)
+    print("ok")
+except Exception as exc:
+    print(f"FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  then echo "hermes-stack: pmsync ok"; else echo "hermes-stack: pmsync FAILED (continuing boot)" >&2; fi
+fi
+
 # --- 2. Runtime .env: host env file -> persistent volume ------------------
 # s6 services run as the unprivileged `hermes` user; the env file is
 # bind-mounted read-only from $HERMES_ENV_DIR (root:<host-group> 640) and could
