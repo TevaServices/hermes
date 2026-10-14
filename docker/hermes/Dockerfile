@@ -289,15 +289,23 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
 # path; the supervised chromium-cdp service below serves CDP on
 # 127.0.0.1:9333 (enabled per-deploy via HERMES_CHROMIUM_CDP, like the
 # dashboard service).
-# Playwright >= 1.62 (v2026.9.x base) changed the baked layout:
-#   old: chromium_headless_shell-1234/chrome-linux/headless_shell
-#   new: chromium_headless_shell-1243/chrome-headless-shell-linux-<arch>/chrome-headless-shell
-# Match both shapes; the newest wins.
-RUN SHELL="$( { ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux/headless_shell 2>/dev/null; \
-                 ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-headless-shell-linux-*/chrome-headless-shell 2>/dev/null; \
-               } | sort -V | tail -1)" \
- && test -n "$SHELL" && test -x "$SHELL" \
- && ln -sf "$SHELL" /usr/local/bin/chromium-headless-shell
+# Three bases, three browser shapes (the newest wins):
+#   v0.22.0+:  pm's pinned full Chromium staged into HERMES_RUNTIME_DIR — the
+#     build already resolved the executable and baked its ABSOLUTE path to
+#     /etc/hermes/agent-browser-executable-path (upstream Dockerfile; layout
+#     per arch: chrome-linux64/chrome on amd64, chromium-linux-arm64/... on
+#     arm64). The old PLAYWRIGHT_BROWSERS_PATH layout is GONE in this base.
+#   v2026.9.x: chromium_headless_shell-1243/chrome-headless-shell-linux-<arch>/chrome-headless-shell
+#   older:     chromium_headless_shell-1234/chrome-linux/headless_shell
+RUN if [ -s /etc/hermes/agent-browser-executable-path ] && [ -x "$(cat /etc/hermes/agent-browser-executable-path)" ]; then \
+      ln -sf "$(cat /etc/hermes/agent-browser-executable-path)" /usr/local/bin/chromium-headless-shell; \
+    else \
+      SHELL="$( { ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux/headless_shell 2>/dev/null; \
+                  ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-headless-shell-linux-*/chrome-headless-shell 2>/dev/null; \
+                } | sort -V | tail -1)" \
+      && test -n "$SHELL" && test -x "$SHELL" \
+      && ln -sf "$SHELL" /usr/local/bin/chromium-headless-shell; \
+    fi
 
 # Claude Code wrapper tooling (coding-agent delegation on the profile's
 # own model via the LiteLLM gateway). Staged under /opt/claude-hermes
