@@ -36,7 +36,7 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
 |---|---|
 | Install Hermes agent via Docker | `docker/hermes/Dockerfile` is a thin build over the official `nousresearch/hermes-agent:<ref>` image (pinned ref; s6 supervision included); agent state persists in a volume |
 | One container, all profiles | the official image's s6 supervision hosts every profile as a supervised gateway service — the docs' recommended deployment model |
-| Overlay config / profiles | `config/` + `render.py` are compiled INTO the image at build time (`/overlay/<profile>`), applied to profile dirs on every container start |
+| Overlay config / profiles | `config/` + `render.py` are compiled INTO the image at build time (`/overlay/<profile>`), applied to profile dirs on every container start; EXTERNAL profile packages are dead drops — rendered at boot from the host's `profiles.d/`, no rebuild, no repo change |
 | Keep install + config up to date | the pin in `mise.toml` `[env]` is both the FROM tag and the config baseline; merge to `main` → webhook → rebuild/redeploy. `scripts/check-updates.sh` reports drift |
 | GitOps on the Linux host | Komodo Resource Sync applies `komodo/resources.toml`; Stacks deploy the compose files from this repo ([komodo/README.md](komodo/README.md)) |
 | Easy model/provider config | the agent names one of four gateway tiers (`cheap`/`smart`/`smarter`/`smartest`); which provider serves a tier is `config/litellm.yaml` alone, so swapping backends never touches a profile or an env file |
@@ -57,11 +57,19 @@ config/
   skills/               stack-wide skills (merged into EVERY profile)
   profiles/default/     the ROOT profile (one agent): model choice, platforms,
                         SOUL.md, skills/
-  profiles/planner/     team PM+design agent (issues, boards, specs; Discord #planning)
-  profiles/developer/   team implementation agent (draft PRs, never merges; #dev)
-  profiles/reviewer/    team quality gate (reviews, merges after human gate; #reviews)
+
+  External profile packages are NOT in this repo: each package repo (e.g.
+  github.com/TevaServices/hermes-software-development) provisions ITS
+  tree onto the host's profile-source path —
+  <env-dir>/profiles.d/<package>/profiles/<name>/profile.toml ... — and
+  the container renders it at boot. Adding profiles never touches the
+  hermes repo.
+
 render.py               compiles config/ -> /overlay/<profile> at image build
-                        time (no committed build output)
+                        time (no committed build output). The BOOT renderer
+                        (docker/hermes/render-drop-profiles.py) reuses it for
+                        the dead-drop packages, with the sources baked at
+                        /opt/hermes-stack-config/
 docker/hermes/          thin image over the official agent image + entrypoint
 compose/                four stacks: hermes, honcho, firecrawl, litellm (shared hermes-net)
 secrets/                *.env.example templates (real files never committed)
@@ -73,40 +81,84 @@ scripts/                host setup + credential/diagnostic helpers
                         + container cron shims (prune-repos.sh, refresh-repos.sh)
 ```
 
-## The agile SaaS team (planner / developer / reviewer / release)
+## The agile SaaS team (a profile package)
 
-Four named Hermes profiles work as a GitHub-first agile team — **GitHub
-is the system of record, Discord is the discussion surface**. The
-`team-conventions` skill (config/skills/, shared by every profile)
-defines the workflow: idea → issue (typed `type/*`) → routed developer
-(label `status/ready` — GitHub App bots cannot be assignees) → **draft
-PR** → reviewer gates (`team-reviewer`) → human gate (**a CODEOWNER's
-GitHub approval**) → **release** merges, cuts the version, deploys it to
-the internal environment through Komodo and validates it against what is
-running (`team-release`). Issues are typed so the release version bump can
-be inferred from the labels, and the developer's queue hoists `type/bug`
-items ahead of features. Repos join the workflow via the planner's
-`team-onboarding` skill (topic tag, board or status label set, the
-`type/*` labels, branch protection **including the code-owner review
-requirement**, CI, and — a hard requirement now — documented release
-instructions).
+The software-company delivery team is an **external profile package**
+([hermes-software-development](https://github.com/TevaServices/hermes-software-development)):
+four profiles — planner (PM+design), developer (implementation),
+reviewer (quality gate), release (merge/deploy/validate) — delivered as a
+dead drop. **GitHub is the system of record, Discord is the discussion
+surface.** The `team-conventions` skill (config/skills/, shared by every
+profile) defines the workflow: idea → issue (typed `type/*`) → routed
+developer (label `status/ready` — GitHub App bots cannot be assignees) →
+**draft PR** → reviewer gates (`team-reviewer`) → human gate (**a
+CODEOWNER's GitHub approval**) → **release** merges, cuts the version,
+deploys it to the internal environment through Komodo and validates it
+against what is running (`team-release`). Issues are typed so the release
+version bump can be inferred from the labels, and the developer's queue
+hoists `type/bug` items ahead of features. Repos join the workflow via
+the planner's `team-onboarding` skill (topic tag, board or status label
+set, the `type/*` labels, branch protection **including the code-owner
+review requirement**, CI, and — a hard requirement now — documented
+release instructions).
 
 Enforcement is identity-based, not trust-based: each role is its own
 GitHub App (least-privilege permission set, PEM at
 `/etc/hermes/github-app-<profile>.pem`) and its own Discord bot token
-(`PROFILE_<NAME>_*` entries in hermes-main.env, mapped by the
-entrypoint into each profile's own `.env`). planner cannot push
-(Read-only code + issue/project writes); developer cannot merge
-(branch protection + no merge rights); the reviewer never merges — its
-authority ends at the verdict, and an approval by a non-bot CODEOWNER is
-what releases a PR. The default profile's `gateway.profile_routes` sends
-each team channel to its profile, and each role's channel is its **own**
-(per-profile `platforms.discord.extra`: `allowed_channels` +
-`require_mention = false`): the bot answers there without being @mentioned
-and ignores the others. `#hermes` and `#hermes-home` stay with the default
-agent, fenced to those two and likewise mention-free. A
-request in a team channel gets its own auto-created thread, so the issue
-link comes back in that thread — see the `team-conventions` skill.
+(`PROFILE_<NAME>_*` lines in the PACKAGE's
+`profiles.d/team/package.env`, mapped by the entrypoint into each
+profile's own `.env`). planner cannot push (Read-only code +
+issue/project writes); developer cannot merge (branch protection + no
+merge rights); the reviewer never merges — its authority ends at the
+verdict, and an approval by a non-bot CODEOWNER is what releases a PR.
+Team channels are package-declared too: each profile's `[discord]` block
+(names its channel as a `@@VAR@@` + `require_mention`) is rendered by the
+boot renderer into the per-profile fence (`platforms.discord.extra`:
+`allowed_channels` + `require_mention = false`) AND a routing entry in
+the default agent's `gateway.profile_routes` — the bot answers there
+without being @mentioned and ignores the others. `#hermes` and
+`#hermes-home` stay with the default agent, fenced to those two and
+likewise mention-free. A request in a team channel gets its own
+auto-created thread, so the issue link comes back in that thread — see
+the `team-conventions` skill. The delivery-lane queue machinery
+(`team-queue.sh` and friends) ships in the package as well; the stack
+bakes only the generic primitives (`team-session.py`, `team-thread.sh`).
+
+## External profile packages (the dead drop)
+
+Profiles can live OUTSIDE this repo, owned and shipped by other repos.
+The mechanism is a disk convention, deliberately dumb:
+
+- The docker host carries a **profile-source path**: `<env-dir>/profiles.d/<package>/`
+  (default `/etc/hermes/profiles.d/`, riding the env-dir read-only mount —
+  no compose change ever). Local runs use the same shape under your local
+  env dir.
+- A package directory holds `package.toml` (name = directory name),
+  `profiles/<profile>/{profile.toml, SOUL.md, skills/}`, optionally
+  `cron.toml` + `scripts/`, and `package.env` (its credentials and
+  `@@VAR@@` deployment ids; template: `package.env.example`).
+- **The container consumes it at boot**: `entrypoint.sh` loads every
+  `package.env` into the boot environment, then
+  `docker/hermes/render-drop-profiles.py` renders each package exactly
+  like the builtin profiles (same validation: tiers, integrations, cron
+  targets, aux windows) into `/overlay/profiles/<name>/`, and re-renders
+  the default overlay with the generated routes. From there the stock
+  boot applies, expands placeholders, synchronizes cron and provisions.
+- **Lifecycle = drop + restart.** Add or change a package: provision the
+  directory, restart the container — no hermes-repo edit, no rebuild. A
+  vanished package prunes its overlay and stops its gateway. A broken
+  package fails LOUDLY at the boot log and is skipped — the rest of the
+  stack boots without it, and its last-good render is kept on disk.
+- **hermes knows nothing about the package**: no profile names, no
+  channels, no tokens — not in `config/`, not in `compose/`, not in
+  `render.py`'s placeholders. The `[discord]` tables, credentials and
+  scripts all travel with the package; the only stack-side surface left
+  is the config sources baked at `/opt/hermes-stack-config/` so boot
+  renders have the real tier/integration context.
+
+Validate a package before deploying: from this repo,
+`mise run validate-drop` (drop dir defaults to a sibling checkout via the
+package's provisioner).
 
 ## How configuration works (the abstraction)
 
@@ -131,15 +183,18 @@ and render.py compiles them into what the agent reads — at IMAGE BUILD time:
 - **`config/providers.toml`** — every endpoint Hermes can reach: base URL
   (empty = provider default), API mode, and *which env var name* holds its key.
 - **`config/profiles/<name>/profile.toml`** — one agent: `model = "smarter"`,
-  `integrations = ["honcho", "firecrawl"]`, gateway platforms, and an optional
-  `[config_extra]` passthrough for anything Hermes-specific. `SOUL.md` sits
-  beside it.
+  `integrations = ["honcho", "firecrawl"]`, gateway platforms, an optional
+  `[discord]` block (its own channel + mention behavior — generate the
+  routing too), and `[config_extra]` passthrough for anything
+  Hermes-specific. `SOUL.md` sits beside it. EXTERNAL packages use the
+  same schema in their own repos — see the dead-drop section above.
 
 Switching an agent's model is a one-line diff — to a different tier, or to a
 different backend behind that tier with no profile change at all — then a PR:
 the image rebuild renders the new overlay, the deploy recreates the
 container, and the entrypoint applies the overlay to the profile dir on
-start.
+start. An external package never needs the PR: provision its drop
+directory and restart.
 
 ## Before you deploy: the values you must set
 
@@ -155,8 +210,8 @@ environment variable. This is the complete list — work through it once.
 | **Your LLM backend: which provider serves each model tier** | `config/litellm.yaml` (the four groups; the keys they need live in `litellm.env`) |
 | The tiers' context windows — keep in step with `litellm.yaml` | `config/models.toml` |
 | Any other LLM endpoint Hermes could reach | `config/providers.toml` |
-| Profile model choices (tier names) | `config/profiles/*/profile.toml` (`model = "..."`) |
-| Which profiles exist, and their skills | `config/profiles/*/` |
+| Profile model choices (tier names) | profile.toml `model = "..."` — builtin in `config/profiles/*/`, packages in their own repos |
+| Which profiles exist, and their skills | builtin: `config/profiles/*/` (the default root profile); external: whatever sits on the host's `profiles.d/<package>/` at boot |
 
 **In the host env file (`$HERMES_ENV_DIR/hermes-main.env`, from
 `secrets/hermes-main.env.example`):**
@@ -165,15 +220,20 @@ environment variable. This is the complete list — work through it once.
 |---|---|
 | `LITELLM_MASTER_KEY` | `openssl rand -hex 32`; mirrored into the apps' key vars |
 | `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` | keys for the backends `config/litellm.yaml` declares (Ollama Cloud for the four tiers, OpenRouter free for Firecrawl) |
-| `TEAM_OWNER` | the GitHub account whose repos the team works on — the queue scripts refuse to run without it |
+| `TEAM_OWNER` | the GitHub account whose org-repos the profile packages work on — package queue scripts refuse to run without it (script-read vars ride the container env, which package env files never reach) |
 | `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` | the default agent's bot |
 | `DISCORD_HOME_CHANNEL` | where gateway system messages and the housekeeping jobs post |
-| `DISCORD_CHANNEL_MAIN` / `_PLANNER` / `_DEVELOPER` / `_REVIEWER` | one per channel; each team profile answers only in its own |
-| `PROFILE_<NAME>_DISCORD_BOT_TOKEN` | one bot per team profile (a profile left on the main token is refused) |
-| `PROFILE_<NAME>_GITHUB_APP_ID` / `_INSTALLATION_ID` | per-profile GitHub App (see below) |
-| `PROFILE_<NAME>_GH_APP_NAME` | only if the default App name `hermes-<role>` is taken on GitHub |
+| `DISCORD_CHANNEL_MAIN` | the default agent's unrouted channel |
 | `HONCHO_API_KEY` | any non-empty value while honcho-api runs no-auth |
 | `FIRECRAWL_API_KEY` | must equal `TEST_API_KEY` in `firecrawl.env` |
+
+**Profile packages carry their OWN credentials** in
+`<env-dir>/profiles.d/<package>/package.env` (see the package's
+`package.env.example`) — the `PROFILE_<NAME>_*` lines, each profile's
+Discord channel id, the GitHub App ids/identities. The credential scripts
+write there via `--env-file`; package values override any same-named
+stale line in hermes-main.env (the boot log names the override).
+PEMs stay here in the env dir root, `github-app-<profile>.pem`.
 
 **Credentials that need a one-time browser step** (both scripts wrap
 everything around the manual click that no API can perform):

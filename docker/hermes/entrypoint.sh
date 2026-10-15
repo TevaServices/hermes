@@ -9,6 +9,13 @@
 #
 # This wrapper runs FIRST (as root, before /init) and only does the work
 # upstream doesn't know about:
+#   0. Dead-drop profile packages: (a) load every <profile-source path>/
+#      <package>/package.env into the boot environment — the package's
+#      credentials and deployment ids (PROFILE_<NAME>_* lines, its Discord
+#      channel @@VAR@@s), provisioned onto the host by the owning repo and
+#      never committed anywhere; (b) render each package into /overlay via
+#      the baked stack config sources — profiles from other repos appear,
+#      change and disappear without any rebuild or stack-repo change.
 #   1. hermes-bootstrap-profiles.sh — apply baked overlays into profile
 #      dirs, provision missing profiles (first boot).
 #   1b. Claim the data volume for the runtime user.
@@ -20,8 +27,8 @@
 #   3. Sync GitHub App PEM mounts (read-only host mounts, unreadable by
 #      the unprivileged runtime user) into the persistent tool-homes
 #      ($HERMES_HOME/home and $HERMES_HOME/profiles/<name>/home), owned
-#      by the runtime user — one PEM per App (main + one per team
-#      profile), each pointed at by its own env var.
+#      by the runtime user — one PEM per App (main + one per profile),
+#      each pointed at by its own env var.
 #   4. Configure git identity + gh auth (as the runtime user, via
 #      s6-setuidgid) in every profile's tool-home — each profile with
 #      its OWN App credentials when declared (PROFILE_<NAME>_GITHUB_APP*)
@@ -32,10 +39,87 @@
 set -euo pipefail
 
 export HERMES_HOME="${HERMES_HOME:-/opt/data}"
+# The profile-source path (dead drop) rides the env-dir read-only mount:
+# the whole $HERMES_ENV_DIR host dir is mounted at /run/hermes-pem, so a
+# new package needs NO compose change. Overridable for tests.
+PROFILE_SRC_DIR="${HERMES_PROFILE_SRC_DIR:-/run/hermes-pem/profiles.d}"
 RUNTIME_UID="$(id -u hermes 2>/dev/null || echo 10000)"
 # /command/s6-setuidgid ships with the s6-overlay symlinks tarball and is
 # on PATH even before /init runs.
 S6_SETUIDGID="$(command -v s6-setuidgid || echo /command/s6-setuidgid)"
+
+# --- 0a. Package env values into the boot environment ----------------------
+# Each dead-drop package carries package.env (raw KEY=VALUE lines; no
+# shell semantics — values are exact). Loaded into THIS process's
+# environment BEFORE anything else runs, so:
+#   * expand-placeholders.py (step 1, bootstrap) resolves the package's
+#     @@VAR@@ channel ids;
+#   * the PROFILE_<NAME>_<VAR> -> bare-name mapping (step 2) and the
+#     org-cred wiring (step 3b) see the package's credentials — exactly
+#     as they would had the lines sat in hermes-main.env, but owned by
+#     the package now.
+# A package value OVERRIDES an inherited same-named var (e.g. a leftover
+# line in hermes-main.env), and the override is logged: the canonical home
+# is the package's own file, so the other copy is drift to delete.
+#
+# Deliberately NOT merged into the root .env copy (step 2): these are
+# package-owned names, and anything the launch profile's .env carries is
+# stripped from every OTHER profile's cron children — the trap AGENTS.md
+# §Secrets records (the TEAM_* family). hermes-main.env / the stack
+# environment remains the only delivery for vars the s6 SERVICES must see
+# process-wide.
+load_profile_source_env() {  # <dir>
+  src_dir="$1"
+  [ -d "$src_dir" ] || return 0
+  for env_file in "$src_dir"/*/package.env; do
+    [ -f "$env_file" ] || continue
+    pkg="$(basename "$(dirname "$env_file")")"
+    loaded=0 overridden=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      case "$line" in ''|\#*) continue ;; esac
+      case "$line" in *=*) ;; *)
+        echo "hermes-stack: profiles.d/$pkg: skipping malformed line (no '='): ${line%%=*}" >&2
+        continue ;;
+      esac
+      key="${line%%=*}"
+      value="${line#*=}"
+      if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "hermes-stack: profiles.d/$pkg: skipping invalid var name: $key" >&2
+        continue
+      fi
+      if [ -n "${!key+x}" ]; then
+        overridden=$((overridden + 1))
+      fi
+      export "$key=$value"
+      loaded=$((loaded + 1))
+    done < "$env_file"
+    echo "hermes-stack: profiles.d/$pkg: loaded $loaded var(s) from package.env ($overridden inherited value(s) overridden)"
+  done
+}
+load_profile_source_env "$PROFILE_SRC_DIR"
+
+# --- 0b. Render the dead-drop packages into /overlay -----------------------
+# The image baked the stack config sources (/opt/hermes-stack-config) and
+# the boot renderer; each package under the profile-source path is
+# rendered exactly like the builtin profiles, and the default overlay is
+# re-rendered with the packages' generated Discord routes. Per package:
+# a failure is LOUD but never fatal (skip that package only).
+# The venv interpreter matters: render.py's config-version stamp imports
+# hermes_cli, which the system python cannot; falling back also works,
+# with the stamp falling back alongside it.
+if [ -f /usr/local/bin/render-drop-profiles.py ] && [ -d "$PROFILE_SRC_DIR" ]; then
+  RENDER_PY="$(command -v python3)"
+  [ -x /opt/hermes/.venv/bin/python3 ] && RENDER_PY=/opt/hermes/.venv/bin/python3
+  if "$RENDER_PY" /usr/local/bin/render-drop-profiles.py \
+       --drop-dir "$PROFILE_SRC_DIR"; then
+    echo "hermes-stack: drop profiles rendered"
+  else
+    # render-drop exits non-zero only on unexpected machinery failure, not
+    # per-package validation errors (those are logged and skipped above).
+    echo "hermes-stack: WARNING: render-drop-profiles.py failed; builtin overlays apply unchanged" >&2
+  fi
+fi
 
 # --- 1. Overlay apply + profile provisioning ------------------------------
 # Baked /overlay (render.py output at build time): default profile ->

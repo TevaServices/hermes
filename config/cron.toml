@@ -26,16 +26,20 @@
 # ## The scripts and their contract
 #
 # `script` names a file under the profile's scripts dir; the reconciler
-# seeds it from the image (/usr/local/bin/) on every boot, so the image
-# is the source of truth for script CONTENT and this file for its
+# seeds it on every boot — from the image (/usr/local/bin/, where the
+# stack bakes its own helpers) and, for a package's jobs, from the
+# package's own scripts/ dir that traveled with it — so the image+package
+# are the source of truth for script CONTENT and this file for its
 # SCHEDULE. A job whose script is missing is "unrunnable" and the
 # scheduler AUTO-PAUSES it — which is why seeding is done at boot, before
 # s6 starts anything.
 #
-# Both queue scripts exit 0 with output when there is work, exit 0 with
-# NO output when they are healthy-but-idle, and print an incident ONCE
-# (then stay silent until the condition changes) when the pipeline is
-# broken. See docker/hermes/team-queue.sh for the full exit-code table.
+# Both queue lanes declared by EXTERNAL profile packages exit 0 with
+# output when there is work, exit 0 with NO output when they are
+# healthy-but-idle, and print an incident ONCE (then stay silent until the
+# condition changes) when the pipeline is broken — the stack holds no
+# queue jobs of its own any more; a package's cron.toml declares its own
+# lanes and the boot renderer renders them into the overlay.
 #
 # ## Fields
 #
@@ -121,57 +125,25 @@
 # gateway session (tools/cronjob_tools.py check_cronjob_requirements), so
 # `agent.disabled_toolsets` remains the reliable stack-side fence.
 
-# Developer self-pull: poll the `status/ready` label every 5 minutes.
-# When planner routes an issue, the next tick prints it, the developer's
-# agent wakes with the issue in front of it, and claims it by swapping
-# the label to `status/in-progress`.
-[[jobs]]
-profile = "developer"
-name = "team: dev self-pull"
-schedule = "*/5 * * * *"
-script = "team-queue.sh"
-no_agent = true
-deliver = "bot-chat:developer"
-
-# Reviewer self-pull: poll the `review/ready` PR label every 5 minutes.
-# The review request itself cannot be used as the handoff — bot
-# identities cannot be requested as PR reviewers (see review-queue.sh).
-[[jobs]]
-profile = "reviewer"
-name = "team: review self-pull"
-schedule = "*/5 * * * *"
-script = "review-queue.sh"
-no_agent = true
-deliver = "bot-chat:reviewer"
-
-# Release self-pull: the merge lane (`review/approved` AND a HUMAN's — and a
-# code owner's — approval read back from the reviews), the stuck-release
-# triage, and the undeployed-release resume. Silent when idle, and silent
-# while a PR merely waits on a human: the approval read-back is inside the
-# script precisely so an approved-but-unapproved PR never wakes the agent.
-# See release-queue.sh for the three wake conditions.
-[[jobs]]
-profile = "release"
-name = "team: release self-pull"
-schedule = "*/5 * * * *"
-script = "release-queue.sh"
-no_agent = true
-deliver = "bot-chat:release"
-
 # ---------------------------------------------------------------------------
-# Housekeeping. These three are the stack's own plumbing — they report to
+# Housekeeping. THESE are the stack's own plumbing jobs — they report to
 # #hermes-home, NOT to a profile's bot chat: there is no decision for an
 # agent to make, so waking one would be a wasted turn. `deliver =
 # "discord:<chat_id>"` is an OUTBOUND post (the adapter's "drop the bot's
 # own messages" rule is about INBOUND, so it does not apply here).
-#
-# All three were previously hand-seeded into the default profile's cron
-# store and were NOT declared here, which meant a volume rebuild silently
-# lost them (and claude-update.sh was not even in the image's
-# /usr/local/bin seed set, so the boot reconciler could never recreate
-# it). See AGENTS.md §"Scheduled jobs are GitOps-declared" for the
-# one-time migration that removed the un-prefixed originals.
+# Delivered via the gateway's home channel: the channel id comes from
+# @@DISCORD_HOME_CHANNEL@@ (see secrets/hermes-main.env.example).
+# These three were once hand-seeded and NOT declared here, which meant a
+# volume rebuild silently lost them — see AGENTS.md §"Scheduled jobs are
+# GitOps-declared".
 # ---------------------------------------------------------------------------
+
+# NOTE: the software-team delivery lanes (the planner / developer /
+# reviewer / release self-pull queues) are NOT declared here any more. The
+# stack's repo knows no profiles but its own builtin set; the team package
+# shipped to the profile-source path carries its own cron.toml with its
+# lanes (same schema, same reconciler) — see
+# docker/hermes/render-drop-profiles.py.
 
 # Keep Claude Code current. Silent when already current — the script's
 # stdout IS the delivery, so an up-to-date run says nothing. A FAILED

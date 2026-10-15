@@ -35,12 +35,17 @@ SEND_MESSAGES_IN_THREADS to reply in the thread); it does NOT need
 MANAGE_THREADS — that one only governs renaming/archiving/deleting
 *other people's* threads.
 
-Channels come from the profile routes in
-config/profiles/default/profile.toml (the single source of truth), so
-this script does not keep its own copy of the channel IDs — the table's
-chat_ids are @@VAR@@ placeholders, expanded from the env's DISCORD_CHANNEL_*
-values exactly as render.py expands them; an unset one is reported and
-skipped, not an API error.
+Channels come from the profile routes. With the dead-drop model, a team
+profile declares a [discord] block in its OWN package's profile.toml
+(profile-source path: <env-dir>/profiles.d/<package>/profiles/<n>/), and
+the boot renderer generates the default agent's routing entries from it.
+This doctor discovers channels from BOTH sources — the builtin
+config/profiles/default/profile.toml routes table (hand-written routes,
+if any) and every package's [discord] blocks — so it does not keep its
+own copy of the channel IDs; the ids are @@VAR@@ placeholders, expanded
+from the env files (hermes-main.env for stack-owned values; the package's
+package.env for package-owned ones) exactly as the boot renderer expands
+them; an unset one is reported and skipped, not an API error.
 
 Usage:
     python3 scripts/discord-thread-doctor.py
@@ -73,8 +78,10 @@ except ModuleNotFoundError:  # pragma: no cover - older host interpreter
     )
 
 ENV_FILE = "/etc/hermes/hermes-main.env"
+ENV_DIR = "/etc/hermes"
+DROP_DIR = "/etc/hermes/profiles.d"
 ROUTES_FILE = "config/profiles/default/profile.toml"
-UA = "DiscordBot (https://github.com/<owner>/hermes, 1.0)"
+UA = "DiscordBot (https://github.com/TevaServices/hermes, 1.0)"
 API = "https://discord.com/api/v10"
 
 OK = "✓"
@@ -123,22 +130,40 @@ def api(method, path, token, body=None):
     return json.loads(payload) if payload else {}
 
 
-def read_env():
-    out = sh("sudo", "cat", ENV_FILE)
-    if out.returncode != 0:
-        sys.exit(f"cannot read {ENV_FILE}: {out.stderr.strip()}")
-    env = {}
-    for line in out.stdout.splitlines():
+def _parse_env(text, env):
+    for line in text.splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             env[key.strip()] = value.strip()
+
+
+def read_env():
+    """Parse the stack env file + every profile package's package.env.
+
+    Package-owned values (PROFILE_* lines, the [discord] channel ids) live
+    in <env-dir>/profiles.d/<package>/package.env now; the stack file keeps
+    its own names. A package value OVERRIDES a same-named stack value — the
+    same precedence the entrypoint's boot loader applies — so this doctor
+    expands placeholders exactly as the deploy does. Values land in the
+    returned dict and are never printed.
+    """
+    out = sh("sudo", "-n", "cat", ENV_FILE)
+    if out.returncode != 0:
+        sys.exit(f"cannot read {ENV_FILE}: {out.stderr.strip()}")
+    env = {}
+    _parse_env(out.stdout, env)
+    pkgs = sh("sudo", "-n", "sh", "-c",
+              f"cat {DROP_DIR}/*/package.env 2>/dev/null || true")
+    if pkgs.returncode == 0:
+        _parse_env(pkgs.stdout, env)
     return env
 
 
-# Route table chat_ids are @@VAR@@ PLACEHOLDERS, not channel ids (the
-# config/render system made profile.toml the template, with the real ids in
-# hermes-main.env as DISCORD_CHANNEL_*). This doctor must expand them the
+# Route chat_ids are @@VAR@@ PLACEHOLDERS, not channel ids: the stack's
+# template sources reference the ids, and the real values live in the env
+# files (hermes-main.env for stack-owned names, each package's package.env
+# for its own). This doctor must expand them the
 # same way render.py does — a placeholder passed to the API verbatim is an
 # invalid snowflake, so every check would 400 with a misleading "cannot view
 # it". An UNSET placeholder (the var is not in the env yet) is not an error:
@@ -146,32 +171,77 @@ def read_env():
 PLACEHOLDER_RE = re.compile(r"@@([A-Z0-9_]+)@@")
 
 
-def load_routes(env, path=None):
-    """profile -> [channel_id], expanding @@VAR@@ placeholders from env."""
-    path = Path(path) if path else (Path(__file__).resolve().parent.parent / ROUTES_FILE)
-    try:
-        with path.open("rb") as fh:
-            data = tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        sys.exit(f"cannot read profile routes from {path}: {exc}")
-    routes = (
-        data.get("config_extra", {})
-        .get("gateway", {})
-        .get("profile_routes", {})
-    )
+def load_routes(env, path=None, drop=None):
+    """profile -> [(route_name, channel_id)], expanding @@VAR@@ placeholders.
+
+    Sources, merged: the builtin default profile's routes table (for any
+    route the stack repo still declares) and, for every profile package
+    under the drop dir, its profile.toml [discord] block — exactly what
+    the boot renderer turns into a routing entry (key ext_<profile>). A
+    missing file or drop dir is simply absent (nothing to report).
+    """
     owners, unset = {}, []
-    for name, route in routes.items():
-        chat_id, profile = route.get("chat_id"), route.get("profile")
-        if not chat_id or not profile:
-            continue
-        match = PLACEHOLDER_RE.fullmatch(str(chat_id))
-        if match:
-            chat_id = env.get(match.group(1), "")
-            if not chat_id:
-                unset.append((name, match.group(1)))
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / ROUTES_FILE
+        drop = drop or DROP_DIR
+    path = Path(path)
+    if path.is_file():
+        try:
+            with path.open("rb") as fh:
+                data = tomllib.load(fh)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            sys.exit(f"cannot read profile routes from {path}: {exc}")
+        routes = (
+            data.get("config_extra", {})
+            .get("gateway", {})
+            .get("profile_routes", {})
+        )
+        for name, route in routes.items():
+            chat_id, profile = route.get("chat_id"), route.get("profile")
+            if not chat_id or not profile:
                 continue
-        owners.setdefault(profile, []).append((name, str(chat_id)))
+            chat_id, missing = _expand(chat_id, env)
+            if missing:
+                unset.append((name, missing))
+                continue
+            owners.setdefault(profile, []).append((name, str(chat_id)))
+    if drop and Path(drop).is_dir():
+        for pkg in sorted(Path(drop).iterdir()):
+            profiles_dir = pkg / "profiles"
+            if not profiles_dir.is_dir():
+                continue
+            for pdir in sorted(profiles_dir.iterdir()):
+                tpath = pdir / "profile.toml"
+                if not tpath.is_file():
+                    continue
+                try:
+                    with open(tpath, "rb") as fh:
+                        data = tomllib.load(fh)
+                except (OSError, tomllib.TOMLDecodeError) as exc:
+                    print(f"  ! cannot parse {tpath}: {exc}")
+                    continue
+                disc = data.get("discord") or {}
+                channel = disc.get("channel")
+                if not channel:
+                    continue  # no [discord] table — nothing to route
+                name = f"ext_{pdir.name}"  # the boot renderer's route key
+                channel, missing = _expand(channel, env)
+                if missing:
+                    unset.append((name, missing))
+                    continue
+                owners.setdefault(pdir.name, []).append((name, str(channel)))
     return owners, unset
+
+
+def _expand(value, env):
+    """Resolve one channel value; (id, None) or (None, VARNAME) if unset."""
+    match = PLACEHOLDER_RE.fullmatch(str(value))
+    if match:
+        resolved = env.get(match.group(1), "")
+        if not resolved:
+            return None, match.group(1)
+        return resolved, None
+    return value, None
 
 
 def bot_tokens(env):
@@ -278,10 +348,15 @@ def main(argv=None):
         action="store_true",
         help="also create a real thread in each bot's own routed channel",
     )
+    parser.add_argument(
+        "--drop", default=DROP_DIR,
+        help="profile-source path to scan for package [discord] blocks "
+        f"(default {DROP_DIR})",
+    )
     args = parser.parse_args(argv)
 
     env = read_env()
-    owners, unset = load_routes(env)
+    owners, unset = load_routes(env, drop=args.drop)
     bots = bot_tokens(env)
     if not bots:
         sys.exit(f"no DISCORD_BOT_TOKEN (or PROFILE_*_DISCORD_BOT_TOKEN) in {ENV_FILE}")
@@ -297,7 +372,8 @@ def main(argv=None):
         if extra not in [c[0] for c in channels]:
             channels.append((extra, "(--channel)", None))
     if not channels:
-        sys.exit(f"no channels to check — add routes to {ROUTES_FILE} or pass --channel")
+        sys.exit(f"no channels to check — add a [discord] block to a "
+                 f"package profile, routes to {ROUTES_FILE}, or pass --channel")
 
     print("=" * 72)
     print("Discord thread doctor — can each bot create a thread?")

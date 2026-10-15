@@ -68,17 +68,25 @@ class DeployError(RuntimeError):
     """A push/read/probe failed loudly; the caller decides the fallback."""
 
 
-def resolve(host=None, group=None, env_dir=None):
+def resolve(host=None, group=None, env_dir=None, env_file=None):
     """(host, group, env_file) from flags > env vars > defaults.
 
-    env_file is <env_dir>/hermes-main.env — the file both credential
-    scripts merge into. host is required for anything remote; an empty
-    string means "no SSH destination configured" and callers fall back.
+    env_file defaults to hermes-main.env — the STACK environment file.
+    External profile packages carry their credentials in their OWN env
+    file instead (<env-dir>/profiles.d/<package>/package.env), and the
+    credential scripts target it with --env-file (or
+    $HERMES_DEPLOY_ENV_FILE) — the var-name split being: a var read by a
+    cron SCRIPT must ride the stack env (container env), while package
+    credentials and channel ids belong to the package's file. host is
+    required for anything remote; an empty string means "no SSH
+    destination configured" and callers fall back.
     """
     host = (host or os.environ.get("HERMES_SSH_HOST", "")).strip()
     group = group or os.environ.get("HERMES_HOST_GROUP", DEFAULT_GROUP)
     env_dir = env_dir or os.environ.get("HERMES_DEPLOY_ENV_DIR", DEFAULT_ENV_DIR)
-    return host, group, os.path.join(env_dir, "hermes-main.env")
+    env_file = env_file or os.environ.get("HERMES_DEPLOY_ENV_FILE", "") \
+        or "hermes-main.env"
+    return host, group, os.path.join(env_dir, env_file)
 
 
 def check_host(host):
@@ -296,10 +304,10 @@ def main():
     for src, dst in manifest.get("pushes", []):
         install(os.path.join(here, src), dst, group)
         log.append("installed " + dst)
-    if manifest.get("env_lines"):
-        path = os.path.join(here, manifest["env_lines"])
+
+    def merge_env_lines(env_path, lines_name):
+        path = os.path.join(here, lines_name)
         owned = [l.rstrip("\n") for l in open(path, encoding="utf-8") if l.strip()]
-        env_path = manifest["env_path"]
         with open(env_path, encoding="utf-8") as fh:
             new = merge_env_text(fh.read(), owned)
         tmp = env_path + ".hermes-deploy.tmp"
@@ -322,6 +330,15 @@ def main():
         if missing:
             sys.exit("merge verify failed, missing: " + ", ".join(missing))
         log.append("merged %s into %s, verified" % (len(owned), env_path))
+
+    # Legacy single-file field, then the multi-file form (external profile
+    # packages carry their credentials in their own env file, while TEAM_*
+    # lines must reach the STACK env file — hostdeploy.write_fallback
+    # emits both).
+    if manifest.get("env_lines"):
+        merge_env_lines(manifest["env_path"], manifest["env_lines"])
+    for entry in manifest.get("env_files") or []:
+        merge_env_lines(entry["path"], entry["lines"])
     print("hermes-deploy: " + ("; ".join(log) if log else "nothing to do"))
 
 
@@ -330,12 +347,18 @@ if __name__ == "__main__":
 '''
 
 
-def write_fallback(outdir, host, group, env_file, pem_pushes=(), env_lines=None):
+def write_fallback(outdir, host, group, env_file, pem_pushes=(), env_lines=None,
+                   env_files=None):
     """Stage artifacts + generate install-remote.sh; returns (script, files).
 
     pem_pushes: [(local_path, remote_target), ...] — usually the PEMs.
     env_lines:  the exact env-file lines to merge (a secrets file, so it
                 is written 0600 and scp'd -p). None = env untouched.
+                Legacy single-file form: merged into `env_file`.
+    env_files:  {remote_path: lines_text} — the multi-file form for the
+                same work: a package's own env file AND the stack env file
+                (TEAM_* script-read vars reach only container env) in one
+                installer. Takes precedence over env_lines.
     host:       the ssh destination, or None when the caller had none —
                 the generated script then demands $HERMES_SSH_HOST at run
                 time instead of baking a value that was never given.
@@ -343,8 +366,18 @@ def write_fallback(outdir, host, group, env_file, pem_pushes=(), env_lines=None)
     os.makedirs(outdir, exist_ok=True)
     workdir = f"/tmp/.hermes-deploy-{secrets.token_hex(6)}"
     files = []
+    manifest_env_files = None
+    if env_files:
+        manifest_env_files = []
+        for idx, (dest_path, lines_text) in enumerate(env_files.items()):
+            name = f"env-lines-{idx}.txt"
+            with open(os.path.join(outdir, name), "w", encoding="utf-8") as fh:
+                fh.write(lines_text if lines_text.endswith("\n") else lines_text + "\n")
+            os.chmod(os.path.join(outdir, name), 0o600)
+            files.append(name)
+            manifest_env_files.append({"path": dest_path, "lines": name})
     env_lines_name = None
-    if env_lines:
+    if env_lines and not env_files:
         env_lines_name = "env-lines.txt"
         path = os.path.join(outdir, env_lines_name)
         with open(path, "w", encoding="utf-8") as fh:
@@ -355,12 +388,14 @@ def write_fallback(outdir, host, group, env_file, pem_pushes=(), env_lines=None)
     pushes = [[os.path.basename(src), dst] for src, dst in pem_pushes]
     files.extend(src for src, _ in pushes)
     manifest_path = os.path.join(outdir, "manifest.json")
+    manifest = {"group": group, "pushes": pushes}
+    if env_files:
+        manifest["env_files"] = manifest_env_files
+    else:
+        manifest["env_path"] = env_file
+        manifest["env_lines"] = env_lines_name
     with open(manifest_path, "w", encoding="utf-8") as fh:
-        json.dump(
-            {"group": group, "env_path": env_file, "env_lines": env_lines_name,
-             "pushes": pushes},
-            fh, indent=2,
-        )
+        json.dump(manifest, fh, indent=2)
         fh.write("\n")
 
     batch_path = os.path.join(outdir, "batch-deploy.py")

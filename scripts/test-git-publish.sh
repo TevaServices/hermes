@@ -378,11 +378,11 @@ contains "merge commit: says why" "merge commit" "$out"
 check "nothing was published by any refusal" "$before" \
     "$(git -C "$tmp/origin.git" rev-parse refs/heads/topic)"
 
-# ===========================================================================
-# 4. The skills must route commits through the helper, never `git push`
-# ===========================================================================
-for skill in "$here/config/profiles/developer/skills/team-developer/SKILL.md" \
-             "$here/config/skills/team-conventions/SKILL.md"; do
+# The skills must route commits through the helper, never `git push`.
+# Scans every STACK-WIDE skill (config/skills/) — per-profile skills ship
+# with their packages now, and each package repo runs the same scan over
+# its own skills (the team package's tests do).
+for skill in "$here"/config/skills/*/SKILL.md; do
     [ -f "$skill" ] || continue
     name=$(basename "$(dirname "$skill")")
     # Every mention must be a corrective one ("never `git push`", "not
@@ -390,10 +390,14 @@ for skill in "$here/config/profiles/developer/skills/team-developer/SKILL.md" \
     mentions=$(grep -c 'git push' "$skill")
     corrective=$(grep -cE '(never|Never|not|NOT).{0,20}`git push' "$skill")
     check "$name: every 'git push' mention is corrective" "$mentions" "$corrective"
-    if grep -q 'git-publish.py' "$skill"; then
-        ok "$name: names git-publish.py"
-    else
-        bad "$name: names git-publish.py"
+    # The helper is named where the push rule is stated — a skill with no
+    # push mention has no reason to carry the pointer.
+    if [ "$mentions" -gt 0 ]; then
+        if grep -q 'git-publish.py' "$skill"; then
+            ok "$name: names git-publish.py"
+        else
+            bad "$name: names git-publish.py"
+        fi
     fi
 done
 

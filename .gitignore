@@ -8,6 +8,18 @@ build/
 # Per-machine mise overrides (mise set ...) — may contain local paths
 mise.local.toml
 
+# The .claude/ skills/worktrees are local-tool state, not repo content
+# (the project skill lives at .claude/skills/, tracked; local worktree
+# copies are not).
+.claude/worktrees/
+
+# Profile package dead drops — the local stand-in for the host's
+# <env-dir>/profiles.d/. A package's CONTENT belongs to its own repo
+# (e.g. github.com/TevaServices/hermes-software-development); whatever
+# gets provisioned here for local runs is that repo's checkout copy, and
+# package.env carries real credentials.
+secrets/profiles.d/
+
 # Real secrets — only *.env.example files are committed. bootstrap-host.sh
 # copies the templates to /etc/hermes on the host.
 secrets/*.env

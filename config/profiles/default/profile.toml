@@ -90,34 +90,16 @@ voice = "en-US-AvaMultilingualNeural"
 enabled = true
 cheap_model = "cheap"
 
-# --- Agile SaaS team routing -----------------------------------------------
-# The team profiles (planner / developer / reviewer) live under
-# config/profiles/<name>/ and share this container + the multiplexed
-# Discord connection. Each team bot has its own Discord token (resolved
-# from its own .env via entrypoint.sh PROFILE_<NAME>_* mapping); the
-# routes below send each team channel's traffic to its profile. Channel
-# IDs are filled in after the bots join the server (routes keyed on
-# chat_id are most-specific; thread_id outranks chat_id).
-#
-# To discover IDs: Discord → Advanced settings → Developer Mode, then
-# right-click a channel → "Copy Channel ID". Unmatched traffic keeps
-# the historical default-profile behavior (this main agent).
-#
-# NOTE: a team profile with platforms=["discord"] but NO token of its
-# own (PROFILE_<NAME>_DISCORD_BOT_TOKEN empty) is skipped by the
-# multiplexer with a warning — the team stays dormant until its token
-# lands. That is the intended staged-rollout behavior.
-#
-# To enable routing, fill in the channel IDs (Developer Mode →
-# right-click channel → Copy Channel ID). Only routes for channels that
-# actually exist belong here — a route naming a channel the bot cannot
-# see simply never matches. Channels with no route (#hermes,
-# #hermes-home) keep the default agent's behavior.
-[config_extra.gateway.profile_routes]
-planning_channel = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_PLANNER@@", profile = "planner" }
-dev_channel      = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_DEVELOPER@@", profile = "developer" }
-reviews_channel  = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_REVIEWER@@", profile = "reviewer" }
-releases_channel = { platform = "discord", chat_id = "@@DISCORD_CHANNEL_RELEASE@@", profile = "release" }
+# --- Agile SaaS team routing ------------------------------------------------
+# The team profiles ship as EXTERNAL packages on the stack's profile-source
+# path (/etc/hermes/profiles.d/<package>/) and are rendered at container
+# boot — this repo carries no knowledge of them. Their Discord ROUTES are
+# generated too: each package profile declares a [discord] block in its own
+# profile.toml, and the boot renderer (docker/hermes/render-drop-profiles.py
+# via render.py) writes the routing entries into THIS profile's
+# gateway.profile_routes (keys namespaced ext_<profile>) plus each team
+# profile's own channel fence. Unmatched traffic keeps the historical
+# default-profile behavior (this main agent).
 
 # --- Discord: the main bot's own channels (no @mention needed) -------------
 # #hermes + #hermes-home are the UNROUTED channels (the team channels are

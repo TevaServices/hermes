@@ -4,7 +4,10 @@ A GitOps-managed [Hermes agent](https://github.com/NousResearch/hermes-agent)
 stack: one container (a thin build over the official
 `nousresearch/hermes-agent` image) hosting ALL profiles under its s6
 supervision, its configuration rendered at image-build time from small
-declarative files (`config/` → `render.py` → `/overlay/<profile>`), plus
+declarative files (`config/` → `render.py` → `/overlay/<profile>`) — with
+EXTERNAL profile packages as **dead drops** on the host's
+`profiles.d/` path, rendered at boot by the same renderer (§"External
+profile packages"; the hermes repo carries no knowledge of them) — plus
 [Honcho](https://github.com/plastic-labs/honcho) (memory),
 [Firecrawl](https://docs.firecrawl.dev/contributing/self-host) (web), and a
 [LiteLLM](https://docs.litellm.ai/) proxy (the stack's single LLM gateway).
@@ -84,6 +87,82 @@ and always verify `hermes mcp test honcho` + `hermes mcp test firecrawl`
 against the new image — Hermes' MCP SDK pin is where HTTP-transport breakage
 has landed before (refs from v2026.8.31 on natively support mcp 2.x; the old
 `mcp<2` pin was dropped at that bump).
+
+## External profile packages (the dead drop)
+
+Profiles may live OUTSIDE this repo — owned and shipped by other repos.
+The mechanism is a DISK convention with zero registry, so the hermes
+stack carries no knowledge of any external profile (no names, no
+channels, no tokens, no cron entries — nothing in `config/`, `compose/`
+or `render.py` names one):
+
+- **The drop dir.** `<env-dir>/profiles.d/<package>/` on the docker host
+  (the env dir is mounted read-only at `/run/hermes-pem`, so the whole
+  convention needs NO compose change). Local dev: `<local
+  HERMES_ENV_DIR>/profiles.d/<package>/` (gitignored here).
+- **A package is**: `package.toml` (name == directory name),
+  `profiles/<name>/profile.toml` (+ `SOUL.md`, `skills/`, optional
+  `[discord]` table and `[env]` declarations), optional
+  `cron.toml` + `scripts/` (its own job lanes; `shared_scripts` names
+  scripts its jobs exec), and `package.env` (raw `KEY=VALUE`; the
+  `PROFILE_<NAME>_*` lines + every `@@VAR@@` it declares; provisioning
+  template `package.env.example`). See
+  `TevaServices/hermes-software-development` for the live example (the
+  software-team package: planner/developer/reviewer/release).
+- **Consumed at container BOOT, not build.** The image bakes the stack
+  config sources at `/opt/hermes-stack-config/` +
+  `docker/hermes/render-drop-profiles.py`. The entrypoint: (a) loads
+  every `package.env` into the boot environment (BEFORE placeholder
+  expansion and the `PROFILE_<NAME>_*` → bare-name mapping, so packages'
+  credentials and channel ids follow the exact paths the stack env file
+  used to — a package value OVERRIDES a same-named inherited var,
+  logged); (b) renders each package via the same `render.py` into
+  `/overlay/profiles/<name>/` (full validation: tiers, integrations,
+  cron targets, aux windows, placeholder ownership); (c) re-renders the
+  DEFAULT overlay's `gateway.profile_routes` from the packages'
+  `[discord]` blocks — keys namespaced `ext_<profile>`, replaced as a
+  set on every boot, hand-written routes untouched. Then the stock boot
+  applies: overlay merge, expansion, cron reconcile, provisioning.
+- **Lifecycle = provision + restart** (`provision.sh` in each package
+  repo). No hermes-repo edit, no rebuild, for add/change/rotate/remove.
+  A vanished package: its overlay is pruned (drop-marked only — baked
+  overlays are never touched) and `bootstrap-profiles.sh` flips the
+  orphaned profile home's `gateway_state` to `stopped` (no ghost
+  gateway). A BROKEN package: fails LOUDLY at the boot log and is
+  skipped — the OTHER packages and the whole stack boot, and the failed
+  package keeps its last-good overlay+routes on disk (fix-and-restart,
+  never vanish). Per-package failure is per-package; one bad package
+  cannot take the drop down.
+- **Credential placement (the split that keeps everything reachable)**:
+  package-owned secrets and ids ride `package.env` (loaded at boot).
+  Script-read vars (`TEAM_OWNER`, `TEAM_ORG_DEV_BOT_<ORG>`,
+  `TEAM_RELEASE_*`) ride the STACK environment — `hermes-main.env` /
+  compose `environment:` — because a cron `no_agent` script child sees
+  only container env (§Secrets). PEMs stay in the env dir root named
+  per profile (`github-app-<profile>.pem`) — discovered for every
+  rendered profile, package or not. The credential scripts take
+  `--env-file profiles.d/<package>/package.env` to write INTO the
+  package's file (merge + verified read-back; `TEAM_*` writes are
+  routed to the stack file and a script's default list of profile
+  names is gone — pass names explicitly).
+- **Validation**: `mise run validate-drop` (local drop dir) or
+  `python docker/hermes/render-drop-profiles.py --validate --drop-dir
+  <profiles.d>` — check a package BEFORE provisioning it (the boot path
+  never refuses to continue on a broken package by design, so a broken
+  one surfaces only in the boot log unless validated ahead). The
+  offline render tests (`scripts/test-render.py`) pin the render side
+  of the contract; a package repo pins its own side.
+
+The first migration (2026-10-15): the four team profiles LEFT
+`config/profiles/` and became the `team` package — their queue lanes
+(`team-queue.sh`/`review-queue.sh`/`release-queue.sh`) are package-shipped
+too (they implement the team's GitHub-workflow semantics); the generic
+primitives (`team-session.py` session gate, `team-thread.sh` work-item
+threads) stay stack-baked since `SOUL_OPERATING.md` and the stack-wide
+skills reference them for ANY profile. Stack-wide skills
+(`team-conventions`, `team-github-token`) stay here by choice — they are
+the PROTOCOL the stack itself enforces (the gh shim's label gates), not
+profile content.
 
 ## Secrets
 
@@ -212,10 +291,15 @@ through a shell history or chat transcript.
   gate only inspects registry env vars, never config.yaml's
   `custom_providers`, and exits with setup guidance without them even though
   the gateway resolves the provider fine), `DISCORD_BOT_TOKEN` +
-  `DISCORD_ALLOWED_USERS` (gateway), GitHub App vars (below), and
-  `PROFILE_<NAME>_*` lines for the team profiles. **It does NOT carry
+  `DISCORD_ALLOWED_USERS` (gateway), GitHub App vars (below), and the
+  script-read `TEAM_*` family. **It does NOT carry
   `AUXILIARY_*` model pins, and must not grow them back** — see §"Auxiliary
   side tasks" for the four that were dead weight there until 2026-10-04.
+  **It no longer carries any profile package's credentials either**: those
+  live in the package's own `profiles.d/<package>/package.env` (the
+  `PROFILE_<NAME>_*` lines + its `@@VAR@@` ids) — see §"External profile
+  packages". A stale same-named line here is OVERRIDDEN by the package's
+  value at boot, with the override logged; delete it.
 - **`hermes-main.env` is the LAUNCH profile's env, and Hermes deletes its
   non-global names from every other profile's cron child.** The child env is
   built as `strip_launch_profile_env(build_subprocess_env(...))`
@@ -733,15 +817,20 @@ last only until the next container restart.
   `history_backfill[_limit]` — env-bridged without the `_skip_env_bridge`
   guard #72348 added for the channel/allow gates); the nested key reaches
   `PlatformConfig.extra`, which `_discord_require_mention` reads FIRST.
-- Each team profile sets, in that nested block, `allowed_channels =
-  ["<its channel id>"]` + `require_mention = false` — its bot answers every
-  message in its own channel with no @mention, and nowhere else. Release →
-  `#releases` (`DISCORD_CHANNEL_RELEASE`); the default profile → `#hermes` +
-  `#hermes-home` (the unrouted channels; ids from `DISCORD_CHANNEL_MAIN`
-  and `DISCORD_HOME_CHANNEL`). `allowed_channels` is load-bearing
-  (require_mention is profile-wide) and does NOT widen authorization —
-  `DISCORD_ALLOWED_USERS` stays the gate; `_is_allowed_user` falls back to
-  channel-scoped access only when no user/role allowlist exists.
+- Each PACKAGE profile's fence is GENERATED, not hand-written: its
+  `[discord]` block (`channel` = a `@@VAR@@` resolved from the package's
+  package.env, `require_mention = false`) is rendered by the boot
+  renderer into the nested `platforms.discord.extra` block
+  (`allowed_channels` + `require_mention`) AND a routing entry
+  (`ext_<profile>`) in the default agent's `gateway.profile_routes` — its
+  bot answers every message in its own channel with no @mention, and
+  nowhere else. The default profile keeps the hand-written nested form →
+  `#hermes` + `#hermes-home` (the unrouted channels; ids from
+  `DISCORD_CHANNEL_MAIN` and `DISCORD_HOME_CHANNEL`).
+  `allowed_channels` is load-bearing (require_mention is profile-wide)
+  and does NOT widen authorization — `DISCORD_ALLOWED_USERS` stays the
+  gate; `_is_allowed_user` falls back to channel-scoped access only when
+  no user/role allowlist exists.
 - Deliberately NOT `free_response_channels`: that also makes upstream skip
   auto-threading (`skip_thread = ... or is_free_channel`), killing the
   thread-per-request the team workflow relies on. `require_mention = false`
@@ -1276,7 +1365,9 @@ in fresh context or watch something over time).
 
 Skills ship in two tiers — **stack-wide** (`config/skills/`, merged into
 EVERY rendered profile by render.py) and **per-profile**
-(`config/profiles/<name>/skills/`, same-named skills win). Currently:
+(`config/profiles/<name>/skills/` for builtin profiles; a package's
+`profiles/<name>/skills/` for external packages — same-named skills win
+over the stack-wide ones, rendered the same way either way). Currently:
 `hermes-stack-ops`, this stack's operating manual for the agents (config is
 GitOps-rendered, never hand-edit `/opt/data/config.yaml`; LiteLLM is the
 only LLM path; GitHub App usage; central git repos + per-session worktrees;
@@ -1418,7 +1509,10 @@ here because they govern every session: every profile has its OWN bot
 identity in GitHub and Discord and must never share or impersonate
 another's; and PEMs and bot tokens are secret — never echoed, committed, or
 routed through a shell history or chat transcript (the ids live as
-`PROFILE_<NAME>_*` in `/etc/hermes/hermes-main.env`).
+`PROFILE_<NAME>_*` in the profile's env file — the stack's own profile in
+`/etc/hermes/hermes-main.env`, an external package's in its
+`profiles.d/<package>/package.env`; the credential scripts take
+`--env-file` to target the right one).
 
 ### The planner decides; it does not enumerate
 
@@ -1432,8 +1526,10 @@ third silently reversing `systemctl enable --now` → `enable` with no
 migration story — each revision re-decided, so the body was a snapshot of
 the last draft, not the record the developer was relying on.)
 
-Three changes hold, all in the planner's own files
-(`config/profiles/planner/SOUL.md`, `.../team-planner/SKILL.md`):
+Three changes hold, all in the planner's own files (in the team package
+repo: its `profiles/planner/SOUL.md` and `profiles/planner/skills/
+team-planner/SKILL.md` — the profile moved there with the rest of the
+package; the rule is unchanged):
 
 - **`## Decisions` is a required body section** — a table of every decision
   the work depends on, with choice, why, and *who* decided (planner or
@@ -1550,9 +1646,10 @@ gates' exact behavior):
   `TEAM_OWNER_ORGS` empty: compose injects the stack env into every process,
   so an ambient value would leak in and add a credential-less owner.
 
-`team-queue.sh` (baked at `/usr/local/bin/team-queue.sh`) wraps the
-developer's self-pull **with a loud failure mode** — an empty search and a
-broken search are indistinguishable downstream. Exit codes are the contract:
+`team-queue.sh` (shipped with the team package, seeded into the profile's
+scripts dir at boot) wraps the developer's self-pull **with a loud failure
+mode** — an empty search and a broken search are indistinguishable
+downstream. Exit codes are the contract:
 `0` healthy (work or a genuine `QUEUE EMPTY`), `2` query failed, `3` blind
 search (token or scope), `4` nothing carries the `hermes-team` topic, `5` an
 onboarded repo is missing the routing label. **2–5 are incidents to surface,
@@ -1574,7 +1671,8 @@ working queue) — **no bot login appears as a `:-` default anywhere in the
 script**, enforced by the test suite. The widening fallback remains only for
 a *declared* filter going stale.
 
-**The release lane (`release-queue.sh`, `--kind releases`)** polls
+**The release lane (`release-queue.sh`, `--kind releases`)** — a package
+script (seeded beside `team-queue.sh`) — polls
 `review/approved`, but **`gh search prs --review approved` is NOT the human
 gate** — a GitHub App's approval sets review state `APPROVED` too, and the
 reviewer bot approves before the human looks (observed: bot APPROVED
@@ -1726,7 +1824,11 @@ it survives until the next boot, then the reconciler overwrites it.
   delivered verbatim and **empty stdout is silent** — no message, no agent
   turn, no tokens; the 5-minute poll is free, the agent wakes only when
   there is work. Incidents print once and are deduped via a state file — a
-  persistent fault wakes the team once instead of every tick.
+  persistent fault wakes the team once instead of every tick. (The
+  self-pull lanes themselves now belong to the team package's cron.toml —
+  this file holds only the stack's housekeeping; a package's jobs render
+  through the same reconciler with the same rules, scripts seeded from the
+  package's `scripts/` beside the image-baked helpers.)
 - **`deliver` must NAME the profile (`bot-chat:<name>`).** Bare `bot-chat`
   ("the job's own profile") spawns `hermes chat` with no profile argument
   inheriting the firing scheduler's `HERMES_HOME` — and under
@@ -1752,13 +1854,18 @@ it survives until the next boot, then the reconciler overwrites it.
 
 Local runs use **mise** (not Makefile): `mise run up`, `mise run logs`,
 `mise run chat`, `mise run down`, `mise run validate`,
-`mise run check-updates`. `mise.toml [env]` holds the version pins and
-`HERMES_ENV_DIR`; per-machine overrides go in gitignored `mise.local.toml`.
-After editing anything in `config/`, open a PR — the Docker build runs
-render.py itself, so there is NO committed `build/` output to keep in sync.
-Preview a render without building: `mise run render` (writes ./build/,
-gitignored). Note: local compose runs get a project named after the parent
-dir, not `hermes` — the Komodo deployment on the host is the real one.
+`mise run validate-drop`, `mise run check-updates`. `mise.toml [env]` holds
+the version pins and `HERMES_ENV_DIR`; per-machine overrides go in
+gitignored `mise.local.toml`. After editing anything in `config/`, open a
+PR — the Docker build runs render.py itself, so there is NO committed
+`build/` output to keep in sync. Preview a render without building:
+`mise run render` (writes ./build/, gitignored). Profile packages are NOT
+part of a local render — a package is consumed from
+`$HERMES_ENV_DIR/profiles.d/` at boot; provision one locally with its
+repo's provisioner (e.g. `provision.sh --local`) and validate with
+`mise run validate-drop`. Note: local compose runs get a project named
+after the parent dir, not `hermes` — the Komodo deployment on the host is
+the real one.
 
 A gateway-config change and the env edit it implies are two separate acts
 (`/etc/hermes/*.env` is operator-owned, outside the repo's atomicity): a

@@ -86,8 +86,9 @@ services:
       NETLOCK_API_TOKEN_FILE: /opt/data/home/netlock-api-token
       # Where the release agent keeps its per-repo deployment state. Explicit
       # because a cron child's HERMES_HOME is not guaranteed to be the profile
-      # home; read by release-queue.sh, so it lives in the stack environment
-      # rather than the launch profile's env file (see AGENTS.md §Secrets).
+      # home; read by the release package's queue script — package scripts
+      # see only container env, so this is a stack-environment var, not a
+      # package.env var (see AGENTS.md §Secrets + §External profile packages).
       TEAM_RELEASE_STATE_DIR: /opt/data/profiles/release/cache/release
       # Headless Chromium CDP sidecar for the browser tools — see
       # docker/hermes/s6-rc.d/chromium-cdp/ (binds 127.0.0.1 only; the
