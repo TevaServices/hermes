@@ -52,6 +52,7 @@ import argparse
 import json
 import shutil
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -159,9 +160,16 @@ def main() -> int:
         importlib.reload(render)
 
     drop_root = Path(args.drop_dir)
-    overlay_root = Path(args.overlay_root)
-    profiles_overlay = overlay_root / "profiles"
     validate_only = args.validate
+    _temp_overlay = None
+    if validate_only:
+        # Validate mode exercises the FULL render path, but into a
+        # throwaway overlay — nothing on disk is touched.
+        _temp_overlay = tempfile.mkdtemp(prefix="render-drop-validate-")
+        overlay_root = Path(_temp_overlay)
+    else:
+        overlay_root = Path(args.overlay_root)
+    profiles_overlay = overlay_root / "profiles"
 
     models = render.load_toml(render.CONFIG / "models.toml")["models"]
     providers = render.load_toml(render.CONFIG / "providers.toml")["providers"]
@@ -310,39 +318,41 @@ def main() -> int:
     default_dir = render.CONFIG / "profiles" / "default"
     if failures:
         pass
-    elif routes and overlay_root.joinpath("default").is_dir() \
-            and default_dir.joinpath("profile.toml").is_file():
+    elif routes and default_dir.joinpath("profile.toml").is_file():
         try:
             profile = render.load_toml(default_dir / "profile.toml")
-            # Preserve the baked cron.json contents: render_profile
-            # regenerates the file from its `cron_jobs`/`cron_shared`
-            # inputs, and the BUILD-time jobs are the truth for the builtin
-            # profile (a package cannot own cron for 'default').
-            cron_doc = {"jobs": [], "shared_scripts": []}
-            baked_cron = overlay_root / "default" / "cron.json"
-            if baked_cron.is_file():
-                cron_doc = json.loads(baked_cron.read_text())
+            # The builtin cron jobs are the truth for the default profile
+            # (a package cannot own cron for 'default'); the spec's
+            # declaration is validated here against the baked script dir —
+            # the same content the image build rendered into cron.json.
+            all_names = set(
+                d.name for d in (render.CONFIG / "profiles").iterdir()
+                if d.is_dir() and (d / "profile.toml").is_file()
+            ) | set(taken)
+            cron_by, cron_shared = render.load_cron_jobs(
+                render.CRON_SPEC, all_names, [render.CRON_SCRIPT_DIR],
+            )
             render.set_build_root(str(overlay_root))
             render.render_profile(
                 "default", profile, default_dir,
                 models, providers, integrations,
-                cron_jobs=cron_doc.get("jobs", []),
-                cron_shared=cron_doc.get("shared_scripts") or [],
+                cron_jobs=cron_by.get("default", []),
+                cron_shared=cron_shared,
                 discord_routes=routes,
                 extra_placeholders=extra_placeholders,
             )
             default_ok = True
             log(f"default overlay re-rendered with {len(routes)} generated "
                 f"route(s)")
-        except render.ConfigError as exc:
+        except (render.ConfigError, tomllib.TOMLDecodeError) as exc:
             err(f"DEFAULT re-render FAILED: {exc} — generated routes are "
                 f"stale/absent; package channels still fence their own bots")
             failures.append("default")
-        except (OSError, json.JSONDecodeError) as exc:
+        except OSError as exc:
             err(f"DEFAULT re-render FAILED: {exc}")
             failures.append("default")
     elif routes:
-        err("no baked default overlay to host generated discord routes — "
+        err("no builtin default profile to host generated discord routes — "
             "package channels will route nowhere until it exists")
 
     # ---- prune: package overlays whose source left the drop --------------
@@ -371,6 +381,8 @@ def main() -> int:
         log(f"drop rendered clean: {rendered} package profile(s), "
             f"{len(routes)} route(s)"
             + (", default re-rendered" if default_ok else ""))
+    if _temp_overlay is not None:
+        shutil.rmtree(_temp_overlay, ignore_errors=True)
     if validate_only:
         return 1 if failures else 0
     # Never fatal at boot: a broken package must not hold the stack's boot
