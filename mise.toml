@@ -73,12 +73,22 @@ run = "python render.py"
 description = "Validate config without writing build output"
 run = "python render.py --check"
 
+# Validate a dead-drop profile package tree WITHOUT writing anything —
+# run this after provisioning locally (or with --drop-dir pointing at the
+# host's profiles.d) so a package with no route to a tier, a broken
+# [discord] block or an unknown cron script fails HERE rather than at boot.
+[tasks.validate-drop]
+description = "Validate profile packages on the local profile-source path (secrets/profiles.d) against the stack config"
+run = 'python docker/hermes/render-drop-profiles.py --validate --drop-dir "$HERMES_ENV_DIR/profiles.d"'
+
 # Offline tests — no Docker, no network. Separate from `validate` on
 # purpose: that task gates the config render, and a routing bug in a shell
-# helper must not be able to block it (or vice versa).
+# helper must not be able to block it (or vice versa). (The software-team
+# package's protocol tests live in ITS repo: tests/test-team-labels.sh —
+# the stack repo no longer knows those profiles.)
 [tasks.test]
-description = "Run the repo's offline tests (gh shim owner routing, team label protocol, verified publish, git repo helper, git hooks, claude wrapper argv, entrypoint secret copy, ssh secret push, discord doctor routes, firecrawl guard, aux lane rendering)"
-run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-team-labels.sh", "sh scripts/test-git-publish.sh", "sh scripts/test-git-repo.sh", "sh scripts/test-git-hooks.sh", "sh scripts/test-claude-wrapper.sh", "sh scripts/test-entrypoint-secrets.sh", "sh scripts/test-hostdeploy.sh", "sh scripts/test-discord-thread-doctor.sh", "sh scripts/test-firecrawl-guard.sh", "python scripts/test-render.py"]
+description = "Run the repo's offline tests (gh shim owner routing, verified publish, git repo helper, git hooks, claude wrapper argv, entrypoint secret copy, ssh secret push, discord doctor routes, firecrawl guard, aux lane rendering)"
+run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-git-publish.sh", "sh scripts/test-git-repo.sh", "sh scripts/test-git-hooks.sh", "sh scripts/test-claude-wrapper.sh", "sh scripts/test-entrypoint-secrets.sh", "sh scripts/test-hostdeploy.sh", "sh scripts/test-discord-thread-doctor.sh", "sh scripts/test-firecrawl-guard.sh", "python scripts/test-render.py"]
 
 [tasks.net]
 description = "Create the shared external docker network (idempotent)"

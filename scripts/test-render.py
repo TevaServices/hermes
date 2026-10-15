@@ -201,12 +201,14 @@ check_raises("a profile override narrowing compression below the primary fails",
 check_raises("compression pointing at an undeclared model fails",
              with_aux({"compression": {"provider": "litellm",
                                        "model": "glm-5.3-raw-id"}}))
-# A 256K-window primary may run a 256K compression lane (the planner's case:
-# `smart` primary, `smarter` compression — wider is always allowed).
-planner_dir = render.CONFIG / "profiles" / "planner"
-planner = render.load_toml(planner_dir / "profile.toml")
+# A 256K-window primary may run a 256K compression lane (the case of a
+# package profile choosing the "smart" tier: `smart` primary, `smarter`
+# compression — wider is always allowed — but NOT narrower).
+smart_profile = {"model": "smart", "integrations": ["honcho"], "platforms": [],
+                 "config_extra": {}}
 try:
-    render.render_profile("auxprobe", planner, planner_dir, models, providers, integrations)
+    render.render_profile("auxprobe", smart_profile, DEFAULT_DIR,
+                          models, providers, integrations)
     ok("a 256K-window profile keeps the 1M compression lane")
 except render.ConfigError as exc:
     bad(f"a 256K-window profile keeps the 1M compression lane ({exc})")
@@ -262,9 +264,169 @@ check("bootstrap expands placeholders in honcho.json",
       "honcho.json" in expand_loop, True)
 
 # ---------------------------------------------------------------------------
+# 7. the [discord] table (the dead-drop package's channel declaration)
+# ---------------------------------------------------------------------------
+print("# 7. the [discord] table")
+
+
+def discord_profile(block_extra: dict) -> dict:
+    """A minimal profile carrying the given [discord] block."""
+    prof = {"model": "smart", "integrations": [], "platforms": ["discord"],
+            "config_extra": {}}
+    prof.update(block_extra)
+    return prof
+
+
+def discord_channel(prof, extra=None):
+    render.render_profile("discprobe", prof, DEFAULT_DIR, models, providers,
+                          integrations, extra_placeholders=extra)
+    text = Path(_scratch.name, "discprobe", "config.yaml").read_text()
+    return text
+
+# the fence is generated in the NESTED platforms.discord.extra form, with
+# the channel placeholder passed through verbatim (boot expansion owns it;
+# the placeholder must be DECLARED — here via extra_placeholders, in real
+# renders collected from the package sources)
+prof = discord_profile({"discord": {"channel": "@@DISCORD_CHANNEL_X@@",
+                                    "require_mention": False}})
+body = discord_channel(prof, {"DISCORD_CHANNEL_X"})
+check("the [discord] fence lands in the nested extra block",
+      "allowed_channels: [\"@@DISCORD_CHANNEL_X@@\"]" in body, True)
+check("require_mention rides the generated block", "require_mention: false" in body, True)
+
+# a hand-written extra block PLUS [discord] is two sources of truth
+conflicting = discord_profile({
+    "discord": {"channel": "@@DISCORD_CHANNEL_X@@"},
+    "config_extra": {"platforms": {"discord": {"extra":
+                          {"allowed_channels": ["1"]}}}},
+})
+check_raises("a hand-written fence conflicts with [discord]",
+             lambda: discord_channel(conflicting))
+check_raises("[discord] without the platform declared is an error",
+             lambda: discord_channel({
+                 "model": "smart", "integrations": [], "platforms": [],
+                 "config_extra": {},
+                 "discord": {"channel": "@@X@@"}}))
+check_raises("an unknown [discord] key is an error",
+             lambda: discord_channel({
+                 "model": "smart", "integrations": [], "platforms": ["discord"],
+                 "config_extra": {}, "discord": {"channel": "@@X@@",
+                                                 "channels": ["1"]}}))
+
+# the generated route entries: default profile re-render with routes
+def default_with(routes, extra=None):
+    render.render_profile("default", default_profile, DEFAULT_DIR, models,
+                          providers, integrations, discord_routes=routes,
+                          extra_placeholders=extra)
+    return Path(_scratch.name, "default", "config.yaml").read_text()
+
+# In a real boot render main()/the drop renderer collect the package
+# placeholders; the test passes them alongside.
+body = default_with(
+    [("planner", "@@DISCORD_CHANNEL_PLANNER@@")],
+    {"DISCORD_CHANNEL_PLANNER", "DISCORD_CHANNEL_DEVELOPER",
+     "DISCORD_CHANNEL_REVIEWER", "DISCORD_CHANNEL_RELEASE"})
+EXTRA = {"DISCORD_CHANNEL_PLANNER", "DISCORD_CHANNEL_DEVELOPER",
+         "DISCORD_CHANNEL_REVIEWER", "DISCORD_CHANNEL_RELEASE"}
+body = default_with([("planner", "@@DISCORD_CHANNEL_PLANNER@@")], EXTRA)
+check("routes land namespaced ext_<profile>",
+      "ext_planner:" in body and "profile: planner" in body, True)
+check("the route carries the chat_id placeholder",
+      "chat_id: \"@@DISCORD_CHANNEL_PLANNER@@\"" in body, True)
+# replace semantics: a vanished package must lose its route
+body = default_with([], EXTRA)
+check("ext_ routes are replaced as a set (empty set = none left)",
+      "ext_planner:" in body, False)
+# a hand-written route key using the renderer's namespace is an error
+def conflicting_key_profile():
+    prof = dict(default_profile)
+    prof["config_extra"] = dict(default_profile.get("config_extra") or {})
+    prof["config_extra"]["gateway"] = {
+        "profile_routes": {"ext_planner": {"platform": "discord",
+                                           "chat_id": "1",
+                                           "profile": "planner"}}}
+    return prof
+
+check_raises("a hand-written route key in the ext_ namespace is an error",
+             lambda: render.render_profile(
+                 "default", conflicting_key_profile(),
+                 DEFAULT_DIR, models, providers, integrations,
+                 discord_routes=[("planner", "@@V@@")]))
+# the default profile itself cannot declare [discord]
+def default_with_discord():
+    prof = dict(default_profile)
+    prof["discord"] = {"channel": "@@V@@"}
+    prof["platforms"] = list(default_profile.get("platforms") or []) + ["discord"]
+    return render.render_profile(
+        "default", prof, DEFAULT_DIR, models, providers, integrations)
+
+check_raises("the default profile cannot declare [discord]",
+             default_with_discord)
+
+# ---------------------------------------------------------------------------
+# 8. package-declared boot placeholders
+# ---------------------------------------------------------------------------
+print("# 8. package-declared placeholders")
+pkg_profile = discord_profile({"env": {"MY_TOOL_TOKEN": ""},
+                               "discord": {"channel": "@@MY_CHANNEL_ID@@"}})
+declared = render.collect_profile_placeholders(pkg_profile)
+check("a package's @@VAR@@ is collectable from its source",
+      "MY_CHANNEL_ID" in declared, True)
+# the render accepts the declared name beside the stack-owned set
+render.render_profile("discprobe", pkg_profile, DEFAULT_DIR, models,
+                      providers, integrations,
+                      extra_placeholders={"MY_CHANNEL_ID"})
+ok("a declared package placeholder renders (boot expander's job)")
+# undeclared -> the old typo guard
+check_raises("an undeclared @@VAR@@ remains a build error",
+             lambda: render.render_profile(
+                 "discprobe",
+                 discord_profile({"discord": {"channel": "@@UNDECLARED_XYZ@@"}}),
+                 DEFAULT_DIR, models, providers, integrations,
+                 extra_placeholders={"MY_CHANNEL_ID"}))
+
+# a package re-declaring a STACK-owned placeholder is an error
+check_raises("re-declaring a stack-owned placeholder fails",
+             lambda: render.render_profile(
+                 "discprobe",
+                 discord_profile({"discord": {"channel": "@@HONCHO_USER_PEER@@"}}),
+                 DEFAULT_DIR, models, providers, integrations,
+                 extra_placeholders={"HONCHO_USER_PEER"}))
+
+# ---------------------------------------------------------------------------
+# 9. the cron spec carries shared_scripts for package script seeding
+# ---------------------------------------------------------------------------
+print("# 9. cron spec shared_scripts")
+scratch = tempfile.mkdtemp(prefix="test-render-cron-")
+spec = Path(scratch, "cron.toml")
+spec.write_text('shared_scripts = ["sibling.sh", "baked.sh"]\n'
+                '[[jobs]]\nprofile = "p1"\nname = "j"\nschedule = "*/5 * * * *"\n'
+                'script = "baked.sh"\nno_agent = true\n')
+Path(scratch, "baked.sh").write_text("#!/bin/sh\n")
+Path(scratch, "sibling.sh").write_text("#!/bin/sh\n")
+jobs, shared = render.load_cron_jobs(spec, {"p1"}, [scratch])
+check("shared scripts pass through", sorted(shared) == ["baked.sh", "sibling.sh"], True)
+check("jobs render", [j["name"] for j in jobs["p1"]] == ["j"], True)
+(render.BUILD / "p1").mkdir(parents=True, exist_ok=True)
+render.render_profile("p1", {"model": "smart"}, DEFAULT_DIR, models,
+                      providers, integrations, cron_jobs=jobs["p1"],
+                      cron_shared=shared)
+doc = json.loads((render.BUILD / "p1" / "cron.json").read_text())
+check("cron.json carries shared_scripts", doc.get("shared_scripts"),
+      ["baked.sh", "sibling.sh"])
+check("cron.json carries the job", [j["name"] for j in doc["jobs"]], ["j"])
+spec2 = Path(scratch, "bad.toml")
+spec2.write_text('shared_scripts = ["missing.sh"]\n[[jobs]]\nprofile = "p1"\n'
+                 'name = "j"\nschedule = "*/5 * * * *"\nscript = "baked.sh"\n')
+check_raises("a shared script that exists nowhere is a build error",
+             lambda: render.load_cron_jobs(spec2, {"p1"}, [scratch]))
+
+# ---------------------------------------------------------------------------
 # summary
 # ---------------------------------------------------------------------------
 _scratch.cleanup()
+import shutil  # noqa: E402
+shutil.rmtree(scratch, ignore_errors=True)
 print()
 if fail_count == 0:
     print(f"{pass_count} passed")

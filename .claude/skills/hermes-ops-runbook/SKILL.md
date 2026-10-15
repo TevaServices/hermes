@@ -304,18 +304,24 @@ Inventory (one App + one Discord bot per profile):
 App names are the DEFAULT `<prefix>-<role>`; override per profile with
 `PROFILE_<NAME>_GH_APP_NAME` (App names are globally unique). App ids and
 installation ids do not exist until you create the Apps. Installation ids,
-git identities, and bot tokens live in `/etc/hermes/hermes-main.env` as
-`PROFILE_<NAME>_*`; App and bot IDs are not secret, but **PEMs and bot
-tokens are**: never echo, commit, or route them through a shell history or a
-chat transcript. Both provisioning scripts run **on your machine** (the one
-with the browser and the SSH key), not on the host, and deploy their own
-secrets over SSH (`scripts/hostdeploy.py`, shared): content travels only by
-ssh stdin or scp, never in an ssh command line, landing with `sudo install`
-as `root:<host-group> 640`, the previous file kept beside it as
-`<target>.hermes-deploy.bak`, every push verified by read-back. Passwordless
-sudo (`sudo -n`) → automatic; otherwise each script generates an
-`install-remote.sh` under gitignored `build/` running the same work through
-ONE `ssh -t` (one sudo prompt). Point at the host with `--host` /
+git identities, and bot tokens live in the profile's own env file — the
+stack's own profile in `/etc/hermes/hermes-main.env`, an EXTERNAL package's
+in `/etc/hermes/profiles.d/<package>/package.env` (both as
+`PROFILE_<NAME>_*`; the credential scripts take `--env-file` to target the
+package's file — the team package's is `profiles.d/team/package.env`);
+App and bot IDs are not secret, but **PEMs and bot tokens are**: never
+echo, commit, or route them through a shell history or a chat transcript.
+PEMs themselves always land in the env dir ROOT, named per profile
+(`github-app-<profile>.pem`), whatever file carries the ids. Both
+provisioning scripts run **on your machine** (the one with the browser and
+the SSH key), not on the host, and deploy their own secrets over SSH
+(`scripts/hostdeploy.py`, shared): content travels only by ssh stdin or
+scp, never in an ssh command line, landing with `sudo install` as
+`root:<host-group> 640`, the previous file kept beside it as
+`<target>.hermes-deploy.bak`, every push verified by read-back.
+Passwordless sudo (`sudo -n`) → automatic; otherwise each script generates
+an `install-remote.sh` under gitignored `build/` running the same work
+through ONE `ssh -t` (one sudo prompt). Point at the host with `--host` /
 `HERMES_SSH_HOST` (an ssh-config destination, e.g. in gitignored
 `mise.local.toml`); `--group` / `HERMES_HOST_GROUP` and `--env-dir` /
 `HERMES_DEPLOY_ENV_DIR` default to `ubuntu` and `/etc/hermes` (deliberately
@@ -331,8 +337,13 @@ temporary code for the App's id + private key — its `setup_url` catches the
 post-install redirect so the installation id is captured without anyone
 reading it off a URL. Two clicks per app: **Create GitHub App**, then
 **Install** with "All repositories". Run `python3
-scripts/create-github-apps.py [profile ...] --host <host>` where the browser
-is (default: the 4 team profiles). Artifacts land in gitignored
+scripts/create-github-apps.py <profile ...> --host <host>` where the
+browser is — profile names are REQUIRED (no default list: the stack repo
+does not know which profiles exist; e.g. `planner developer reviewer
+release` for the team package, `main` for the stack's own). With
+`--env-file profiles.d/<package>/package.env` the PROFILE_* lines merge
+into the package's env file (TEAM_* lines are routed to hermes-main.env —
+cron scripts see only container env). Artifacts land in gitignored
 `build/github-apps/` (PEM mode 600, `results.json`, `env-lines.txt`); with
 `--host` each PEM + env lines are pushed into `/etc/hermes/` and verified in
 the same run. Re-running is safe — an existing App name fails at GitHub's
@@ -351,18 +362,23 @@ vars plus `TEAM_ORG_DEV_BOT_<ORGUC>` (the org author filter for the
 self-pull queues — add the org to `TEAM_OWNER_ORGS`). Run ONCE PER ORG; pass
 `main` on the command line to include the default profile's org app.
 
-### Bot token for a team profile (`scripts/set-team-discord-tokens.py`)
+### Bot token for a package profile (`scripts/set-team-discord-tokens.py`)
 
-Run locally: prompts for each token with hidden input (`getpass`), and
-validates every token against Discord BEFORE writing, then pushes the
+Run locally: pass the profile NAMES (required — no default list), prompts
+for each token with hidden input (`getpass`), and validates every token
+against Discord BEFORE writing, then pushes the
 `PROFILE_<NAME>_DISCORD_BOT_TOKEN` lines over SSH — same deploy contract as
-the App script, read-back included. Duplicate-token checks: a token Discord
-rejects, the main bot's token (hashed from `DISCORD_BOT_TOKEN` read off the
-host env file — skipped with a warning without a readable host file or
-`--host`), a user token, or one already entered for another profile. Pass
-profile names to wire just one; `--set-var NAME=value` (repeatable) merges
-additional lines in the same push — e.g. `--set-var
-DISCORD_CHANNEL_RELEASE=<channel id>`. It prints each bot's invite URL
+the App script, read-back included. With `--env-file
+profiles.d/<package>/package.env` the lines land in the package's env file
+(the default target is `hermes-main.env`, for stack-level profiles).
+Duplicate-token checks: a token Discord rejects, the main bot's token
+(hashed from `DISCORD_BOT_TOKEN` read off the STACK env file — skipped with
+a warning without a readable host file or `--host`), a user token, or one
+already entered for another profile. `--set-var NAME=value` (repeatable)
+merges additional lines in the same push — e.g. `--set-var
+DISCORD_CHANNEL_RELEASE=<channel id>` (a package's channel id is exactly
+such a line; TEAM_* names are REFUSED — script-read vars belong in the
+stack env file, and the script says so). It prints each bot's invite URL
 carrying the main bot's permission integer. Create the applications at
 https://discord.com/developers/applications first, enabling **Message
 Content** AND **Server Members** (plus Presence, matching the existing
@@ -371,20 +387,26 @@ is not *in* the guild until someone authorizes the invite URL.
 
 ### Activating a new profile
 
-1. Create both identities with the scripts above, **with `--host`** so the
-   PEMs, app/installation ids and `PROFILE_<NAME>_DISCORD_BOT_TOKEN` lines
-   land in `/etc/hermes/hermes-main.env` in the same run (read-back
-   verified); with no passwordless sudo, run each generated
-   `install-remote.sh` right after. The `release` profile additionally
-   needs `/etc/hermes/komodo-alt-auth-header` (root-owned 640).
-2. Point the profile's Discord channel at it: add a route under
-   `[config_extra.gateway.profile_routes]` in the default profile's
-   `profile.toml`. Unrouted channels keep the default agent's behavior. A
-   NEW channel id is also a new `DISCORD_CHANNEL_<NAME>` placeholder, and
-   `render.py`'s `BOOT_PLACEHOLDERS` must gain it or the build fails on an
-   unknown `@@VAR@@` (that failure is the point — a placeholder with no
-   declaration is a literal reaching a config).
-3. Commit + deploy, then verify in the logs — the entrypoint logs
-   `gh authed via GitHub App (home=…, app id=…)` per profile, and the
-   gateway logs `[Discord] Connected as <bot>` +
-   `✓ discord connected (profile: <name>)`.
+1. Provision the PACKAGE onto the host's profile-source path first (the
+   package repo's provisioner, e.g. `provision.sh --host <host>` — the
+   drop dir is `<env-dir>/profiles.d/<package>/`), then create both
+   identities with the scripts above, **with `--host` and the package's
+   `--env-file`** so the PEMs, app/installation ids and
+   `PROFILE_<NAME>_DISCORD_BOT_TOKEN` lines land in the package's env
+   file in the same run (read-back verified); with no passwordless sudo,
+   run each generated `install-remote.sh` right after. The `release`
+   profile additionally needs `/etc/hermes/komodo-alt-auth-header`
+   (root-owned 640).
+2. Point the profile's Discord channel at it: declare the channel in the
+   PACKAGE's profile.toml `[discord]` block (`channel =
+   "@@DISCORD_CHANNEL_<NAME>@@"`), put the id into the package's
+   `package.env`, re-provision, restart. The boot renderer generates the
+   route (`ext_<profile>` in the default agent's `gateway.profile_routes`)
+   and the profile's own fence from that block — nothing in the hermes
+   repo changes. A placeholder with no value in package.env expands empty
+   and the BOOT LOG names it (the profile is fenced out of every channel
+   until the value lands — safe, and loud).
+3. Restart, then verify in the logs — the entrypoint logs
+   `drop profiles rendered` + per-package lines, `gh authed via GitHub App
+   (home=…, app id=…)` per profile, and the gateway logs `[Discord]
+   Connected as <bot>` + `✓ discord connected (profile: <name>)`.

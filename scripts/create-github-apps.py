@@ -104,8 +104,14 @@ DEFAULT_APP_PREFIX = os.environ.get("HERMES_APP_PREFIX", "hermes")
 # identity the team knows is "<prefix>-dev[bot]".
 #
 # "main" is the default profile's App (the primary agent). It is opt-in —
-# DEFAULT_ORDER covers the team profiles; pass `main` on the
-# command line when you want it (the org run needs all of them).
+# pass `main` on the command line when you want it (the org run needs all
+# of them).
+#
+# The credential scripts are role-agnostic: pass the profile names you
+# want Apps for (e.g. `planner developer reviewer release` for a team
+# package, `main` for the stack's own profile). No default list — the
+# stack repo does not know which profiles exist; that knowledge belongs to
+# whoever provisioned them.
 APPS = {
     "main": {
         "app_suffix": "main",
@@ -232,9 +238,6 @@ def owner_for(org):
     if org:
         return org
     return gh_login() or "<owner>"
-
-
-DEFAULT_ORDER = ["planner", "developer", "reviewer", "release"]
 
 
 # --- tiny HTML helpers ------------------------------------------------------
@@ -644,6 +647,45 @@ def env_lines(order, results, org=None):
     return "\n".join(lines)
 
 
+def env_lines_grouped(order, results, org=None) -> dict[str, list[str]]:
+    """env lines split by DESTINATION file.
+
+    A package runs its credentials in its own env file
+    (profiles.d/<package>/package.env via --env-file); but a line whose
+    NAME starts with TEAM_ is read by a cron SCRIPT, which sees only the
+    CONTAINER environment — those must land in the stack's
+    hermes-main.env no matter where the package's file lives (the same
+    rule the stack repo's AGENTS.md records for script-read vars). Every
+    other line follows --env-file. Comment lines ride the target file.
+    """
+    import hostdeploy as _hd  # VAR_RE; module import at top of file anyway
+
+    stack_names, target_lines, stack_lines = [], [], []
+    for line in env_lines(order, results, org=org).splitlines():
+        if not line.strip():
+            continue
+        if line.lstrip().startswith("#") or not _hd.VAR_RE.match(line.strip()):
+            target_lines.append(line)
+            continue
+        name = line.split("=", 1)[0].strip()
+        if name.startswith("TEAM_"):
+            stack_lines.append(line)
+            stack_names.append(name)
+        else:
+            target_lines.append(line)
+    if stack_lines:
+        target_lines.append("# NOTE: the TEAM_* vars for this run were routed"
+                            " to the STACK env file (hermes-main.env): a cron"
+                            " script reads them, and script children see only"
+                            " container env")
+    out = {}
+    if target_lines:
+        out["target"] = target_lines
+    if stack_lines:
+        out["stack"] = stack_lines
+    return out
+
+
 def deploy_to_host(flow, host, group, env_file):
     """Push completed PEMs + merged env lines over SSH; None = pushed+verified.
 
@@ -677,24 +719,29 @@ def deploy_to_host(flow, host, group, env_file):
                 )
             print(f"  pushed + verified: {target}")
 
-        lines = [
-            line
-            for line in env_lines(flow.order, flow.results, org=flow.org).splitlines()
-            if line.strip()
-        ]
-        if lines:
-            text = hostdeploy.read_remote_file(host, env_file)
+        grouped = env_lines_grouped(flow.order, flow.results, org=flow.org)
+        stack_env = os.path.join(env_dir, "hermes-main.env")
+        for dest, lines in (
+            ("target", grouped.get("target", [])),
+            ("stack", grouped.get("stack", [])),
+        ):
+            if not lines:
+                continue
+            dest_file = env_file if dest == "target" else stack_env
+            text = hostdeploy.read_remote_file(host, dest_file)
             merged, names = hostdeploy.merge_env(text, lines)
-            hostdeploy.push_remote_text(host, env_file, group, merged)
-            back = hostdeploy.read_remote_file(host, env_file)
+            hostdeploy.push_remote_text(host, dest_file, group, merged)
+            back = hostdeploy.read_remote_file(host, dest_file)
             broken = [
                 name
                 for name in names
                 if len([l for l in back.splitlines() if l.startswith(name + "=")]) != 1
             ]
             if broken:
-                raise hostdeploy.DeployError("verify failed for: " + ", ".join(broken))
-            print(f"  pushed + verified: {env_file} ({len(names)} vars merged)")
+                raise hostdeploy.DeployError(
+                    f"{dest_file}: verify failed for: " + ", ".join(broken)
+                )
+            print(f"  pushed + verified: {dest_file} ({len(names)} var(s) merged)")
     except hostdeploy.DeployError as exc:
         return str(exc)
     return None
@@ -748,6 +795,13 @@ def write_summary(flow, deploy_note, host=None, group=None, env_file=None):
         # run is completable without re-doing the browser flow.
         if env_file is None:
             _, group, env_file = hostdeploy.resolve()
+        grouped = env_lines_grouped(flow.order, flow.results, org=flow.org)
+        env_files = {}
+        if grouped.get("target"):
+            env_files[env_file] = "\n".join(grouped["target"])
+        if grouped.get("stack"):
+            env_files[os.path.join(os.path.dirname(env_file),
+                                   "hermes-main.env")] = "\n".join(grouped["stack"])
         script, _ = hostdeploy.write_fallback(
             outdir, host or None, group, env_file,
             pem_pushes=[
@@ -755,7 +809,8 @@ def write_summary(flow, deploy_note, host=None, group=None, env_file=None):
                                              pem_name(p, flow.org)))
                 for p, r in done.items()
             ],
-            env_lines=env_lines(flow.order, flow.results, org=flow.org),
+            env_lines=None if env_files else env_lines(flow.order, flow.results, org=flow.org),
+            env_files=env_files or None,
         )
         print(f"\nNOT pushed: {deploy_note}")
         print(f"Finish the deploy with the generated installer:")
@@ -784,8 +839,9 @@ def main(argv=None):
     parser.add_argument(
         "profiles",
         nargs="*",
-        default=DEFAULT_ORDER,
-        help=f"profiles to create apps for (default: {' '.join(DEFAULT_ORDER)})",
+        help="profiles to create apps for (e.g. 'planner developer "
+        "reviewer release' for a team package, 'main' for the stack's own "
+        "profile) — required; the stack does not know which profiles exist",
     )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument(
@@ -825,7 +881,21 @@ def main(argv=None):
     parser.add_argument(
         "--env-dir", help="host env dir (else $HERMES_DEPLOY_ENV_DIR, default /etc/hermes)"
     )
+    parser.add_argument(
+        "--env-file",
+        help="the env file the PROFILE_* lines merge into (else "
+        "$HERMES_DEPLOY_ENV_FILE, default hermes-main.env). EXTERNAL "
+        "PROFILE PACKAGES own their own env file — pass the package's "
+        "path, e.g. profiles.d/team/package.env (the PEM files still land "
+        "in the env dir root, named per profile). Lines whose NAME starts "
+        "with TEAM_ are routed to hermes-main.env regardless: they are "
+        "read by cron SCRIPTS, which see only container env",
+    )
     args = parser.parse_args(argv)
+
+    if not args.profiles:
+        parser.error("give the profile names to create Apps for "
+                     "(e.g. 'planner developer reviewer release' or 'main')")
 
     if args.prefix:
         if args.org:
@@ -883,7 +953,8 @@ def main(argv=None):
     deploy_state = "no ssh host given (--host / $HERMES_SSH_HOST) — nothing pushed"
     host = group = env_file = None
     if args.host or os.environ.get("HERMES_SSH_HOST"):
-        host, group, env_file = hostdeploy.resolve(args.host, args.group, args.env_dir)
+        host, group, env_file = hostdeploy.resolve(
+            args.host, args.group, args.env_dir, env_file=args.env_file)
         print(f"\nDeploying over ssh to {host} …")
         deploy_state = deploy_to_host(flow, host, group, env_file)
 

@@ -56,7 +56,8 @@ turn, anything else is a chat session); exit 1 means it is free.
   finish. Do not start a second working pass and do not touch its worktree.
   If the person wants it taken over, say so plainly and let the running turn
   stop first — never race it.
-- **You are the unattended turn** — `team-queue.sh` already enforces this: an
+- **You are the unattended turn** — the delivery queue (the `team-queue.sh`
+  machinery, shipped by the profile's package) already enforces this: an
   item another session holds is never handed to you, so a cron session with
   nothing routed to it exits without working. Never work an item the queue
   did not hand you.

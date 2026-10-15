@@ -19,6 +19,12 @@ The build/<name>/ directory is the container overlay mounted at /overlay.
 Repo sources are the source of truth: re-run after any edit. Generated
 files are safe to delete and regenerate.
 
+EXTERNAL PROFILE PACKAGES are NOT read here — they are runtime dead drops,
+discovered on the host's profile-source path and rendered at container
+boot by docker/hermes/render-drop-profiles.py (which reuses this module's
+rendering). This keeps the hermes repo free of any knowledge of profile
+packages owned by other repos: config/profiles/ is the builtin set only.
+
 Requires Python 3.11+ (stdlib tomllib). No third-party dependencies.
 """
 
@@ -303,11 +309,6 @@ BOOT_PLACEHOLDERS = {
     "DISCORD_HOME_CHANNEL",
     # #hermes — the default agent's unrouted channel.
     "DISCORD_CHANNEL_MAIN",
-    # The four team channels, one per profile.
-    "DISCORD_CHANNEL_PLANNER",
-    "DISCORD_CHANNEL_DEVELOPER",
-    "DISCORD_CHANNEL_REVIEWER",
-    "DISCORD_CHANNEL_RELEASE",
     # The operator's own Honcho peer id (honcho.json -> peerName, with
     # pinUserPeer). An identifier, and not one this public repo should carry,
     # so it travels the same path as the channel ids: emitted as @@VAR@@,
@@ -317,6 +318,12 @@ BOOT_PLACEHOLDERS = {
     # (see the honcho.json block in render_profile for why the pin matters).
     "HONCHO_USER_PEER",
 }
+# Stack-owned boot placeholders, then. NOTE what is deliberately NOT here:
+# a profile package's own placeholders (each package's [discord] channel
+# ids and any other @@VAR@@ it declares travel in the PACKAGE's
+# package.env, collected and validated at render time from the package
+# sources themselves — render.py does not name them; the hermes repo holds
+# no knowledge of external packages).
 _PLACEHOLDER_RE = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 
 # Tirith rules pre-approved for every profile. A Tirith finding raises an
@@ -751,20 +758,49 @@ def validate(models: dict, providers: dict, integrations: dict,
         raise ConfigError(f"missing operating-discipline block: {SOUL_OPERATING}")
 
 
-def load_cron_jobs(profile_names: set[str]) -> dict[str, list[dict]]:
-    """Return {profile: [job, ...]} from config/cron.toml, validated.
+def load_cron_jobs(spec_path: Path, profile_names: set[str],
+                   script_dirs: list[Path]) -> tuple[dict[str, list[dict]], list[str]]:
+    """Return ({profile: [job, ...]}, shared_scripts) from a cron spec TOML.
 
-    Fails the build on anything that would produce a job the scheduler
-    cannot run or the reconciler cannot match: an unknown profile, a
-    missing required field, a duplicate (profile, name) — the reconciler
-    matches jobs BY NAME, so a duplicate would edit the wrong one — or a
-    script that does not exist in the image.
+    Works for the builtin stack spec (config/cron.toml, scripts validated
+    against docker/hermes/) AND for a profile package's own cron.toml
+    (scripts validated against the image's /usr/local/bin plus the
+    package's scripts/ dir — the package travels with its own lanes; see
+    docker/hermes/render-drop-profiles.py). Fails the render on anything
+    that would produce a job the scheduler cannot run or the reconciler
+    cannot match: an unknown profile, a missing required field, a duplicate
+    (profile, name) — the reconciler matches jobs BY NAME, so a duplicate
+    would edit the wrong one — or a script that exists nowhere.
+
+    `shared_scripts` (a spec-level list) names job scripts the declared
+    jobs EXEC rather than schedule — the reconciler seeds them into every
+    profile's scripts dir next to the job scripts so a sibling lookup never
+    depends on PATH.
     """
-    if not CRON_SPEC.is_file():
-        return {}
+    if not spec_path.is_file():
+        return {}, []
     by_profile: dict[str, list[dict]] = {}
     seen: set[tuple[str, str]] = set()
-    for job in load_toml(CRON_SPEC).get("jobs", []):
+    spec = load_toml(spec_path)
+
+    def script_available(script: str) -> bool:
+        return any((Path(d) / script).is_file() for d in script_dirs)
+
+    shared = spec.get("shared_scripts", [])
+    if not isinstance(shared, list) or any(
+        not isinstance(s, str) or not s.strip() for s in shared
+    ):
+        raise ConfigError(
+            f"{spec_path}: 'shared_scripts' must be a list of non-empty "
+            f"script names"
+        )
+    for name in shared:
+        if not script_available(name):
+            raise ConfigError(
+                f"{spec_path}: shared script '{name}' not found in any of: "
+                f"{', '.join(str(d) for d in script_dirs)}"
+            )
+    for job in spec.get("jobs", []):
         profile = job.get("profile")
         if profile not in profile_names:
             raise ConfigError(
@@ -780,13 +816,13 @@ def load_cron_jobs(profile_names: set[str]) -> dict[str, list[dict]]:
             raise ConfigError(
                 f"cron job '{job['name']}': no_agent requires a script"
             )
-        script = CRON_SCRIPT_DIR / job["script"]
-        if not script.is_file():
+        if not script_available(job["script"]):
             raise ConfigError(
-                f"cron job '{job['name']}': script '{job['script']}' not found "
-                f"in {CRON_SCRIPT_DIR} — job scripts live in docker/hermes/ "
-                f"(baked to /usr/local/bin). If this is the IMAGE BUILD, the "
-                f"Dockerfile must COPY docker/hermes/ next to render.py."
+                f"cron job '{job['name']}': script '{job['script']}' not "
+                f"found in any of: {', '.join(str(d) for d in script_dirs)}. "
+                f"Stack job scripts live in docker/hermes/ (baked to "
+                f"/usr/local/bin); a package's scripts travel in its own "
+                f"scripts/ dir."
             )
         key = (profile, job["name"])
         if key in seen:
@@ -798,7 +834,7 @@ def load_cron_jobs(profile_names: set[str]) -> dict[str, list[dict]]:
         by_profile.setdefault(profile, []).append(
             {k: v for k, v in job.items() if k in _JOB_FIELDS}
         )
-    return by_profile
+    return by_profile, shared
 
 
 def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[dict, dict]:
@@ -1061,11 +1097,102 @@ def collect_env_keys(profile: dict, model_key: str, models: dict,
     return keys
 
 
+# ----------------------------------------------------------------- [discord]
+
+_DISCORD_KEYS = {"channel", "require_mention"}
+
+
+def discord_block(name: str, profile: dict) -> tuple[str, bool] | None:
+    """Validate the optional [discord] table on a profile.
+
+    The package's ONE declaration of its Discord presence, and the input
+    to two generated artifacts:
+
+      * the profile's own channel fence — the renderer writes it into the
+        NESTED `platforms.discord.extra` block (allowed_channels +
+        require_mention, the per-profile form the gateway adapter reads
+        FIRST); a profile that ALSO hand-wrote that block is a build
+        error, because the two would disagree silently;
+      * for a NON-default profile, a routing entry in the default agent's
+        `gateway.profile_routes` (main() collects these into
+        render_profile's `discord_routes` for the default render only).
+
+    `channel` names the profile's one channel: a @@VAR@@ placeholder
+    (resolved at boot from the profile's package.env / the host env file)
+    or a literal id. `require_mention` defaults to false. Anything else in
+    the table is a typo — a knob that would do nothing while looking
+    declared — so unknown keys fail the render.
+    """
+    disc = profile.get("discord")
+    if disc is None:
+        return None
+    if not isinstance(disc, dict):
+        raise ConfigError(
+            f"profile '{name}': [discord] must be a table with "
+            f"'channel' (and optional 'require_mention'), got "
+            f"{type(disc).__name__}"
+        )
+    unknown = set(disc) - _DISCORD_KEYS
+    if unknown:
+        raise ConfigError(
+            f"profile '{name}': unknown [discord] key(s): "
+            f"{', '.join(sorted(unknown))}. Known keys: "
+            f"{', '.join(sorted(_DISCORD_KEYS))}"
+        )
+    if "discord" not in (profile.get("platforms") or []):
+        raise ConfigError(
+            f"profile '{name}': declares [discord] but 'platforms' does not "
+            f"list 'discord' — the platform must be declared for the "
+            f"gateway to run the profile's bot at all"
+        )
+    channel = disc.get("channel")
+    if not isinstance(channel, str) or not channel.strip():
+        raise ConfigError(
+            f"profile '{name}': [discord] channel is {channel!r} — it must "
+            f"be a non-empty string (a @@VAR@@ placeholder or a literal id)"
+        )
+    mention = disc.get("require_mention", False)
+    if not isinstance(mention, bool):
+        raise ConfigError(
+            f"profile '{name}': [discord] require_mention is {mention!r} — "
+            f"it must be a boolean"
+        )
+    return channel, mention
+
+
+def collect_profile_placeholders(profile: dict) -> set[str]:
+    """Every @@VAR@@ a profile source declares, at any depth.
+
+    These are the profile's OWN boot placeholders — allowed in the rendered
+    output beside BOOT_PLACEHOLDERS (which this repo, not a profile,
+    owns). main() unions them across every discovered profile and passes
+    the result to render_profile as `extra_placeholders`; a name the
+    render itself emits must belong to that union or the build fails.
+    """
+    found: set[str] = set()
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+        elif isinstance(node, str):
+            found.update(_PLACEHOLDER_RE.findall(node))
+
+    walk(profile)
+    return found
+
+
 # ----------------------------------------------------------------- rendering
 
 def render_profile(name: str, profile: dict, profile_dir: Path,
                    models: dict, providers: dict, integrations: dict,
-                   cron_jobs: list[dict] | None = None) -> dict:
+                   cron_jobs: list[dict] | None = None,
+                   cron_shared: list[str] | None = None,
+                   discord_routes: list[tuple[str, str]] | None = None,
+                   extra_placeholders: set[str] | None = None) -> dict:
     model_key = profile.get("model")
     if model_key not in models:
         raise ConfigError(
@@ -1087,6 +1214,73 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
+
+    # A profile's [discord] table is the ONE declaration of its channel
+    # fence (see discord_block); the renderer writes the nested
+    # platforms.discord.extra form the adapter reads FIRST. A profile that
+    # hand-wrote that block AND declared [discord] would be two sources of
+    # truth for one fence — the first mistake of its kind dies here.
+    disc = discord_block(name, profile)
+    if disc is not None:
+        channel, mention = disc
+        if name == "default":
+            raise ConfigError(
+                f"profile 'default' cannot declare [discord] — it is the "
+                f"profile that hosts generated routes (ext_<profile>); the "
+                f"default agent's own channels are its hand-written "
+                f"platforms.discord.extra fence"
+            )
+        existing_disc = (config.get("platforms") or {}).get("discord")
+        if isinstance(existing_disc, dict) and "extra" in existing_disc:
+            raise ConfigError(
+                f"profile '{name}': declares [discord] AND hand-writes "
+                f"[config_extra.platforms.discord.extra] — the renderer "
+                f"generates the fence from [discord]; remove the "
+                f"hand-written block (or drop [discord] and keep it)."
+            )
+        config.setdefault("platforms", {}).setdefault("discord", {})[
+            "extra"
+        ] = {"allowed_channels": [channel], "require_mention": mention}
+
+    # Discord ROUTES, for the default profile only: main() collects
+    # (profile, channel) from every profile that declared [discord] and
+    # hands them here, because the default agent's multiplexed gateway is
+    # what routes a team channel to its profile. Generator-owned keys are
+    # namespaced `ext_<profile>` and REPLACED as a set on every render, so
+    # a profile that vanished from disk cannot leave a route pointing at
+    # it; hand-written route entries are preserved untouched. At the BUILD
+    # render (no packages known) this is None and the routes block is
+    # exactly what the source profile.toml declared.
+    if discord_routes:
+        if name != "default":
+            raise ConfigError(
+                f"profile '{name}': only the 'default' profile renders "
+                f"generated discord routes"
+            )
+        gateway_cfg = config.setdefault("gateway", {})
+        routes_cfg = dict(gateway_cfg.get("profile_routes") or {})
+        # A hand-written key using the renderer's namespace would be
+        # silently replaced by the delete below — check FIRST, then clear.
+        for pname, _ in discord_routes:
+            gen_key = f"ext_{pname}"
+            if gen_key in routes_cfg:
+                raise ConfigError(
+                    f"hand-written profile_routes contains '{gen_key}', "
+                    f"which is the generated key for profile '{pname}' — "
+                    f"rename the hand-written one (generated keys are "
+                    f"renderer-owned)"
+                )
+        # Replace the GENERATED set wholesale: a profile that vanished from
+        # disk must not leave a route pointing at it.
+        for key in [k for k in routes_cfg if k.startswith("ext_")]:
+            del routes_cfg[key]
+        for pname, pchannel in discord_routes:
+            routes_cfg[f"ext_{pname}"] = {
+                "platform": "discord",
+                "chat_id": pchannel,
+                "profile": pname,
+            }
+        gateway_cfg["profile_routes"] = routes_cfg
 
     # plugins.enabled must name plugins the image actually vendors
     # (STACK_VENDORED_PLUGINS). Discovery is opt-in — an absent
@@ -1417,8 +1611,13 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     # clobber it on every deploy. bootstrap-profiles.sh reconciles this
     # file into the store at boot via the CLI, which preserves that state.
     # Always written, even when empty, so the overlay is self-describing.
+    # `shared_scripts` (when the declaring spec carried any) rides along:
+    # cron-reconcile.py seeds those next to the job scripts.
+    cron_doc = {"jobs": cron_jobs or []}
+    if cron_shared:
+        cron_doc["shared_scripts"] = sorted(cron_shared)
     (out_dir / "cron.json").write_text(
-        json.dumps({"jobs": cron_jobs or []}, indent=2) + "\n"
+        json.dumps(cron_doc, indent=2) + "\n"
     )
 
     env_keys = collect_env_keys(profile, model_key, models, providers, integrations)
@@ -1432,21 +1631,34 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if env_keys:
         (out_dir / ".env.example").write_text("\n".join(env_lines) + "\n")
 
-    # Fail the build on an @@VAR@@ placeholder the boot resolver does not
-    # know. render.py cannot resolve these itself — the values (Discord
-    # channel IDs, the Honcho user peer) are runtime secrets in the host env
-    # file, not in git — so they are emitted verbatim for
-    # docker/hermes/expand-placeholders.py to fill in at container boot. An
-    # unknown name is a typo that would ship a config with a literal @@VAR@@
-    # where a channel id belongs, so it is a build error rather than a
-    # boot-time surprise.
+    # Fail the build on an @@VAR@@ placeholder neither the stack nor the
+    # profile sources declared. render.py cannot resolve these itself — the
+    # values (Discord channel IDs, the Honcho user peer, a package's own
+    # ids) are runtime data in the host env files, not in git — so they are
+    # emitted verbatim for docker/hermes/expand-placeholders.py to fill in
+    # at container boot. An unknown name is a typo that would ship a config
+    # with a literal @@VAR@@ where a channel id belongs, so it is a build
+    # error rather than a boot-time surprise. Stack-owned names live in
+    # BOOT_PLACEHOLDERS; package-declared names arrive as
+    # `extra_placeholders` (main() unions every discovered profile's
+    # declarations).
+    allowed_vars = set(BOOT_PLACEHOLDERS) | (extra_placeholders or set())
+    unknown_vars = [v for v in sorted(set(extra_placeholders or set()))
+                    if v in BOOT_PLACEHOLDERS]
+    if unknown_vars:
+        raise ConfigError(
+            f"profile '{name}': placeholder(s) {', '.join('@' + '@' + v + '@' + '@' for v in unknown_vars)} "
+            f"are stack-owned (BOOT_PLACEHOLDERS) — a package must not "
+            f"re-declare them"
+        )
     for fname in ("config.yaml", "cron.json", "honcho.json"):
         for var in _PLACEHOLDER_RE.findall((out_dir / fname).read_text()):
-            if var not in BOOT_PLACEHOLDERS:
+            if var not in allowed_vars:
                 raise ConfigError(
                     f"profile '{name}': unknown placeholder @@{var}@@ in {fname}. "
-                    f"Known: {', '.join(sorted(BOOT_PLACEHOLDERS))} — resolved at "
-                    f"boot by docker/hermes/expand-placeholders.py."
+                    f"Stack-owned: {', '.join(sorted(BOOT_PLACEHOLDERS))}; "
+                    f"profile-declared: {', '.join(sorted(extra_placeholders or set())) or '(none)'}. "
+                    f"Resolved at boot by docker/hermes/expand-placeholders.py."
                 )
 
     return {
@@ -1480,34 +1692,102 @@ def main() -> int:
         validate(models, providers, integrations, gateway_names)
 
         profile_root = CONFIG / "profiles"
-        all_profile_dirs = sorted(
-            d for d in profile_root.iterdir()
-            if d.is_dir() and (d / "profile.toml").is_file()
-        )
+        # The builtin profile set (the repo's own config/profiles/ tree).
+        # External profile packages are NOT discovered here: they are
+        # runtime-provisioned dead drops, rendered at container boot by
+        # docker/hermes/render-drop-profiles.py — the repo carries no
+        # knowledge of them. main() renders what lives in git; the boot
+        # renderer renders what lives on the host's profile-source path.
+        entries: list[tuple[str, Path, str]] = []
+        if profile_root.is_dir():
+            entries.extend(
+                (d.name, d, "builtin")
+                for d in sorted(profile_root.iterdir())
+                if d.is_dir() and (d / "profile.toml").is_file()
+            )
+        if not entries:
+            raise ConfigError(f"no profiles found under {profile_root}")
+        seen_source: dict[str, str] = {}
+        for pname, _, psource in entries:
+            if pname in seen_source:
+                raise ConfigError(
+                    f"duplicate profile name '{pname}' ({psource} vs "
+                    f"{seen_source[pname]})"
+                )
+            seen_source[pname] = psource
+
+        profiles = {
+            pname: load_toml(pdir / "profile.toml")
+            for pname, pdir, _ in entries
+        }
         # Cron jobs are validated against EVERY profile, not just the
         # (possibly --profile-filtered) render set, so rendering one
         # profile does not fail on another profile's jobs.
-        cron_by_profile = load_cron_jobs({d.name for d in all_profile_dirs})
+        cron_by_profile, cron_shared = load_cron_jobs(
+            CRON_SPEC, set(profiles), [CRON_SCRIPT_DIR],
+        )
 
-        profile_dirs = all_profile_dirs
+        # The profile-declared boot placeholders (@@VAR@@s in profile
+        # sources), union'd and guarded: stack-owned names (BOOTPLACE) must
+        # not be re-declared, and a name declared by two profiles is a
+        # collision — one env value would silently serve both declarations.
+        extra_placeholders: set[str] = set()
+        declared_by: dict[str, str] = {}
+        for pname, profile in profiles.items():
+            for var in collect_profile_placeholders(profile):
+                if var in BOOT_PLACEHOLDERS:
+                    continue  # stack-owned; builtin sources may reference
+                if var in declared_by and declared_by[var] != pname:
+                    raise ConfigError(
+                        f"profile '{pname}' declares placeholder @@{var}@@ "
+                        f"but '{declared_by[var]}' already does — two "
+                        f"profiles cannot share one env var silently"
+                    )
+                declared_by[var] = pname
+                extra_placeholders.add(var)
+
+        # Routes: every NON-default profile that declared [discord] becomes
+        # a routing entry in the default agent's gateway.profile_routes.
+        discord_routes: list[tuple[str, str]] = []
+        for pname, profile in profiles.items():
+            if profile.get("discord") is None:
+                continue
+            if pname == "default":
+                raise ConfigError(
+                    "the builtin 'default' profile cannot declare [discord] "
+                    "— it is the profile that hosts generated routes"
+                )
+            channel, _ = discord_block(pname, profile)
+            discord_routes.append((pname, channel))
+        if discord_routes and "default" not in profiles:
+            raise ConfigError(
+                "profile(s) with [discord] route blocks found, but no "
+                "'default' profile exists to host gateway.profile_routes"
+            )
+
+        render_entries = entries
         if args.profile:
-            profile_dirs = [d for d in profile_dirs if d.name == args.profile]
-            if not profile_dirs:
+            render_entries = [e for e in entries if e[0] == args.profile]
+            if not render_entries:
                 raise ConfigError(f"no such profile: {args.profile}")
 
         if args.check:
             jobs = sum(len(v) for v in cron_by_profile.values())
-            print(f"config valid ({jobs} cron job(s) declared)")
+            print(f"config valid ({jobs} cron job(s) declared, "
+                  f"{len(discord_routes)} discord route(s) declared)")
             return 0
 
         rows = []
-        for profile_dir in profile_dirs:
-            profile = load_toml(profile_dir / "profile.toml")
+        for pname, pdir, psource in render_entries:
             rows.append(render_profile(
-                profile_dir.name, profile, profile_dir,
+                pname, profiles[pname], pdir,
                 models, providers, integrations,
-                cron_by_profile.get(profile_dir.name, []),
+                cron_jobs=cron_by_profile.get(pname, []),
+                cron_shared=cron_shared,
+                discord_routes=discord_routes if pname == "default" else None,
+                extra_placeholders=extra_placeholders,
             ))
+            print(f"  {pname:<18} source={psource}")
 
         width = max(len(r["profile"]) for r in rows)
         for row in rows:

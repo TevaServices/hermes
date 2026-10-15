@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Wire the team profiles' Discord bot tokens into the host's env file.
+"""Wire profile bot tokens into the profiles' env file.
 
 Run this LOCALLY — the machine with your SSH key (the host never needs a
-checkout). It prompts for each team bot's token with hidden input
+checkout). It prompts for each profile's bot token with hidden input
 (getpass), so nothing is typed as an argument or echoed; validates every
 token against Discord BEFORE wiring anything; and then installs the
-PROFILE_<NAME>_DISCORD_BOT_TOKEN lines into /etc/hermes/hermes-main.env on
-the host (see scripts/hostdeploy.py for the push/merge/backup/verify
+PROFILE_<NAME>_DISCORD_BOT_TOKEN lines into the target env file on the
+host (see scripts/hostdeploy.py for the push/merge/backup/verify
 contract, which this script and create-github-apps.py share).
+
+The target file is --env-file (else $HERMES_DEPLOY_ENV_FILE, default
+hermes-main.env): an EXTERNAL profile package owns its own env file —
+pass the package's path, e.g. profiles.d/team/package.env. The MAIN bot's
+token (the duplicate check) is read from the STACK env file
+(<env-dir>/hermes-main.env) regardless.
 
 Before writing anything it refuses a token that is:
   * rejected by Discord
   * the MAIN bot's token (would re-create the duplicate-credential
-    refusal that keeps the team gateways from starting) — checkable
+    refusal that keeps two gateways from starting) — checkable
     without typing the main token anywhere: the script hashes
-    DISCORD_BOT_TOKEN read from the host env file over SSH
+    DISCORD_BOT_TOKEN read from the stack env file over SSH
   * already entered for another profile
 
 Why the invite URL matters: a bot token works as soon as the app exists,
 but the bot is not IN the guild until someone authorizes it. The URL
-carries the same permission integer as the main bot, so the team bots
+carries the same permission integer as the main bot, so the package bots
 land with equivalent capability.
 
 The three privileged intents (Presence, Server Members, Message Content)
@@ -27,8 +33,9 @@ must be toggled by hand in the Developer Portal — there is no API for it,
 and discord.py refuses to connect without them.
 
 Usage:
-  python3 scripts/set-team-discord-tokens.py                 # all 4 team bots
-  python3 scripts/set-team-discord-tokens.py reviewer        # just one
+  python3 scripts/set-team-discord-tokens.py planner developer reviewer release \
+      --env-file profiles.d/team/package.env
+  python3 scripts/set-team-discord-tokens.py reviewer --host <host>
   HERMES_SSH_HOST=<host> python3 scripts/...                 # or --host <host>
 
 Deploy paths (scripts/hostdeploy.py):
@@ -45,13 +52,16 @@ import getpass
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 
 import hostdeploy
 
-PROFILES = ["planner", "developer", "reviewer", "release"]
+# The credential scripts are role-agnostic: profile names are positional
+# arguments (the stack repo does not know which profiles exist).
+_PROFILE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 # Your Discord server's name — only used in the printed instructions.
 GUILD_NAME = os.environ.get("DISCORD_GUILD_NAME", "your server")
 # The main bot's effective guild permission integer — read it from
@@ -134,8 +144,9 @@ def collect_token(profile, main_hash, seen):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "profiles", nargs="*", default=PROFILES,
-        help=f"profiles to wire (default: {' '.join(PROFILES)})",
+        "profiles",
+        help="profile names to wire (positional; the stack repo does not "
+        "know which profiles exist) — e.g. planner developer reviewer release",
     )
     parser.add_argument(
         "--host", default=None,
@@ -150,32 +161,57 @@ def main(argv=None):
         help="host env dir (else $HERMES_DEPLOY_ENV_DIR, default /etc/hermes)",
     )
     parser.add_argument(
+        "--env-file", default=None,
+        help="the env file the PROFILE_* lines merge into (else "
+        "$HERMES_DEPLOY_ENV_FILE, default hermes-main.env). An EXTERNAL "
+        "profile package owns its own env file — pass the package's path, "
+        "e.g. profiles.d/team/package.env. The duplicate check reads the "
+        "STACK env file (hermes-main.env) regardless",
+    )
+    parser.add_argument(
         "--set-var", action="append", default=[], metavar="NAME=VALUE",
         help="merge one more env line in the same push (e.g. that profile's "
-        "--set-var DISCORD_CHANNEL_RELEASE=<channel id>) — repeatable",
+        "--set-var DISCORD_CHANNEL_RELEASE=<channel id>) — repeatable. "
+        "TEAM_* names are refused: they are read by cron SCRIPTS, which "
+        "see only container env — they belong in the stack env file",
     )
     args = parser.parse_args(argv)
 
-    unknown = [p for p in args.profiles if p not in PROFILES]
-    if unknown:
-        parser.error(f"unknown profile(s): {', '.join(unknown)} (have: {', '.join(PROFILES)})")
+    order = [p.strip().lower() for p in args.profiles.split()] if isinstance(
+        args.profiles, str) else list(args.profiles)
+    bad = [p for p in order if not _PROFILE_NAME_RE.match(p)]
+    if bad:
+        parser.error(f"invalid profile name(s): {', '.join(bad)} "
+                     f"(lowercase [a-z][a-z0-9-])")
+    order = list(dict.fromkeys(order))
+    if not order:
+        parser.error("give at least one profile name")
+
+    env_dir = args.env_dir or os.environ.get("HERMES_DEPLOY_ENV_DIR",
+                                             hostdeploy.DEFAULT_ENV_DIR)
+    host, group, env_file = hostdeploy.resolve(
+        args.host, args.group, args.env_dir, env_file=args.env_file)
+    stack_env_file = os.path.join(env_dir, "hermes-main.env")
     for extra in args.set_var:
+        name = extra.split("=", 1)[0].strip()
+        if name.upper().startswith("TEAM_"):
+            parser.error(f"--set-var {name} is TEAM_* — script-read vars "
+                         f"belong in the stack env file ({stack_env_file}), "
+                         f"not the package's")
         if "=" not in extra or not hostdeploy.VAR_RE.match(extra):
             parser.error(f"--set-var must be NAME=value (got: {extra!r})")
-    order = list(dict.fromkeys(args.profiles))
 
-    host, group, env_file = hostdeploy.resolve(args.host, args.group, args.env_dir)
+    # The duplicate check reads the STACK env file (the main bot's token
+    # is stack-owned), regardless of which file the new lines land in.
     env_text = None
-    pushed_channel = False
     if host:
         ok, why = hostdeploy.sudo_ok(host)
         if ok:
             try:
-                env_text = hostdeploy.read_remote_file(host, env_file)
-                pushed_channel = True
+                env_text = hostdeploy.read_remote_file(host, stack_env_file)
             except hostdeploy.DeployError as exc:
-                print(f"could not read the host env file over SSH: {exc}")
-        if not pushed_channel:
+                print(f"could not read the stack env file over SSH: {exc}")
+        if not ok:
             print("→ artifact fallback (install-remote.sh)")
     else:
         print("no ssh host given (--host / $HERMES_SSH_HOST) — artifact fallback")
@@ -187,13 +223,14 @@ def main(argv=None):
                 match = line
                 break
         if not match:
-            sys.exit("no DISCORD_BOT_TOKEN in the host env file — is the main bot wired?")
+            sys.exit(f"no DISCORD_BOT_TOKEN in {stack_env_file} — is the "
+                     f"main bot wired? (the duplicate check needs it)")
         main_hash = hashlib.sha256(match.split("=", 1)[1].encode()).hexdigest()[:12]
         print(f"main bot token on file (hash {main_hash}) — entered tokens must differ\n")
     else:
         main_hash = None
         print(
-            "! cannot read the host env file for the main-token check —\n"
+            "! cannot read the stack env file for the main-token check —\n"
             "  the duplicate check covers only what you enter in this run\n"
         )
 

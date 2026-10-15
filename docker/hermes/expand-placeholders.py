@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Expand @@VAR@@ placeholders in a rendered overlay file from the environment.
 
-WHY THIS EXISTS: render.py runs at IMAGE BUILD time, but the values that vary
-per deployment (Discord channel IDs) are RUNTIME data — they live in the host
-env file (`$HERMES_ENV_DIR/hermes-main.env`), not in git. render.py therefore
-emits the placeholder verbatim and this runs at CONTAINER BOOT, where the
-env_file values are present, rewriting the file in place.
+Why the @@VAR@@ values are not in the rendered output: render.py runs at
+IMAGE BUILD time; the values that vary per deployment (Discord channel
+ids, the Honcho peer id, a package's own deployment ids) are RUNTIME data
+— they live in the host env file ($HERMES_ENV_DIR/hermes-main.env, for
+stack-owned names) or in a profile package's own
+profiles.d/<package>/package.env (loaded into the boot environment by the
+entrypoint for package-owned names) — never in git.
 
 WHY `@@VAR@@` AND NOT `${VAR}`: Hermes' own config.yaml uses `${...}` for
 runtime secrets (e.g. `api_key: ${LITELLM_API_KEY}`) and resolves those itself
@@ -52,7 +54,9 @@ def expand(path: str) -> int:
         print(
             f"expand-placeholders: WARNING {path}: unset "
             f"{', '.join(missing)} — expanded to empty. Set them in "
-            f"$HERMES_ENV_DIR/hermes-main.env (see secrets/hermes-main.env.example).",
+            f"$HERMES_ENV_DIR/hermes-main.env (stack-owned values) or in "
+            f"the profile package's own profiles.d/<package>/package.env "
+            f"(package-owned values).",
             file=sys.stderr,
         )
 

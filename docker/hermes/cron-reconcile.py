@@ -48,16 +48,11 @@ MANAGED_PREFIX = "team: "
 
 # Where the job scripts are baked in the image. The cron scheduler
 # requires a job's script to live under <HERMES_HOME>/scripts/, so each
-# one is copied from here into the profile at boot.
+# one is copied from here into the profile at boot. A package may also
+# ship its own scripts (its cron.toml travels with the package): those are
+# found in the spec's directory (the profile's overlay dir,
+# <overlay>/scripts/), which --spec's parent supplies.
 IMAGE_SCRIPT_DIR = Path("/usr/local/bin")
-
-# Scripts that job scripts EXEC rather than being scheduled themselves.
-# Seeded alongside any declared job so a profile's scripts dir is
-# self-contained: review-queue.sh execs team-queue.sh (which in turn runs
-# team-thread.sh for its housekeeping sweep), and while they can also find
-# them on PATH, depending on the runtime PATH for a file we control is a
-# needless failure mode.
-SHARED_SCRIPTS = ("team-queue.sh", "team-thread.sh")
 
 
 def log(msg: str) -> None:
@@ -178,13 +173,18 @@ def load_existing(home: Path) -> dict[str, dict]:
     return {j.get("name"): j for j in data.get("jobs", []) if j.get("name")}
 
 
-def seed_scripts(home: Path, scripts: list[str]) -> list[str]:
+def seed_scripts(home: Path, scripts: list[str],
+                 extra_dirs: list[Path] | None = None) -> list[str]:
     """Copy each needed script into <home>/scripts/. Returns failures.
 
     The scheduler refuses a script outside <HERMES_HOME>/scripts, and a
     no_agent job whose script is missing is "unrunnable" — the scheduler
     AUTO-PAUSES it at the first tick. Seeding at boot (before s6 starts
     the ticker) is what keeps that from happening.
+
+    Sources: the image (/usr/local/bin — the stack's own helpers), then
+    the spec's directory (a package's overlay: the package's cron.json
+    sits next to the scripts/ dir it traveled with). First match wins.
     """
     failures = []
     scripts_dir = home / "scripts"
@@ -194,9 +194,16 @@ def seed_scripts(home: Path, scripts: list[str]) -> list[str]:
     except OSError as exc:
         return [f"scripts dir: {exc}"]
     for name in scripts:
-        src = IMAGE_SCRIPT_DIR / name
-        if not src.is_file():
-            failures.append(f"{name}: not present at {src}")
+        src = None
+        for cand in [IMAGE_SCRIPT_DIR, *(extra_dirs or [])]:
+            if (cand / name).is_file():
+                src = cand / name
+                break
+        if src is None:
+            failures.append(
+                f"{name}: not found in {IMAGE_SCRIPT_DIR}"
+                + (f" or {', '.join(str(d) for d in extra_dirs or [])}" if extra_dirs else "")
+            )
             continue
         dst = scripts_dir / name
         try:
@@ -261,7 +268,9 @@ def edit_args(job_id: str, spec: dict) -> list[str]:
     return args
 
 
-def reconcile(home: Path, specs: list[dict], prune: bool) -> int:
+def reconcile(home: Path, specs: list[dict], prune: bool,
+              shared_scripts: list[str] | None = None,
+              spec_dir: Path | None = None) -> int:
     jobs_dir = home / "cron"
     if not jobs_dir.is_dir():
         # A profile that has never ticked has no cron dir yet; creating it
@@ -275,9 +284,9 @@ def reconcile(home: Path, specs: list[dict], prune: bool) -> int:
             return 1
 
     scripts = sorted(
-        {s["script"] for s in specs if s.get("script")} | set(SHARED_SCRIPTS)
+        {s["script"] for s in specs if s.get("script")} | set(shared_scripts)
     )
-    failures = [f"seed {f}" for f in seed_scripts(home, scripts)]
+    failures = [f"seed {f}" for f in seed_scripts(home, scripts, [spec_dir])]
 
     existing = load_existing(home)
     created = updated = 0
@@ -348,7 +357,8 @@ def main() -> int:
         log(f"no spec at {spec_path}; nothing to do")
         return 0
     try:
-        specs = json.loads(spec_path.read_text()).get("jobs", [])
+        doc = json.loads(spec_path.read_text())
+        specs = doc.get("jobs", [])
     except (OSError, json.JSONDecodeError) as exc:
         warn(f"cannot read {spec_path}: {exc}")
         return 1
@@ -359,7 +369,11 @@ def main() -> int:
     if not specs:
         log(f"{home.name}: no jobs declared")
 
-    return reconcile(home, specs, args.prune)
+    return reconcile(
+        home, specs, args.prune,
+        shared_scripts=doc.get("shared_scripts") or [],
+        spec_dir=spec_path.parent,
+    )
 
 
 if __name__ == "__main__":

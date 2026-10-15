@@ -220,23 +220,18 @@ RUN set -e \
 COPY docker/hermes/github-app-token.sh /usr/local/bin/github-app-token.sh
 COPY docker/hermes/bootstrap-profiles.sh /usr/local/bin/hermes-bootstrap-profiles.sh
 COPY docker/hermes/git-repo.sh /usr/local/bin/git-repo.sh
-COPY docker/hermes/team-queue.sh /usr/local/bin/team-queue.sh
-COPY docker/hermes/review-queue.sh /usr/local/bin/review-queue.sh
-COPY docker/hermes/release-queue.sh /usr/local/bin/release-queue.sh
-# Cron job scripts are ALSO seeded per profile at boot
-# (cron-reconcile.py) — the scheduler requires a job's script to live
-# under <HERMES_HOME>/scripts/, so /usr/local/bin is the image-side
-# source of truth for script CONTENT and config/cron.toml for its
-# schedule.
 COPY docker/hermes/cron-reconcile.py /usr/local/bin/cron-reconcile.py
 # Resolves @@VAR@@ in the rendered overlays at boot (render.py runs at
 # build time and cannot see runtime secrets — see bootstrap-profiles.sh).
 COPY docker/hermes/expand-placeholders.py /usr/local/bin/expand-placeholders.py
+# Renders dead-drop profile packages (the host's profile-source path) into
+# the overlay at boot, with the baked stack config sources — external
+# packages from other repos appear/change/vanish with no rebuild.
+# team-session.py (the one-session-per-item gate) and team-thread.sh
+# (work-item threads) are the stack-baked primitives the shared
+# SOUL_OPERATING.md and team-conventions skill reference; the delivery-lane
+# queues (team/review/release-queue.sh) travel with the team package.
 COPY docker/hermes/team-thread.sh /usr/local/bin/team-thread.sh
-# Answers "is a session in this profile already working on this item?" —
-# read by team-queue.sh before it offers work, and by an agent before it
-# picks an item up. Stdlib-only python3 (the image's own interpreter, same
-# as cron-reconcile.py).
 COPY docker/hermes/team-session.py /usr/local/bin/team-session.py
 COPY docker/hermes/prune-repos.sh /usr/local/bin/prune-repos.sh
 COPY docker/hermes/refresh-repos.sh /usr/local/bin/refresh-repos.sh
@@ -267,9 +262,6 @@ RUN chmod 0755 /opt/hermes-git-hooks/prepare-commit-msg \
 RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/hermes-bootstrap-profiles.sh \
                /usr/local/bin/git-repo.sh \
-               /usr/local/bin/team-queue.sh \
-               /usr/local/bin/review-queue.sh \
-               /usr/local/bin/release-queue.sh \
                /usr/local/bin/team-thread.sh \
                /usr/local/bin/team-session.py \
                /usr/local/bin/cron-reconcile.py \
@@ -328,30 +320,29 @@ RUN chmod 0755 /opt/claude-hermes/claude \
 # Declarative config: sources + renderer, compiled at BUILD time (no
 # committed build/ artifacts in git — the renderer IS the verification).
 # python3 is the image's own interpreter; render.py is stdlib-only.
-COPY render.py /tmp/render.py
-COPY config/ /tmp/config/
-# render.py resolves ROOT from its own location, which here is /tmp — so
-# the job scripts it validates (config/cron.toml -> CRON_SCRIPT_DIR =
-# ROOT/docker/hermes) must exist at /tmp/docker/hermes too, or every
-# declared cron job looks like it references a missing script and the
-# build fails. Copied only for the render step; removed below.
-COPY docker/hermes/ /tmp/docker/hermes/
-# Render every profile into /overlay, then arrange the runtime layout:
-#   /overlay/default/          — the root ("default") profile overlay.
-#                                The repo's primary profile is named
-#                                "main"; it maps 1:1 onto the root.
-#   /overlay/profiles/<name>/  — one overlay per named profile
-# A profile literally named "default" in config/ would already land
-# correctly at /overlay/default (the mv is skipped, the loop skips it).
-RUN python3 /tmp/render.py --build-root /overlay \
+# The sources stay in the image at /opt/hermes-stack-config: the ENTRYPOINT
+# boot renderer (docker/hermes/render-drop-profiles.py) re-renders the
+# default overlay's generated routes and renders EXTERNAL profile packages
+# with the same sources at container boot. A config-only push invalidates
+# this layer onward — cheap, and the boot re-render is deterministic.
+COPY render.py /opt/hermes-stack-config/render.py
+COPY config/ /opt/hermes-stack-config/config/
+COPY docker/hermes/ /opt/hermes-stack-config/docker/hermes/
+# The boot-time drop renderer.
+COPY docker/hermes/render-drop-profiles.py /usr/local/bin/render-drop-profiles.py
+# render.py resolves CONFIG from its own location (/opt/hermes-stack-config),
+# so the job scripts it validates (config/cron.toml -> CRON_SCRIPT_DIR =
+# ROOT/docker/hermes) are already in place above — validated at build time,
+# where a typo fails the build rather than shipping a dead job.
+RUN chmod 0755 /usr/local/bin/render-drop-profiles.py \
+ && python3 /opt/hermes-stack-config/render.py --build-root /overlay \
  && if [ -d /overlay/main ]; then mv /overlay/main /overlay/default; fi \
  && mkdir -p /overlay/profiles \
  && for d in /overlay/*/; do \
       b="$(basename "$d")"; \
       case "$b" in default|profiles) continue ;; esac; \
       mv "$d" "/overlay/profiles/$b"; \
-    done \
- && rm -rf /tmp/render.py /tmp/config /tmp/docker
+    done
 
 # Install the vendored plugins into the overlay (stack-wide, at the overlay
 # ROOT — not under default/ or profiles/<name>/; the arrange loop above would

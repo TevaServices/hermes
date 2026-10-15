@@ -166,6 +166,25 @@ if [ -d "$OVERLAY_ROOT/profiles" ]; then
     log "applied overlay: $name"
     reconcile_cron "$overlay" "$target"
   done
+
+  # Ghost guard: a profile home WITHOUT an overlay is a package that
+  # vanished (or a package that failed to render) — the s6 reconciler
+  # would otherwise keep starting a gateway for a profile whose config is
+  # drifting toward stale-forever. A home that was never overlay-backed
+  # (a hand-created profile) is left alone: only homes that HAD a running
+  # gateway_state are demoted, loudly.
+  for profile_home in "$HERMES_HOME/profiles"/*/; do
+    [ -d "$profile_home" ] || continue
+    name="$(basename "${profile_home%/}")"
+    [ "$name" = "default" ] && continue
+    [ -d "$OVERLAY_ROOT/profiles/$name" ] && continue
+    state_file="${profile_home%/}/gateway_state.json"
+    if [ -f "$state_file" ] && grep -q '"gateway_state": *"running"' "$state_file"; then
+      printf '{"gateway_state": "stopped", "desired_state": "stopped", "timestamp": %s, "seeded_by": "bootstrap-ghost-guard"}\n' \
+        "$(date +%s)" > "$state_file"
+      log "WARNING: profile '$name' has no overlay any more (its package left the drop or failed to render) — gateway stopped; re-provision the package and restart to bring it back"
+    fi
+  done
 fi
 
 exec "$@"
