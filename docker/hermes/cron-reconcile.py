@@ -271,7 +271,8 @@ def edit_args(job_id: str, spec: dict) -> list[str]:
 def reconcile(home: Path, specs: list[dict], prune: bool,
               shared_scripts: list[str] | None = None,
               spec_dir: Path | None = None) -> int:
-    jobs_dir = home / "cron"    if not jobs_dir.is_dir():
+    jobs_dir = home / "cron"
+    if not jobs_dir.is_dir():
         # A profile that has never ticked has no cron dir yet; creating it
         # here is what lets the very first boot land its jobs. Ownership
         # matters: the ticker writes here as the runtime uid.
