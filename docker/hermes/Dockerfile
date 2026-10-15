@@ -34,6 +34,9 @@
 #      overlay's plugins/ — shipped DISABLED (enablement is the
 #      plugins.enabled config key, not this copy); see AGENTS.md
 #      §"Dashboard + the memory-UI plugin".
+#   5. A readability fix over the base image's baked PM tool store —
+#      see the RUN below §"Base-image tool-store readability" (not a
+#      source patch: upstream's build artifact, fixed in a thin layer).
 #
 ARG HERMES_REF=v0.22.0
 FROM nousresearch/hermes-agent:${HERMES_REF}
@@ -129,6 +132,37 @@ RUN set -e; cd /opt/hermes; \
       fi; \
     done; \
     rm -rf /tmp/hermes-patches
+
+# ── Base-image tool-store readability ────────────────────────────────
+# The official image bakes PM's sealed tool store at /opt/hermes/tools
+# (PM's INSTALLATION_COMPLETE payloads: chromium-1208, npm-*, node, …),
+# and the bake behind v2026.9.24 carries entries the runtime user cannot
+# read — observed 2026-10-15, chromium-1208/chrome-linux/extensions
+# shipped as mode 700 root:root (the store copy landed with this
+# morning's rebuild; prior bakes came out 755). The boot-time PM sync
+# stages that store into each new dependency generation's workspace as
+# uid 10000 (pm copytree into installs/<sha>/environments/<uuid>/…), so
+# ONE unreadable entry fails the whole staging with EACCES and — under
+# the entrypoint's deliberate continue-on-failure — the sync NEVER
+# publishes: the honcho memory provider's honcho-ai (vendored plugin
+# deps resolved by that same sync) never installs, and both failure
+# signatures show the identical EACCES triple (pmsync FAILED on every
+# boot; honcho_* tools erroring "Honcho session could not be
+# initialized" + web_search/web_extract keyless rescue dying, all with
+# [Errno 13] on extensions). First symptom pair 2026-10-15 with the
+# #74/#76/#77 rebuild.
+#
+# Fix at the right layer: make what lacks other-read/traverse readable
+# (chmod a+rX on entries not already o+r). Self-limiting — with a
+# readable store the layer copies up nothing and is a no-op, and once
+# upstream bakes a readable store this RUN can be deleted entirely
+# (probe after each HERMES_REF bump with:
+# `find /opt/hermes/tools ! -perm -o+r | head` inside the new image).
+# Deliberately not a patches/ diff: changing file MODES of a baked
+# payload is not a source change, and this needs no re-anchoring.
+RUN set -e; find /opt/hermes/tools -xdev ! -perm -o+r -exec chmod a+rX {} +; \
+    remaining=$(find /opt/hermes/tools ! -perm -o+r | wc -l); \
+    [ "$remaining" = 0 ] || { echo "unreadable store entries remain: $remaining" >&2; exit 1; }
 
 # gh CLI (pinned tarball): the agent's github-* skills (github-issues,
 # github-pr-workflow, github-repo-management, github-code-review) work
