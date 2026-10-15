@@ -271,8 +271,7 @@ def edit_args(job_id: str, spec: dict) -> list[str]:
 def reconcile(home: Path, specs: list[dict], prune: bool,
               shared_scripts: list[str] | None = None,
               spec_dir: Path | None = None) -> int:
-    jobs_dir = home / "cron"
-    if not jobs_dir.is_dir():
+    jobs_dir = home / "cron"    if not jobs_dir.is_dir():
         # A profile that has never ticked has no cron dir yet; creating it
         # here is what lets the very first boot land its jobs. Ownership
         # matters: the ticker writes here as the runtime uid.
@@ -286,7 +285,14 @@ def reconcile(home: Path, specs: list[dict], prune: bool,
     scripts = sorted(
         {s["script"] for s in specs if s.get("script")} | set(shared_scripts)
     )
-    failures = [f"seed {f}" for f in seed_scripts(home, scripts, [spec_dir])]
+    # A package's scripts ride its overlay dir under scripts/ (the boot
+    # renderer copies them there); the stack's are at /usr/local/bin. Both
+    # spellings of the spec dir are tried — spec.json's own directory and
+    # its scripts/ subdir — so a spec placed either way finds its package.
+    extra = []
+    if spec_dir is not None:
+        extra = [spec_dir / "scripts", spec_dir]
+    failures = [f"seed {f}" for f in seed_scripts(home, scripts, extra)]
 
     existing = load_existing(home)
     created = updated = 0
