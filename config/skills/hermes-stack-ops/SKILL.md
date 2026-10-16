@@ -419,11 +419,21 @@ worktree — the isolation this stack needs, it already has.
 
 ## Verification
 
-After any config deploy: `hermes mcp test honcho` and
-`hermes mcp test firecrawl` must both report Connected; check
+After any config deploy: `hermes mcp test honcho`,
+`hermes mcp test firecrawl` and `hermes mcp test mach` must all report
+Connected (mach must list `machines_list`, `secrets_list`, `exec` — if it
+lists only `list_resources`/`read_resource`/`list_prompts`/`get_prompt`,
+the agent's session is seeing the old gateway-fronted shape or a stale
+overlay; the direct URL in integrations.toml is the fix); check
 `/opt/data/logs/gateways/default/current` (per-profile s6 gateway log)
 and `docker logs hermes-main` for `✓ discord connected` and no repeated
 warnings; the Komodo stack `hermes` should be `running` (see
 `komodo-ops`).
 `hermes doctor` warnings about the *built-in* honcho/vision integrations
 are expected and benign for this stack.
+Also after every boot: the PM tool store must stay readable
+(`docker exec hermes-main find /opt/hermes/tools ! -perm -o+r | head`
+prints nothing — a root-owned `extensions/` dir under the baked
+chromium tree means the CDP sidecar is running as root again) and the
+entrypoint must report `pmsync ok` (a FAILED pmsync silently strips
+honcho-ai and the web plugin's firecrawl SDK from the runtime env).

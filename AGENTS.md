@@ -84,6 +84,7 @@ line numbers, the build fails loudly if an anchor moved, and an
 already-adopted patch reverse-applies with a NOTICE telling you to delete it
 (an unpatched image is never shipped silently). Then RunBuild → DeployStack,
 and always verify `hermes mcp test honcho` + `hermes mcp test firecrawl`
++ `hermes mcp test mach`
 against the new image — Hermes' MCP SDK pin is where HTTP-transport breakage
 has landed before (refs from v2026.8.31 on natively support mcp 2.x; the old
 `mcp<2` pin was dropped at that bump).
@@ -283,9 +284,10 @@ through a shell history or chat transcript.
   SDK defaults to `api.firecrawl.dev` and the self-hosted key is rejected
   with "Invalid token" — observed 2026-10-12), `HONCHO_API_KEY` (any
   non-empty value while honcho-api runs no-auth; must match honcho-api if
-  auth is enabled), `MACH_MCP_KEY` (the agent's mach API key — forwarded
-  per-request through the gateway's true_passthrough mach MCP entry as
-  `x-mcp-mach-authorization`; the gateway holds no copy), `OPENAI_API_KEY` +
+  auth is enabled), `MACH_MCP_KEY` (the agent's mach API key — sent directly
+  to `https://mach.teva.services/v2/mcp` by every profile listing the mach
+  integration, as `Authorization: Bearer`; no intermediary holds a copy),
+  `OPENAI_API_KEY` +
   `OPENAI_BASE_URL` (mirror the LiteLLM
   endpoint for Hermes' registry-based fallbacks — `hermes chat`'s first-run
   gate only inspects registry env vars, never config.yaml's
@@ -395,43 +397,50 @@ resources.
   services start at all — the ordering is the point, and `start_period`
   (180s) covers the boot needed. Gateway state: `docker inspect <c> --format
   '{{.State.Health.Status}}'`.
-- **Firecrawl rides the gateway's MCP surface** (`mcp_servers` in
-  `config/litellm.yaml` → service `firecrawl-mcp`, `compose/firecrawl.
-  compose.yml`): the proxy serves Firecrawl's MCP tools at `/mcp` on its own
-  published port, so MCP-capable gateway clients get web search/scrape with
-  only their LiteLLM key — the Firecrawl credential never leaves the stack,
-  and `firecrawl-mcp` points at `firecrawl-guard:3003` (never the API),
-  keeping the fence on the path (the guard sees plain `/v2` REST either
-  way). Deliberate choices: **the Hermes agents stay on their
-  `integrations.toml` stdio server** — do not wire the gateway path into
-  profiles too (the doubled toolset schema bill; and the mcp_servers
-  entries in `litellm.yaml` carry NO tool-filtering keys in this LiteLLM
-  version, so the catalog is curated at the service that registers it).
-  The gateway-fronted package is therefore **pinned in the compose command
-  at `firecrawl-mcp@3.20.1`** (2026-10-07): 3.21–3.28 register the
-  cloud-only surface self-hosted does not implement (`research_*`,
-  `monitor_*`, `gov/developer_search`, `credit_usage`, `find_tools`) and
-  default cloud-era `/v2/search` arguments (`sources:
-  ["web","alexandria"]`, `domainTools`, `toolDetail`) that the API's strict
-  zod schema rejects — gateway search 400s. What stays advertised but
-  cloud-only even at 3.20.1 — `agent(+status)`, `interact(+stop)`,
-  `monitor_*` — has no env off-switch (only the two feedback tools) and
-  fails loudly at call time; the agents' unpinned stdio server is curated
-  instead by `mcp_tools_exclude` (refreshed 2026-10-07 against the live
-  catalog) + the guard's search normalisation
+- **The agents consume `firecrawl-mcp` DIRECTLY; the gateway fronts no MCP
+  surface** (2026-10-16 — `litellm.yaml` carries no `mcp_servers` any more,
+  so LiteLLM is purely the LLM gateway): the profiles' firecrawl integration
+  is a streamable-HTTP URL integration pointing at
+  `http://firecrawl-mcp:3000/mcp` — the same long-lived, healthchecked,
+  **pinned** service (`firecrawl-mcp@3.20.1` in the compose command) with
+  the credential held by the service, never by an agent. The pin matters
+  twice over now: 3.21–3.28 of the package register the cloud-only surface
+  self-hosted does not implement (`research_*`, `monitor_*`,
+  `gov/developer_search`, `credit_usage`, `find_tools`) and default
+  cloud-era `/v2/search` arguments (`sources: ["web","alexandria"]`,
+  `domainTools`, `toolDetail`) that the API's strict zod schema rejects;
+  and the agents' connect time dropped from a ~10-15 s `npx` spawn (the old
+  per-session stdio shape, unpinned, racing every session that started
+  within the first seconds of a gateway boot — trader's sessions ran whole
+  turns with no scrape tools and fell back to the built-in browser) to a
+  millisecond HTTP connect. What stays advertised but cloud-only at 3.20.1
+  — `agent(+status)`, `interact(+stop)`, `monitor_*` — has no env
+  off-switch (only the two feedback tools); the integration's
+  `mcp_tools_exclude` (refreshed 2026-10-07 against the live catalog)
+  curates it client-side, and the guard's search normalisation
   (`docker/firecrawl-guard/guard.py` `normalize_search` — keeps search
-  working on whichever package version sits in front of it). A baked image
-  would need a new Komodo Build resource (a boot-time `npx` fetch needs
-  only registry egress), and `HOST=0.0.0.0` there is the
-  API's loopback trap over again. The `/mcp` registry is
-  LiteLLM-version-dependent — verify listing + one `tools/call` scrape
-  AND search after every gateway rebuild (the runbook's checklist); a boot-time
-  `Error listing tools from firecrawl: ConnectError` in litellm's log is the
-  benign shape — the MCP service is mid-`npx`-fetch while the gateway
-  finishes startup, and the first client connect re-lists lazily (verified
-  live: tools served after startup with no restart). Note the posture
-  change: a LiteLLM API key now buys web fetch, so virtual-key scoping
-  decides who gets it.
+  working on whichever package version sits in front of it) still holds,
+  because the fence is UNCHANGED: `firecrawl-mcp` points at
+  `firecrawl-guard:3003` (never the API), so its egress refusal, injection
+  sanitising and forced `checkPromptInjection` see every scrape the agents
+  make. Bump the compose pin on purpose, against the live API
+  (`tools/list` + one search `tools/call`); `HOST=0.0.0.0` there is the
+  API's loopback trap over again.
+- **mach is a direct URL integration too** (`https://mach.teva.services/
+  v2/mcp`, `Authorization: Bearer ${MACH_MCP_KEY}` — `config/integrations
+  .toml`). Until 2026-10-16 it rode the gateway as a `true_passthrough`
+  MCP server, and agent sessions never saw the real tools through it:
+  litellm's server-manager `tools/list` POSTed to the URL ORIGIN
+  (`https://mach.teva.services/`) instead of `/v2/mcp`, got 403 "invalid
+  api key" (30 failures in the 48h to 2026-10-16, plus a 6-line
+  OAuth-discovery warning storm on every connect), and the sessions
+  registered only litellm's universal resource/prompt tools — a
+  main-profile session that day burned a dozen calls hunting for mach
+  through `list_resources`/`list_prompts`. Direct, the endpoint is an
+  ordinary Bearer MCP server (verified live: the three tools in one round
+  trip). The release profile's alt-Komodo path (§"Agent self-management")
+  rides this integration; mach reaching the gateway at all was never
+  needed by anything else.
 - **firecrawl**: the real concurrency knobs are `NUQ_WORKER_COUNT=1`
   (`NUM_WORKERS_PER_QUEUE` only affects the legacy worker),
   `MAX_CONCURRENT_JOBS=2`, `CRAWL_CONCURRENT_REQUESTS=2`,
@@ -467,6 +476,26 @@ resources.
   forwards the Bearer token to honcho-api, so the agent's MCP config carries
   `Authorization: Bearer ${HONCHO_API_KEY}` (emitted by `render.py` from
   `config/integrations.toml` `mcp_headers`).
+- **The chromium-cdp sidecar must run UNPRIVILEGED — it was poisoning the
+  PM tool store every boot.** The s6 service (docker/hermes/
+  s6-rc.d/chromium-cdp/run) execs the baked Chromium; run as root (the
+  pre-2026-10-16 shape) chrome drops an empty root-owned mode-700
+  `extensions/` probe dir INSIDE `/opt/hermes/tools/` next to its own
+  binary on every boot — and one unreadable entry in the store fails the
+  entrypoint's boot-time PM sync copytree with EACCES, so the dependency
+  generation never publishes: `honcho-ai` vanishes ("Honcho session could
+  not be initialized"), the web plugin's firecrawl SDK install races die
+  ("another Hermes process is installing dependencies"), web_search/
+  web_extract degrade to the keyless rescue, and the agents fall back to
+  the built-in browser — the whole 2026-10-15 trader web-tool degradation,
+  which the Dockerfile's build-time chmod (§"Base-image tool-store
+  readability") alone could not fix because the dir is re-created AFTER
+  that chmod at every boot. The run script now `s6-setuidgid hermes`s
+  chrome (upstream's dashboard service convention): uid 10000 cannot write
+  into the root-owned store at all, and chrome's own state stays in
+  `/opt/data/chromium-cdp`. Probe after every boot:
+  `find /opt/hermes/tools ! -perm -o+r | head` inside the container must
+  print nothing, and `docker logs hermes-main | grep pmsync` must say ok.
 
 ### The firecrawl-guard — the fence on the agent's web path
 
@@ -1401,7 +1430,8 @@ control-plane resources (that's the komodo repo, human-reviewed via push).
 and key (no shared state with the homelab one). The release profile is the
 only role that drives it, and since 2026-10-10 it reaches that control
 plane **through mach**: the release profile carries the mach integration
-(via the LiteLLM gateway, `config/integrations.toml`), and every Komodo API
+(direct `https://mach.teva.services/v2/mcp` since 2026-10-16,
+`config/integrations.toml`), and every Komodo API
 call is a mach `exec` tool call on the control-plane host with the Komodo
 service-user pair injected by NAME from mach's sealed store — the agent
 holds no credential file for it (the old two-header file, its compose mount

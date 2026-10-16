@@ -1,4 +1,5 @@
-# Container integrations — Honcho (memory) and Firecrawl (web).
+# Container integrations — Honcho (memory), Firecrawl (web) and mach
+# (fleet exec).
 #
 # Each integration defines the MCP server block render.py emits into
 # every profile that lists it. Endpoints are service names on the shared
@@ -11,10 +12,10 @@
 # Firecrawl runs via compose/firecrawl.compose.yml:
 #   firecrawl-api   — Firecrawl API server (port 3002)
 #   firecrawl-guard — the egress/injection fence in front of it (port 3003)
-#   firecrawl-mcp   — HTTP-mode MCP server the LiteLLM gateway fronts
-#                     (litellm.yaml mcp_servers) for gateway clients; the
-#                     agents' OWN firecrawl MCP server is the npx stdio
-#                     invocation below, pointed at the guard.
+#   firecrawl-mcp   — HTTP-mode MCP server the agents connect to directly
+#                     (pinned at firecrawl-mcp@3.20.1; until 2026-10-16 it
+#                     was fronted by the LiteLLM gateway for gateway clients
+#                     and the agents ran their own unpinned npx stdio spawn).
 #                     (firecrawl-mcp does not talk to firecrawl-api; it
 #                     talks to the guard, which forwards to the API.)
 
@@ -35,20 +36,24 @@ required_env = ["HONCHO_API_KEY"]
 [integrations.firecrawl]
 label = "Firecrawl web scraping/crawling"
 enabled = true
-# firecrawl-mcp is an npx stdio MCP server pointed at the self-hosted
-# API container. Hermes substitutes ${VAR} from its .env at runtime.
+# The agents connect DIRECTLY to the firecrawl-mcp service
+# (compose/firecrawl.compose.yml) over streamable HTTP. Until 2026-10-16 this
+# integration spawned `npx -y firecrawl-mcp` per session — ~10-15 s per spawn,
+# which lost the race against sessions starting in the first seconds of a
+# gateway boot (trader's sessions ran whole turns with no scrape tools while
+# the spawn was still starting, and the agent fell back to the built-in
+# browser), and it pulled the UNPINNED package from npm on every spawn. The
+# long-lived service is pinned at 3.20.1, healthchecked, already running
+# before any gateway boots, and connects in milliseconds.
 #
-# The URL names firecrawl-guard, NOT firecrawl-api: the guard is the fence on
-# this path (secret/SSRF egress refusal, injection sanitising, forced
-# checkPromptInjection) and forwards to firecrawl-api:3002 behind it. See
-# docker/firecrawl-guard/guard.py and AGENTS.md. Pointing this back at
-# firecrawl-api is the escape hatch when the guard itself is the suspect.
-mcp_command = "npx"
-mcp_args = ["-y", "firecrawl-mcp"]
-mcp_env = { FIRECRAWL_API_URL = "http://firecrawl-guard:3003", FIRECRAWL_API_KEY = "${FIRECRAWL_API_KEY}" }
-# TEST_API_KEY is what the self-hosted Firecrawl API accepts when
-# USE_DB_AUTHENTICATION=false.
-required_env = ["FIRECRAWL_API_KEY"]
+# The fence stays on the path: the service's FIRECRAWL_API_URL names
+# firecrawl-guard:3003, NEVER firecrawl-api — the guard forwards to
+# firecrawl-api:3002 behind it, so its egress refusal, injection sanitising
+# and forced checkPromptInjection apply exactly as before (see
+# docker/firecrawl-guard/guard.py and AGENTS.md). The Firecrawl credential
+# lives in the service's own env (firecrawl.env); the agents send no headers
+# and carry no firecrawl secret.
+mcp_url = "http://firecrawl-mcp:3000/mcp"
 # The firecrawl-mcp server exposes ~30 tools, but the SELF-HOSTED API
 # only implements part of the /v2 surface (verified against the running
 # API + upstream logs, 2026-10-07; the catalog churns between releases —
@@ -98,23 +103,28 @@ mcp_tools_exclude = [
     "firecrawl_search_feedback",
 ]
 [integrations.mach]
-label = "mach — teva fleet exec + secrets (via the LiteLLM gateway)"
+label = "mach — teva fleet exec + secrets"
 enabled = true
-# The gateway fronts mach (litellm.yaml mcp_servers, auth_type
-# true_passthrough): it holds no mach credential, so every request carries
-# the agent's own mach key, forwarded verbatim as the upstream credential.
-# Gateway admission rides x-litellm-api-key because Authorization carries the
-# upstream token in passthrough mode. Both env vars live in hermes-main.env.
-# Replaces the hand-edited mach block that lived in the default profile's
-# runtime config.yaml (out-of-band until 2026-10-10) — a runtime edit is
-# wiped by every container recreation; this renders from the repo.
-mcp_url = "http://litellm:4000/mach/mcp"
-mcp_headers = { "x-litellm-api-key" = "${LITELLM_API_KEY}", "x-mcp-mach-authorization" = "Bearer ${MACH_MCP_KEY}" }
-required_env = ["LITELLM_API_KEY", "MACH_MCP_KEY"]
-# Same toolset posture as the out-of-band entry this replaces. The per-server
-# URL already serves only mach, so this is belt-and-braces.
+# DIRECT HTTP MCP to the mach control plane (mach.teva.services). Until
+# 2026-10-16 this rode the LiteLLM gateway as a `true_passthrough` MCP server
+# (litellm.yaml mcp_servers), and that hop never reliably served the agents
+# the real tools: the gateway's server-manager tools/list POSTed to the URL
+# ORIGIN (https://mach.teva.services/) instead of /v2/mcp and got 403
+# "invalid api key" (30 such failures in the 48h to 2026-10-16, plus an
+# OAuth-discovery warning storm on every connect), and agent sessions
+# registered only the gateway's four universal resource/prompt tools —
+# list_resources, read_resource, list_prompts, get_prompt — never
+# machines_list/secrets_list/exec. A main-profile session that day burned a
+# dozen calls hunting for mach through the universal tools. Direct, the
+# endpoint is an ordinary Bearer-authenticated MCP server (verified live
+# 2026-10-16: initialize + tools/list return the three tools in one round
+# trip), exactly like the honcho integration above.
+mcp_url = "https://mach.teva.services/v2/mcp"
+mcp_headers = { Authorization = "Bearer ${MACH_MCP_KEY}" }
+required_env = ["MACH_MCP_KEY"]
+# mach serves exactly these three; include is belt-and-braces.
 mcp_tools_include = ["machines_list", "secrets_list", "exec"]
 
-# Add further MCP integrations the same way — either url-based (see
-# honcho) or stdio command-based (see firecrawl) — then list the
+# Add further MCP integrations the same way — url-based (see all three
+# above) or stdio command-based (command/args/env keys) — then list the
 # integration key in a profile's `integrations = [...]`.

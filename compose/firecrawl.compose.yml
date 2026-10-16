@@ -151,29 +151,30 @@ services:
           # (MAX_BODY caps that at 16 MB), so this is generous, not tight.
           memory: 256m
 
-  # LiteLLM's MCP gateway fronts Firecrawl through this service: the proxy's
-  # `mcp_servers` (config/litellm.yaml) points at http://firecrawl-mcp:3000/mcp,
-  # and MCP-capable gateway clients (the published-port callers) reach
-  # Firecrawl's web surface with only their LiteLLM key. The Firecrawl
-  # credential stays inside the stack, and the guard stays in the path:
-  # FIRECRAWL_API_URL names firecrawl-guard:3003, NEVER firecrawl-api — the
-  # guard sees plain /v2 REST from here, so its egress filter and sanitiser
-  # apply exactly as they do for the agents' own stdio firecrawl-mcp
-  # (config/integrations.toml), which deliberately remains the agents' path.
+  # The Hermes agents connect to this service DIRECTLY: the profiles'
+  # firecrawl integration (config/integrations.toml) points at
+  # http://firecrawl-mcp:3000/mcp — streamable HTTP, pinned catalog, no
+  # agent-side npx spawn. It was fronted by the LiteLLM gateway's
+  # mcp_servers until 2026-10-16; that surface served no consumer and was
+  # removed from litellm.yaml. The Firecrawl credential stays inside the
+  # stack, and the guard stays in the path: FIRECRAWL_API_URL names
+  # firecrawl-guard:3003, NEVER firecrawl-api — the guard sees plain /v2
+  # REST from here, so its egress filter and sanitiser apply to every
+  # scrape the agents make.
   #
   # Pinned to 3.20.1 DELIBERATELY (live-verified 2026-10-07): 3.21-3.28 of the
   # package register the Firecrawl *cloud* surface the self-hosted API does
   # not implement (research_*, gov/developer_search, credit_usage,
   # find_tools) and default cloud-era /v2/search arguments (sources
   # ["web","alexandria"], domainTools, toolDetail) that the API's strict zod
-  # schema rejects — gateway search 400s. At 3.20.1 the catalog is the plain
+  # schema rejects — search 400s. At 3.20.1 the catalog is the plain
   # scrape/map/search/crawl(+status)/extract/parse surface (plus the
-  # cloud-only agent/interact/monitor_* residue, which has no env off-switch
-  # and no filtering seam in the proxy's config schema — it fails loudly at
-  # call time instead, like the guard's own doctrine states). Search still
-  # works across later package versions too: the guard normalises the drift
-  # keys for the agents' unpinned stdio server — docker/firecrawl-guard/
-  # guard.py `normalize_search`.
+  # cloud-only agent/interact/monitor_* residue, which has no env
+  # off-switch — the agents filter it out client-side via the
+  # integration's mcp_tools_exclude in config/integrations.toml). Search
+  # still works across later package versions too: the guard normalises
+  # the drift keys for whichever package version sits in front of it —
+  # docker/firecrawl-guard/guard.py `normalize_search`.
   firecrawl-mcp:
     image: node:22-alpine
     container_name: firecrawl-mcp
@@ -181,10 +182,9 @@ services:
     # Version pinned deliberately here in the command: a baked image would
     # mean a new Komodo Build resource for a pure-JS package, so this is a
     # runtime npx fetch on every recreate instead (seconds; needs registry
-    # egress at boot — the agent-side npx makes the same call). Bump this
-    # literal on purpose, against the live API (tools/list + one search
-    # tools/call); integrations.toml runs the package unpinned agent-side
-    # and does not move with it.
+    # egress at boot). Bump this literal on purpose, against the live API
+    # (tools/list + one search tools/call); the agents consume this pinned
+    # service directly, so the pin is the whole story.
     command: ["npx", "-y", "firecrawl-mcp@3.20.1"]
     environment:
       HTTP_STREAMABLE_SERVER: "true"

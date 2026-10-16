@@ -31,15 +31,26 @@ if [ ! -x "$SHELL_BIN" ]; then
 fi
 
 mkdir -p "$CDP_DATA"
-# The container runtime user (uid 10000) owns /opt/data; the profile dir
-# must be writable by whoever s6 drops privileges to. We are already that
-# user in practice (entrypoint drops before /init), so no chown needed.
+chown hermes:hermes "$CDP_DATA" 2>/dev/null || true
+# The CDP state dir must be writable by the user chrome will run as (the
+# mkdir above may have run as root on a host-created dir).
 
+# Drop to the runtime user BEFORE exec'ing chrome — upstream's own dashboard
+# service does the same (s6-setuidgid hermes). This is load-bearing beyond
+# hygiene: chrome running as root creates an empty root-owned mode-700
+# `extensions/` probe dir INSIDE the baked PM tool store next to its own
+# binary (observed every boot, 2026-10-16) — and one unreadable entry in
+# /opt/hermes/tools fails the boot-time PM sync's copytree with EACCES, so
+# the sync never publishes and the runtime env loses honcho-ai and the
+# web plugin's firecrawl SDK (the whole trader web-tool degradation). As
+# uid 10000 chrome cannot create entries in a root-owned store dir at all,
+# and its own state goes to $CDP_DATA under /opt/data as before.
+#
 # --no-sandbox: Chrome's setuid sandbox cannot start in this container
-# (no user namespaces as non-root). The process already runs as an
-# unprivileged uid with no access to secrets, and this is a local-only
+# (no user namespaces for an unprivileged uid). The process runs as that
+# unprivileged user with no access to secrets, and this is a local-only
 # endpoint (binds 127.0.0.1).
-exec "$SHELL_BIN" \
+exec s6-setuidgid hermes "$SHELL_BIN" \
     --headless \
     --remote-debugging-address=127.0.0.1 \
     --remote-debugging-port="$CDP_PORT" \

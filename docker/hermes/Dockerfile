@@ -160,6 +160,14 @@ RUN set -e; cd /opt/hermes; \
 # `find /opt/hermes/tools ! -perm -o+r | head` inside the new image).
 # Deliberately not a patches/ diff: changing file MODES of a baked
 # payload is not a source change, and this needs no re-anchoring.
+#
+# NOTE (2026-10-16): this build-time chmod alone proved INSUFFICIENT — the
+# chromium-cdp s6 service was running chrome as root, which creates an
+# empty root-owned mode-700 `extensions/` probe dir inside the store next
+# to its own binary at EVERY boot, re-poisoning the store after this chmod
+# ran. The service now drops to the runtime user (s6-setuidgid hermes —
+# see s6-rc.d/chromium-cdp/run and AGENTS.md §"Stack particulars"); keep
+# that drop if this layer is ever deleted.
 RUN set -e; find /opt/hermes/tools -xdev ! -perm -o+r -exec chmod a+rX {} +; \
     remaining=$(find /opt/hermes/tools ! -perm -o+r | wc -l); \
     [ "$remaining" = 0 ] || { echo "unreadable store entries remain: $remaining" >&2; exit 1; }
