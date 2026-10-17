@@ -101,7 +101,7 @@ description = "Beam 1.0 via the gateway (1M, reasoning MoE 23B active, TEXT-ONLY
 provider = "litellm"
 model = "smarter"
 context_length = 1048576
-description = "GLM 5.3 flash via the gateway (1M, vision, 18B active) — the workhorse: the default, developer and release profiles, and context compression"
+description = "DeepSeek V4.1 Flash 1017 via the gateway (1M, native vision, 552B MoE) — the workhorse: the default, developer and release profiles, and context compression. The checkpoint rides the explicit Ollama tag inside litellm_params (bare deepseek-v4.1-flash is the older Sep 10 build)"
 
 [models.smartest]
 provider = "litellm"
@@ -159,7 +159,13 @@ description = "Nemotron 3 nano bare alias — the `:30b` variant is required at 
 provider = "litellm"
 model = "deepseek-v4.1-flash"
 context_length = 1048576
-description = "DeepSeek v4.1 flash bare alias — Ollama Cloud first, falls to openrouter/deepseek/deepseek-v4.1-flash"
+description = "DeepSeek v4.1 flash bare alias — the Sep 10 build (Ollama Cloud did not upgrade its default tag in place); Ollama Cloud first, falls to openrouter/deepseek/deepseek-v4.1-flash. The Oct 17 checkpoint has its own alias below and serves the smarter tier"
+
+[models."deepseek-v4.1-flash-1017"]
+provider = "litellm"
+model = "deepseek-v4.1-flash-1017"
+context_length = 1048576
+description = "DeepSeek V4.1 Flash 1017 bare alias (the Oct 17 checkpoint) — Ollama Cloud first (the real id is deepseek-v4.1-flash:1017-cloud, per the nemotron-3-nano pattern), falls to openrouter/deepseek/deepseek-v4.1-flash-1017 (same backend as the smarter tier)"
 
 [models.minimax-m3]
 provider = "litellm"

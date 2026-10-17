@@ -57,10 +57,9 @@ model_list:
   #
   # Windows (config/models.toml, verified via POST ollama.com/api/show):
   # cheap 262144, smart/smarter/smartest 1048576. `smart` and `smartest`
-  # have NO vision — Beam and GLM 5.3 are text-only; fine for their
-  # consumers (planner and review turns carry no images — image arrivals
-  # route to the vision aux lane, pinned to `smarter` in render.py), but
-  # a tier swap back to an image model is the fix if that ever changes.
+  # have NO vision — Beam and GLM 5.3 are text-only; `smarter` is
+  # multimodal (DeepSeek V4.1 takes text+image) and carries the vision aux
+  # lane, pinned to it in render.py.
   - model_name: cheap
     litellm_params:
       model: openai/nemotron-3-nano:30b
@@ -77,8 +76,15 @@ model_list:
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: smarter
+    # DeepSeek V4.1 Flash 1017 since 2026-10-17 — the smarter tier moved off
+    # glm-5.3-flash, which stays reachable as the `glm-5.3-flash` alias
+    # below. Ollama Cloud did NOT upgrade its default tag in place: bare
+    # deepseek-v4.1-flash (:cloud) is still the Sep 10 build, so the
+    # checkpoint rides the explicit `:1017-cloud` variant inside
+    # litellm_params (the nemotron pattern). 552B MoE, 1M window, NATIVE
+    # vision (text+image→text), tools.
     litellm_params:
-      model: openai/glm-5.3-flash
+      model: openai/deepseek-v4.1-flash:1017-cloud
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: smartest
@@ -129,6 +135,13 @@ model_list:
     litellm_params:
       model: openrouter/moonshotai/kimi-k3
       api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: openrouter/deepseek/deepseek-v4.1-flash-1017
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4.1-flash-1017
+      api_key: os.environ/OPENROUTER_API_KEY
+  # deepseek-v4.1 (the Sep 10 build) no longer backs a tier (smarter moved
+  # to the 1017 checkpoint, 2026-10-17); this entry stays as the
+  # `deepseek-v4.1-flash` bare alias's fallback.
   - model_name: openrouter/deepseek/deepseek-v4.1-flash
     litellm_params:
       model: openrouter/deepseek/deepseek-v4.1-flash
@@ -208,6 +221,14 @@ model_list:
   - model_name: deepseek-v4.1-flash
     litellm_params:
       model: openai/deepseek-v4.1-flash
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  # deepseek-v4.1-flash-1017 (added 2026-10-17, with the smarter-tier
+  # swap): the Oct 17 checkpoint rides the explicit `:1017-cloud` Ollama
+  # tag inside litellm_params — the bare id is the Sep 10 build.
+  - model_name: deepseek-v4.1-flash-1017
+    litellm_params:
+      model: openai/deepseek-v4.1-flash:1017-cloud
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: minimax-m3
@@ -335,7 +356,7 @@ router_settings:
   fallbacks:
     - cheap: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
     - smart: ["openrouter/reflection/beam-1.0-501b-a23b"]
-    - smarter: ["openrouter/z-ai/glm-5.3-flash"]
+    - smarter: ["openrouter/deepseek/deepseek-v4.1-flash-1017"]
     - smartest: ["openrouter/z-ai/glm-5.3", "openrouter/moonshotai/kimi-k3"]
     # The bare-name aliases (see the model_list block): same semantics as
     # the tiers — Ollama Cloud first, then the OpenRouter twin. Deliberate
@@ -350,6 +371,7 @@ router_settings:
     - gemma4: ["openrouter/google/gemma-4-31b-it"]
     - nemotron-3-nano: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
     - deepseek-v4.1-flash: ["openrouter/deepseek/deepseek-v4.1-flash"]
+    - deepseek-v4.1-flash-1017: ["openrouter/deepseek/deepseek-v4.1-flash-1017"]
     - minimax-m3: ["openrouter/minimax/minimax-m3"]
     - nemotron-3-ultra: ["openrouter/nvidia/nemotron-3-ultra-550b-a55b"]
 

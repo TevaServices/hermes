@@ -50,8 +50,10 @@ config changes recreate the litellm container on deploy.
 and every Honcho consumer), `smart` (beam:cloud — Beam 1.0, 1M, no vision —
 the planner's
 everyday tier; `gemma4` remains available as a bare alias), `smarter`
-(glm-5.3-flash, 1M, vision — the default, developer and
-release profiles, and compression), `smartest` (glm-5.3, 1M — judgment work and
+(deepseek-v4.1-flash:1017-cloud — DeepSeek V4.1 Flash 1017, 1M, vision —
+the default, developer and
+release profiles, and compression; `glm-5.3-flash` remains a bare alias),
+`smartest` (glm-5.3, 1M — judgment work and
 opt-in escalation; no vision). The tiers are defined in
 `config/models.toml` (name + TRUE context window); WHICH BACKEND SERVES
 EACH ONE is `config/litellm.yaml` alone, so pointing a tier at another
