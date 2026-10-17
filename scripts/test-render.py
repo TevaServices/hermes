@@ -165,8 +165,9 @@ check("title_generation renders on the cheap tier", rendered["title_generation"]
 check("memory_query_rewrite renders on the cheap tier",
       rendered["memory_query_rewrite"], {"provider": "litellm", "model": "cheap"})
 check("approval keeps its timeout", rendered["approval"], {"timeout": "60"})
-check("vision is left unpinned (it must land on an image-capable model)",
-      "vision" in rendered, False)
+check("vision renders on the smarter tier (the one image-capable tier — "
+      "smart moved to Beam, text-only, 2026-10-17)",
+      rendered["vision"], {"provider": "litellm", "model": "smarter"})
 # A lane pinned to an upstream id would lose its declared window (the reason
 # models.toml states windows per TIER).
 check("every pin names a gateway tier, not an upstream id",

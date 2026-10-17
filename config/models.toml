@@ -94,8 +94,8 @@ description = "Nemotron 3 nano 30B (MoE, 3B active) via the gateway — the low-
 [models.smart]
 provider = "litellm"
 model = "smart"
-context_length = 262144
-description = "Gemma 4 via the gateway (256K, vision) — the everyday tier: the planner, plus Honcho's reasoning lanes (dream, summaries, deep dialectic). Cheapest published price, so bulk work lives here"
+context_length = 1048576
+description = "Beam 1.0 via the gateway (1M, reasoning MoE 23B active, TEXT-ONLY — no vision; the vision aux lane is pinned to smarter) — the everyday tier: the planner, plus Honcho's reasoning lanes (dream, summaries, deep dialectic). Free on Ollama Cloud for a limited time, so bulk work lives here"
 
 [models.smarter]
 provider = "litellm"
@@ -141,7 +141,13 @@ description = "Kimi k3 bare alias — Ollama Cloud first, falls to openrouter/mo
 provider = "litellm"
 model = "gemma4"
 context_length = 262144
-description = "Gemma 4 bare alias (the cloud variant) — Ollama Cloud first, falls to openrouter/google/gemma-4-31b-it (same backend as the smart tier)"
+description = "Gemma 4 bare alias (the cloud variant) — Ollama Cloud first, falls to openrouter/google/gemma-4-31b-it. Formerly the smart tier's backend; kept as a direct alias (added 2026-10-06) after smart moved to Beam (2026-10-17)"
+
+[models.beam]
+provider = "litellm"
+model = "beam"
+context_length = 1048576
+description = "Beam 1.0 bare alias — Ollama Cloud first (the real id is beam:cloud, per the nemotron-3-nano pattern), falls to openrouter/reflection/beam-1.0-501b-a23b (same backend as the smart tier)"
 
 [models.nemotron-3-nano]
 provider = "litellm"

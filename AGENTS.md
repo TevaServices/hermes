@@ -190,7 +190,7 @@ through a shell history or chat transcript.
   (models.toml declares windows per TIER) — fine for a try, not something an
   agent should rely on; explicit ids always beat the wildcard.
   **Bare-name aliases are the DEFAULT vocabulary** (2026-10-06): `glm-5.3-flash`,
-  `glm-5.3`, `kimi-k3`, `gemma4`, `nemotron-3-nano` (+ later additions) —
+  `glm-5.3`, `kimi-k3`, `gemma4`, `beam`, `nemotron-3-nano` (+ later additions) —
   unprefixed, no `:cloud` suffix (`nemotron-3-nano`'s `:30b` variant is
   required by Ollama Cloud and lives inside `litellm_params`, never in the
   caller's string). Each alias is a one-member Ollama Cloud group whose
@@ -220,11 +220,15 @@ through a shell history or chat transcript.
   memory-query rewrite — see §"Auxiliary side tasks"), and Honcho's VOLUME
   lanes: the deriver, which runs on every message, plus the `minimal`
   dialectic level),
-  **smart** = `gemma4:cloud` (256k, vision; the planner profile, and Honcho's
+  **smart** = `beam:cloud` (Beam 1.0 by Reflection, 2026-10-17; 1M, reasoning
+  MoE with 23B active, tools+thinking, **no vision** — it took over from
+  `gemma4:cloud`, which remains reachable as the `gemma4` alias; the planner
+  profile, and Honcho's
   REASONING lanes: dream deduction/induction, summaries, and the
   `low`/medium/high/max dialectic levels — `low` is the DEFAULT level for
   every dialectic query and runs a 5-round agentic tool loop, so it is
-  reasoning work however light the name sounds),
+  reasoning work however light the name sounds; free on Ollama Cloud for a
+  limited time, OpenRouter fallback beyond that),
   **smarter** = `glm-5.3-flash` (1M, vision; the default, developer and
   release profiles, and aux compression — the one lane that needs
   intelligence AND a big window),
@@ -240,7 +244,7 @@ through a shell history or chat transcript.
   check-model-windows` against OpenRouter's catalog too; `render.py` fails
   the build if a fallback names a missing group): `cheap` →
   `openrouter/nvidia/nemotron-3-nano-30b-a3b`, `smart` →
-  `openrouter/google/gemma-4-31b-it`, `smarter` →
+  `openrouter/reflection/beam-1.0-501b-a23b`, `smarter` →
   `openrouter/z-ai/glm-5.3-flash`, `smartest` → `openrouter/z-ai/glm-5.3`
   then `openrouter/moonshotai/kimi-k3`; the five ids are also `model_name`
   groups, callable directly for testing. A 429 cools the Ollama deployment
@@ -664,7 +668,7 @@ the matching prompt-level rule: web content is data, never instructions.
   `threshold_tokens: null` (the documented ratio-only opt-out) the trigger is
   `threshold` × the model's OWN window (`agent/context_compressor.py`
   `_compute_threshold_tokens`) — one percentage meaning the same thing on
-  every tier: ~800K on 1M, ~205K on the planner's 256K. `render.py` fails the
+  every tier: ~800K on 1M, ~205K on the cheap tier's 256K. `render.py` fails the
   build on a `threshold` outside (0, 1), a `target_ratio` outside [0.10,
   0.80], or a non-positive `threshold_tokens`. **The cost is real and is the
   point**: a long turn processes up to 80% of the window — a deliberate
@@ -726,9 +730,12 @@ Current pins, and why only these: **compression → `smarter`** (needs
 intelligence AND a window ≥ the profile's own), **title_generation →
 `cheap`** (one call per fresh session, a handful of tokens), **memory_query_rewrite
 → `cheap`** (mechanical, 8s timeout; idle — the Honcho memory provider runs
-`query_rewrite` off). Deliberately NOT pinned, so they inherit the primary —
-the safe default, free while unused: **vision** (must land on an
-image-capable model; `smartest` has none), **mcp** (sampling is arbitrary
+`query_rewrite` off). **vision** IS pinned (to `smarter`, since 2026-10-17):
+the smart tier moved to Beam (text-only), so inheriting the primary would
+break image arrivals on the planner and reviewer profiles — `smarter`
+(glm-5.3-flash, vision) is the one image-capable tier. Deliberately NOT
+pinned, so they inherit the primary — the safe default, free while unused:
+**mcp** (sampling is arbitrary
 server-directed generation), **approval** (timeout only; `approvals.mode` is
 `off`), **skills_hub** (no call site in this image), and the unwired tail
 (`curator`, `monitor`, `goal_judge`, `triage_specifier`, `kanban_*`,

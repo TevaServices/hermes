@@ -241,14 +241,11 @@ STACK_COMPRESSION_DEFAULTS = {
 # back.
 #
 # WHICH LANES ARE PINNED, AND WHY ONLY THESE. Declared here: the lanes with a
-# real call site in this image AND work that is mechanical or window-bound.
-# Everything else is deliberately left to inherit the profile's primary —
-# that is the SAFE default (the strongest model the profile already pays
-# for), and it costs nothing while a lane is unused. Notably NOT pinned:
-#   vision          — must run on a model that actually takes images
-#                     (tools/vision_tools.py); the reviewers' primary
-#                     (`smartest`, glm-5.3) has none, so pinning one tier
-#                     here would be wrong for someone.
+# real call site in this image AND work that is mechanical or window-bound,
+# plus vision (below) — the one capability lane where inheriting the primary
+# is wrong. Everything else is deliberately left to inherit the profile's
+# primary — that is the SAFE default (the strongest model the profile already
+# pays for), and it costs nothing while a lane is unused. Notably NOT pinned:
 #   mcp             — MCP *sampling* (tools/mcp_tool_sampling.py): an
 #                     arbitrary, server-directed generation.
 #   approval        — timeout only; `approvals.mode` is `off`, so the
@@ -261,6 +258,15 @@ STACK_COMPRESSION_DEFAULTS = {
 #   moa_*           — unwired or disabled here; these are the ones to think
 #                     about when one is turned on, not to pin blind now.
 STACK_AUX_MODELS = {
+    # Vision MUST run on a model that actually takes images
+    # (tools/vision_tools.py). Left unpinned while `smart` carried vision —
+    # inheriting the primary was then right for every profile. The smart
+    # tier moved to Beam (text-only) on 2026-10-17, so two of the four tiers
+    # (smart, smartest) now have no vision and a planner/reviewer image
+    # arrival would fail on an inherited primary; `smarter` (glm-5.3-flash,
+    # vision) is the one image-capable tier, so the pin is now right for
+    # everyone. Revisit if a tier swap restores vision on a smaller tier.
+    "vision": "smarter",
     # Compaction summarises a conversation that reached 80% of the profile's
     # OWN window, so this lane needs intelligence AND a window >= the primary's
     # (asserted per profile in render_profile) — the one aux lane where a small

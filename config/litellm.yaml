@@ -56,18 +56,24 @@ model_list:
   # local edit rather than a new route.
   #
   # Windows (config/models.toml, verified via POST ollama.com/api/show):
-  # cheap/smart 262144, smarter/smartest 1048576. `smartest` has NO vision —
-  # fine for its only consumer (a diff review contains no images), but
-  # kimi-k3 (1M, vision+tools+thinking) is the drop-in swap if the
-  # escalation tier ever needs to accept images.
+  # cheap 262144, smart/smarter/smartest 1048576. `smart` and `smartest`
+  # have NO vision — Beam and GLM 5.3 are text-only; fine for their
+  # consumers (planner and review turns carry no images — image arrivals
+  # route to the vision aux lane, pinned to `smarter` in render.py), but
+  # a tier swap back to an image model is the fix if that ever changes.
   - model_name: cheap
     litellm_params:
       model: openai/nemotron-3-nano:30b
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: smart
+    # Beam 1.0 (Reflection) since 2026-10-17 — the smart tier moved off
+    # gemma4:cloud, which stays reachable as the `gemma4` alias below.
+    # 501B MoE (23B active), 1M window, reasoning + tools, TEXT-ONLY (no
+    # vision). Free on Ollama Cloud for a limited time; the OpenRouter
+    # fallback below is the paid path when the promo or the endpoint ends.
     litellm_params:
-      model: openai/gemma4:cloud
+      model: openai/beam:cloud
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: smarter
@@ -101,6 +107,12 @@ model_list:
     litellm_params:
       model: openrouter/nvidia/nemotron-3-nano-30b-a3b
       api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: openrouter/reflection/beam-1.0-501b-a23b
+    litellm_params:
+      model: openrouter/reflection/beam-1.0-501b-a23b
+      api_key: os.environ/OPENROUTER_API_KEY
+  # gemma-4 no longer backs a tier (smart moved to Beam, 2026-10-17); this
+  # entry stays as the `gemma4` bare alias's fallback.
   - model_name: openrouter/google/gemma-4-31b-it
     litellm_params:
       model: openrouter/google/gemma-4-31b-it
@@ -172,6 +184,15 @@ model_list:
   - model_name: kimi-k3
     litellm_params:
       model: openai/kimi-k3
+      api_base: https://ollama.com/v1
+      api_key: os.environ/OLLAMA_API_KEY
+  # beam (added 2026-10-17, with the smart-tier swap): the Ollama Cloud id
+  # carries a variant selector (`beam:cloud` — the library's only tag), so
+  # the real id lives inside litellm_params like nemotron-3-nano's `:30b`,
+  # never in the caller's string.
+  - model_name: beam
+    litellm_params:
+      model: openai/beam:cloud
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: gemma4
@@ -313,7 +334,7 @@ router_settings:
   #    scripts/check-model-windows.py parses.
   fallbacks:
     - cheap: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
-    - smart: ["openrouter/google/gemma-4-31b-it"]
+    - smart: ["openrouter/reflection/beam-1.0-501b-a23b"]
     - smarter: ["openrouter/z-ai/glm-5.3-flash"]
     - smartest: ["openrouter/z-ai/glm-5.3", "openrouter/moonshotai/kimi-k3"]
     # The bare-name aliases (see the model_list block): same semantics as
@@ -325,6 +346,7 @@ router_settings:
     - glm-5.3-flash: ["openrouter/z-ai/glm-5.3-flash"]
     - glm-5.3: ["openrouter/z-ai/glm-5.3"]
     - kimi-k3: ["openrouter/moonshotai/kimi-k3"]
+    - beam: ["openrouter/reflection/beam-1.0-501b-a23b"]
     - gemma4: ["openrouter/google/gemma-4-31b-it"]
     - nemotron-3-nano: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
     - deepseek-v4.1-flash: ["openrouter/deepseek/deepseek-v4.1-flash"]
