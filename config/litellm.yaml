@@ -56,9 +56,9 @@ model_list:
   # local edit rather than a new route.
   #
   # Windows (config/models.toml, verified via POST ollama.com/api/show):
-  # cheap 262144, smart/smarter/smartest 1048576. `smart` and `smartest`
-  # have NO vision — Beam and GLM 5.3 are text-only; `smarter` is
-  # multimodal (DeepSeek V4.1 takes text+image) and carries the vision aux
+  # cheap 262144, smart/smarter/smartest 1048576. `smart` has NO vision —
+  # Beam is text-only; `smarter` and `smartest` are multimodal (DeepSeek
+  # V4.1 and Kimi k3 take text+image). `smarter` carries the vision aux
   # lane, pinned to it in render.py.
   - model_name: cheap
     litellm_params:
@@ -88,8 +88,15 @@ model_list:
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: smartest
+    # Kimi k3 since 2026-10-20 — the top tier moved off GLM 5.3, which stays
+    # reachable as the bare `glm-5.3` alias (and `glm-5.3-flash` for the
+    # flash variant) but is no longer what Hermes' judgment profiles run:
+    # the reviewer and the trader were the two `smartest` profiles and were
+    # still hitting GLM 5.3 on every review/trading turn. 1M window,
+    # vision+tools+thinking, so the tier is capability-superset, not a
+    # downgrade (the tier's text-only limitation is gone).
     litellm_params:
-      model: openai/glm-5.3
+      model: openai/kimi-k3
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
 
@@ -106,9 +113,9 @@ model_list:
   #    smaller window silently breaks long-context work. Name == the
   #    OpenRouter id so `gh`-shaped callers, the /model switch and curl can
   #    exercise each one directly (also how /v1/models lists them).
-  #    kimi-k3 rides `smartest` as its second fallback (1M, vision — the
-  #    drop-in swap the tier comment names, used here as the second-choice
-  #    fallback rather than as the tier).
+  #    kimi-k3 is `smartest`'s own backend now (2026-10-20), so its
+  #    OpenRouter twin below is the tier's only (same-model) fallback; GLM
+  #    5.3 is no longer on any tier's failure path, only the bare alias.
   - model_name: openrouter/nvidia/nemotron-3-nano-30b-a3b
     litellm_params:
       model: openrouter/nvidia/nemotron-3-nano-30b-a3b
@@ -357,7 +364,7 @@ router_settings:
     - cheap: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
     - smart: ["openrouter/reflection/beam-1.0-501b-a23b"]
     - smarter: ["openrouter/deepseek/deepseek-v4.1-flash-1017"]
-    - smartest: ["openrouter/z-ai/glm-5.3", "openrouter/moonshotai/kimi-k3"]
+    - smartest: ["openrouter/moonshotai/kimi-k3"]
     # The bare-name aliases (see the model_list block): same semantics as
     # the tiers — Ollama Cloud first, then the OpenRouter twin. Deliberate
     # per-NAME chains; there is still NO "*" default_fallbacks, so an

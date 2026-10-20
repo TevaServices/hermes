@@ -261,12 +261,11 @@ STACK_AUX_MODELS = {
     # Vision MUST run on a model that actually takes images
     # (tools/vision_tools.py). Left unpinned while `smart` carried vision —
     # inheriting the primary was then right for every profile. The smart
-    # tier moved to Beam (text-only) on 2026-10-17, so two of the four tiers
-    # (smart, smartest) now have no vision and a planner/reviewer image
-    # arrival would fail on an inherited primary; `smarter` is the one
-    # image-capable tier (GLM 5.3 flash carried its vision until 2026-10-17;
-    # DeepSeek V4.1 Flash 1017 is natively multimodal), so the pin is now
-    # right for everyone. Revisit if a tier swap changes the picture.
+    # tier moved to Beam (text-only) on 2026-10-17, so a planner image
+    # arrival would fail on an inherited primary; `smarter` (DeepSeek V4.1
+    # Flash 1017, natively multimodal) is the workhorse image-capable tier
+    # and stays the pin even though `smartest` became Kimi k3 (vision too)
+    # on 2026-10-20. Revisit if a tier swap changes the picture.
     "vision": "smarter",
     # Compaction summarises a conversation that reached 80% of the profile's
     # OWN window, so this lane needs intelligence AND a window >= the primary's
