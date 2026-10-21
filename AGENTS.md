@@ -236,9 +236,11 @@ through a shell history or chat transcript.
   the explicit `:1017-cloud` variant inside litellm_params; the default,
   developer and release profiles, and aux compression — the one lane that
   needs intelligence AND a big window),
-  **smartest** = `glm-5.3` (1M, **no vision**; the reviewer, plus the opt-in
-  `/model smartest` escalation — kimi-k3 is the drop-in swap if the top tier
-  ever needs images).
+  **smartest** = `deepseek-v4.1-flash:1017-cloud` (DeepSeek V4.1 Flash 1017,
+  2026-10-21; 1M, native vision — it took over from `glm-5.3`, which remains
+  reachable as the bare `glm-5.3` alias; same checkpoint and `:1017-cloud`
+  variant as `smarter`; the reviewer, plus the opt-in
+  `/model smartest` escalation).
   Because the tier names ARE the gateway's model names, `/model cheap` …
   `/model smartest` all resolve mid-session.
 - **Outage fallbacks: the GATEWAY owns the failure path, not Hermes
@@ -249,8 +251,8 @@ through a shell history or chat transcript.
   the build if a fallback names a missing group): `cheap` →
   `openrouter/nvidia/nemotron-3-nano-30b-a3b`, `smart` →
   `openrouter/reflection/beam-1.0-501b-a23b`, `smarter` →
-  `openrouter/deepseek/deepseek-v4.1-flash-1017`, `smartest` → `openrouter/z-ai/glm-5.3`
-  then `openrouter/moonshotai/kimi-k3`; the five ids are also `model_name`
+  `openrouter/deepseek/deepseek-v4.1-flash-1017`, `smartest` →
+  `openrouter/deepseek/deepseek-v4.1-flash-1017`; the five ids are also `model_name`
   groups, callable directly for testing. A 429 cools the Ollama deployment
   down immediately (per-deployment, `cooldown_time: 60`; `num_retries: 1` — a
   limit is not fixed by retrying), the request fails over to the OpenRouter
@@ -736,9 +738,9 @@ intelligence AND a window ≥ the profile's own), **title_generation →
 → `cheap`** (mechanical, 8s timeout; idle — the Honcho memory provider runs
 `query_rewrite` off). **vision** IS pinned (to `smarter`, since 2026-10-17):
 the smart tier moved to Beam (text-only), so inheriting the primary would
-break image arrivals on the planner and reviewer profiles — `smarter` is
-the one image-capable tier (GLM 5.3 flash carried its vision until
-2026-10-17; DeepSeek V4.1 Flash 1017 is natively multimodal). Deliberately NOT
+break image arrivals on the planner and reviewer profiles — `smarter` carries
+the vision aux lane (the smart tier is text-only Beam; DeepSeek V4.1 Flash
+1017 is natively multimodal and now serves both `smarter` and `smartest`). Deliberately NOT
 pinned, so they inherit the primary — the safe default, free while unused:
 **mcp** (sampling is arbitrary
 server-directed generation), **approval** (timeout only; `approvals.mode` is

@@ -53,8 +53,10 @@ everyday tier; `gemma4` remains available as a bare alias), `smarter`
 (deepseek-v4.1-flash:1017-cloud — DeepSeek V4.1 Flash 1017, 1M, vision —
 the default, developer and
 release profiles, and compression; `glm-5.3-flash` remains a bare alias),
-`smartest` (glm-5.3, 1M — judgment work and
-opt-in escalation; no vision). The tiers are defined in
+`smartest` (deepseek-v4.1-flash:1017-cloud — DeepSeek V4.1 Flash 1017, 1M,
+vision — judgment work and
+opt-in escalation; same backend as `smarter`; `glm-5.3` and `kimi-k3` remain
+bare aliases). The tiers are defined in
 `config/models.toml` (name + TRUE context window); WHICH BACKEND SERVES
 EACH ONE is `config/litellm.yaml` alone, so pointing a tier at another
 provider is an edit to that file and nothing else. Because the tier names
