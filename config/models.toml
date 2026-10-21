@@ -76,9 +76,10 @@
 #              logs and update records, which is where the window binds.)
 #   smartest — judgment, and the top of the ladder. The reviewer profile,
 #              plus the opt-in escalation anyone reaches for with
-#              `/model smartest`. No vision: fine for diff review, but
-#              kimi-k3 (1M, vision+tools+thinking) is the drop-in swap if
-#              that ever needs to change.
+#              `/model smartest`. DeepSeek V4.1 Flash 1017 since 2026-10-21 —
+#              the same checkpoint as `smarter` (1M, native vision, 552B
+#              MoE), so judgment work gets images too; GLM 5.3 and kimi-k3
+#              stay reachable as bare aliases.
 #
 # An aux task with no pin anywhere inherits the profile's PRIMARY model (the
 # image resolves `auto` that way) — which is why the pins are declared rather
@@ -107,7 +108,7 @@ description = "DeepSeek V4.1 Flash 1017 via the gateway (1M, native vision, 552B
 provider = "litellm"
 model = "smartest"
 context_length = 1048576
-description = "GLM 5.3 via the gateway (1M) — judgment work (the reviewer) and the opt-in /model escalation; no vision, so it is never a profile's primary where images arrive. Fallback: the same GLM 5.3 on OpenRouter, kimi-k3 second (see litellm.yaml router_settings.fallbacks)"
+description = "DeepSeek V4.1 Flash 1017 via the gateway (1M, native vision, 552B MoE) — judgment work (the reviewer) and the opt-in /model escalation. Same checkpoint as the smarter tier, reached through the explicit Ollama `:1017-cloud` variant. Took the tier over from GLM 5.3 on 2026-10-21, which stays reachable as a bare alias. Fallback: the same DeepSeek V4.1 Flash 1017 on OpenRouter (see litellm.yaml router_settings.fallbacks)"
 
 # ── Bare-name aliases (added 2026-10-06) ────────────────────────────────
 # Unprefixed model names a human or CLI may send directly
@@ -123,13 +124,13 @@ description = "GLM 5.3 via the gateway (1M) — judgment work (the reviewer) and
 provider = "litellm"
 model = "glm-5.3-flash"
 context_length = 1048576
-description = "GLM 5.3 flash bare alias — Ollama Cloud first, falls to openrouter/z-ai/glm-5.3-flash (same backend as the smarter tier)"
+description = "GLM 5.3 flash bare alias — Ollama Cloud first, falls to openrouter/z-ai/glm-5.3-flash (former smarter-tier backend, until 2026-10-17)"
 
 [models."glm-5.3"]
 provider = "litellm"
 model = "glm-5.3"
 context_length = 1048576
-description = "GLM 5.3 bare alias — Ollama Cloud first, falls to openrouter/z-ai/glm-5.3 (same backend as the smartest tier)"
+description = "GLM 5.3 bare alias — Ollama Cloud first, falls to openrouter/z-ai/glm-5.3 (former smartest-tier backend, until 2026-10-21)"
 
 [models.kimi-k3]
 provider = "litellm"

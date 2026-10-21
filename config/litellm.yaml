@@ -56,10 +56,10 @@ model_list:
   # local edit rather than a new route.
   #
   # Windows (config/models.toml, verified via POST ollama.com/api/show):
-  # cheap 262144, smart/smarter/smartest 1048576. `smart` and `smartest`
-  # have NO vision — Beam and GLM 5.3 are text-only; `smarter` is
-  # multimodal (DeepSeek V4.1 takes text+image) and carries the vision aux
-  # lane, pinned to it in render.py.
+  # cheap 262144, smart/smarter/smartest 1048576. `smart` has NO vision —
+  # Beam is text-only; `smarter` and `smartest` are multimodal (both run
+  # DeepSeek V4.1 Flash 1017, which takes text+image). `smarter` carries the
+  # vision aux lane, pinned to it in render.py.
   - model_name: cheap
     litellm_params:
       model: openai/nemotron-3-nano:30b
@@ -88,8 +88,15 @@ model_list:
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
   - model_name: smartest
+    # DeepSeek V4.1 Flash 1017 since 2026-10-21 — the top tier now shares the
+    # smarter tier's backend instead of GLM 5.3, which stays reachable as the
+    # bare `glm-5.3` alias (and `glm-5.3-flash` for the flash variant). 1M
+    # window, native vision, 552B MoE, so the reviewer/trader judgment work
+    # gains images and loses nothing. As on `smarter`, the checkpoint rides
+    # the explicit `:1017-cloud` Ollama variant inside litellm_params — bare
+    # deepseek-v4.1-flash is still the Sep 10 build.
     litellm_params:
-      model: openai/glm-5.3
+      model: openai/deepseek-v4.1-flash:1017-cloud
       api_base: https://ollama.com/v1
       api_key: os.environ/OLLAMA_API_KEY
 
@@ -357,7 +364,7 @@ router_settings:
     - cheap: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
     - smart: ["openrouter/reflection/beam-1.0-501b-a23b"]
     - smarter: ["openrouter/deepseek/deepseek-v4.1-flash-1017"]
-    - smartest: ["openrouter/z-ai/glm-5.3", "openrouter/moonshotai/kimi-k3"]
+    - smartest: ["openrouter/deepseek/deepseek-v4.1-flash-1017"]
     # The bare-name aliases (see the model_list block): same semantics as
     # the tiers — Ollama Cloud first, then the OpenRouter twin. Deliberate
     # per-NAME chains; there is still NO "*" default_fallbacks, so an
