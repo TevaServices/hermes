@@ -252,29 +252,37 @@ model_list:
   # ── firecrawl — Firecrawl's LLM features (MODEL_NAME). NOT a tier: it
   #    serves one app that only ever ingests PUBLIC web pages, and is
   #    OpenRouter ONLY because schema-bound extraction needs
-  #    response_format json_schema, which Ollama Cloud strips. Both members
-  #    are json_schema-capable. This group is also what a "never sees
-  #    private data" lane looks like — copy the shape if another one appears.
+  #    response_format json_schema, which Ollama Cloud strips. This group is
+  #    also what a "never sees private data" lane looks like — copy the shape
+  #    if another one appears.
   #
-  #    These two use OPENROUTER_FREE_KEY, NOT the shared OPENROUTER_API_KEY,
-  #    and it is the only place that key appears. The account's OpenRouter
-  #    guardrail enforces ZDR, which excludes :free endpoints outright
-  #    ("ZDR violation (guardrail): 1 endpoint excluded") — so on the shared
-  #    key this whole group 404s and takes Firecrawl's /extract and v2
-  #    json-format scrapes down with it (and, since the guard forces
-  #    checkPromptInjection, the classifier fails open too). A free-models
-  #    key with no ZDR guardrail is what makes free endpoints usable. It is
-  #    scoped HERE on purpose: the tier fallbacks below stay on the shared
-  #    key, so relaxing ZDR buys the public-web lane only. Do not let this
-  #    key leak into a tier.
+  #    PAID, on the SHARED key (2026-10-23). The previous shape — two
+  #    `:free` endpoints on a separate non-ZDR key — failed the way free
+  #    endpoints do: `google/gemma-4-31b-it:free` went 429-rate-limited
+  #    upstream and `nvidia/nemotron-3-super-120b-a12b:free` went 404 at the
+  #    provider ("Function … not found for account"), which takes
+  #    /v1/extract, v2 json scrapes AND the guard's forced
+  #    checkPromptInjection classifier (fails open) down with it. This lane
+  #    only ever sees public web content, so the account's ZDR guardrail —
+  #    the thing that excludes `:free` endpoints from the shared key — is
+  #    irrelevant here; the shared key is the right home and the free key is
+  #    no longer referenced by anything.
+  #
+  #    The pick is the cheapest json_schema-capable PAID endpoint on
+  #    OpenRouter, probed 2026-10-23 through the shared key with a strict
+  #    schema: openai/gpt-oss-20b at $0.018/M in / $0.090/M out (~11x cheaper
+  #    than the gemma-4-31b paid endpoint it replaces, same small-MoE class
+  #    as the models it sits in front of). Caveat worth keeping: it is a
+  #    REASONING model, so a tight max_tokens is partly spent on the
+  #    reasoning phase and can truncate the JSON (observed at max_tokens=200,
+  #    clean at 2000+) — callers must leave room, which Firecrawl's extract
+  #    does. No group fallback by design: a second member would have to be
+  #    same-capability to be worth it, and a 4xx still retries within the
+  #    group.
   - model_name: firecrawl
     litellm_params:
-      model: openrouter/google/gemma-4-31b-it:free
-      api_key: os.environ/OPENROUTER_FREE_KEY
-  - model_name: firecrawl
-    litellm_params:
-      model: openrouter/nvidia/nemotron-3-super-120b-a12b:free
-      api_key: os.environ/OPENROUTER_FREE_KEY
+      model: openrouter/openai/gpt-oss-20b
+      api_key: os.environ/OPENROUTER_API_KEY
 
   # ── nomic-embed-text — Honcho embeddings, proxied to the stack-local
   #    ollama service (Ollama Cloud has no embeddings endpoint).
@@ -307,8 +315,7 @@ model_list:
   #    config change. Mirrors the "ollama/*" wildcard above: the
   #    try-before-promoting affordance, single passthrough, no load
   #    balancing, no fallbacks. It rides the SHARED OpenRouter key
-  #    (non-free, ZDR-guarded) — NOT OPENROUTER_FREE_KEY, which is scoped to
-  #    the firecrawl group only. The five explicit openrouter/<id> entries
+  #    (non-free, ZDR-guarded), the same key the `firecrawl` group now uses. The five explicit openrouter/<id> entries
   #    above are the router's fallback ids and always win over this wildcard
   #    (exact match before pattern). NOTE the window caveat, same as the
   #    ollama wildcard: a model reached through this wildcard has no
@@ -354,11 +361,12 @@ router_settings:
   #    tiers on top of this (no fallback_model in the profiles) — the gateway
   #    owns the failure path.
   #
-  #    NO `firecrawl` entry (its two :free members fail over within the
-  #    group) and NO `default_fallbacks` (that would give the `ollama/*`
-  #    wildcard route a fallback and a silent paid path — the wildcard is
-  #    explicitly single-passthrough). One fallback list per line, a plain
-  #    JSON array value — that literal shape is what
+  #    NO `firecrawl` entry (it is a single paid member on the shared key;
+  #    a same-capability second member is the way to add resilience there,
+  #    not a fallback to a different class) and NO `default_fallbacks` (that
+  #    would give the `ollama/*` wildcard route a fallback and a silent paid
+  #    path — the wildcard is explicitly single-passthrough). One fallback
+  #    list per line, a plain JSON array value — that literal shape is what
   #    scripts/check-model-windows.py parses.
   fallbacks:
     - cheap: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
