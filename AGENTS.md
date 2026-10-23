@@ -781,6 +781,22 @@ spend). The `DREAM_*` lanes deliberately carry nothing: they call with
 does not apply — and they have never run here, needing the ≥50 documents the
 broken deriver never produced. **Watch them the first time they fire.**
 
+**1a. A rebuilt honcho image needs an output ceiling above the 2500 default**
+(2026-10-23, the v0.22.5-cycle honcho rebuild). Upstream #1373
+("fail loudly on malformed or degraded structured output", 2026-10-14) added
+`refuse_degraded_empty` to the deriver: a truncated response is retried and
+then recorded as `EmptyRepresentationError`, where the older image quietly
+accepted it. The ceiling is `DERIVER_MODEL_CONFIG__MAX_OUTPUT_TOKENS or
+LLM.DEFAULT_MAX_TOKENS` (2500), and the `cheap` tier truncates there on a
+multi-KB batch — observed `parse_class=truncated, finish_reasons=['length'],
+output_tokens=2500, prompt_bytes=11185` on the first two batches after the
+rebuild. `honcho.env` therefore carries
+`DERIVER_MODEL_CONFIG__MAX_OUTPUT_TOKENS=8192` (the model still stops when the
+JSON completes, so the larger ceiling is free). **A honcho image bump is not a
+no-op**: `honcho:main` tracks upstream, so re-check the deriver queue
+(`select task_type, count(*) filter (where error is not null) ... from queue`)
+right after any honcho rebuild, not just after a config change.
+
 **2. The plugin threw away recall it had already paid for.** A real dialectic
 call takes **90–270 s**; the plugin's HTTP timeout defaulted to **30 s** and
 `session_context.py` caught the timeout and **returned `""`** — 90 such
