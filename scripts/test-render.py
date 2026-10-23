@@ -144,13 +144,18 @@ for task, alias in render.STACK_AUX_MODELS.items():
     render.aux_model_block("STACK_AUX_MODELS", task, alias, models)
 ok("every declared task names a tier that exists in models.toml")
 
+# The base image's own aux task set (probed from DEFAULT_CONFIG['auxiliary']
+# under the image venv). Pinned here so a HERMES_REF bump that adds/drops a
+# task is caught offline: v0.22.5 gained free_only, openrouter_model,
+# stream_only_base_urls, transient_retries and lost kanban_estimator.
 check("known tasks match the image's aux task set",
       sorted(render.KNOWN_AUX_TASKS),
       sorted({"approval", "background_review", "compression", "curator",
-              "goal_judge", "kanban_decomposer", "kanban_estimator", "mcp",
+              "free_only", "goal_judge", "kanban_decomposer", "mcp",
               "memory_query_rewrite", "moa_aggregator", "moa_reference",
-              "monitor", "profile_describer", "review", "skills_hub",
-              "title_generation", "triage_specifier", "tts_audio_tags",
+              "monitor", "openrouter_model", "profile_describer", "review",
+              "skills_hub", "stream_only_base_urls", "title_generation",
+              "transient_retries", "triage_specifier", "tts_audio_tags",
               "vision", "voice_chat"}))
 
 # ---------------------------------------------------------------------------

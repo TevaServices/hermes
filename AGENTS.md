@@ -47,7 +47,7 @@ komodo's compose).
   moving or deleting a `v*` tag. The webhook fires on the *push* a squash
   merge produces — merge = deploy is literally the same event.
 - **Images are built by Komodo Builds — never compose build** (the stack runs
-  `run_build = false`; images `hermes-agent:v2026.9.24`, `litellm:main`,
+  `run_build = false`; images `hermes-agent:v0.22.5`, `litellm:main`,
   `honcho:main`, `honcho-mcp:main`, `builder = "<your-builder>"`). The
   `hermes-agent` and `litellm` Builds use a **repo-root build context**
   (`build_path = "."`) — the Dockerfiles COPY `docker/hermes/*`, `config/` +
@@ -1791,11 +1791,11 @@ an item **confers for an update** — `python3 /usr/local/bin/team-session.py
 in the calling profile's own channel, kept open until the PR is **merged**.
 Auto-threading only fires on inbound Discord messages, so the thread is
 created explicitly; the item→thread mapping persists under
-`$HERMES_HOME/cache/threads/` (each cron wake is a fresh session with no
-chat context). `team-thread.sh sweep` (called from the queue script,
-token-free) turns "issue closed" (`Closes #N` on merge) into "thread
-archived" — a thread cannot be stranded open just because the agent never
-woke again. Bot token and channel derive from the profile's own
+`$HERMES_HOME/cache/threads/` (a cron wake carries no chat context, so the
+mapping cannot live in a conversation). `team-thread.sh sweep` (called from
+the queue script, token-free) turns "issue closed" (`Closes #N` on merge)
+into "thread archived" — a thread cannot be stranded open just because the
+agent never woke again. Bot token and channel derive from the profile's own
 `$HERMES_HOME`, so each role posts as its own bot and sweeps its OWN
 (threads are owned by the bot that created them).
 
@@ -1880,19 +1880,29 @@ it survives until the next boot, then the reconciler overwrites it.
   process, whose `HERMES_HOME` is the DEFAULT profile. `bot-chat:<name>`
   passes `-p <name>` AND drops `HERMES_HOME` from the child env, so the turn
   really runs as the named profile.
-- **A cron wake is a work item, not a conversation — every wake starts a
-  FRESH session** (2026-10-04, patch 4 in `docker/hermes/patches/`). The
-  delivery used to hand the turn to the profile's canonical "Bot Chat"
-  session (`-c "Bot Chat" --create-if-missing`), so every wake accumulated
-  into one transcript replayed in full each time (observed: 700+ messages /
-  ~150k tokens of history per turn after three weeks). The delivery now
-  titles each wake uniquely so a fresh session mints per wake. **Interactive
-  Discord chat is unchanged** (the adapter's per-thread store — a different
-  path). Consequence: a work item interrupted mid-turn is re-delivered by
-  the resume-first queue into a FRESH context — the agent re-derives from
-  the durable state (issue/PR body, the session worktree, memory) rather
-  than from its own prior turn; those durable stores are the real state
-  machine. (Release-queue specifics: §"Routing work to a profile".)
+- **A cron wake lands in the profile's canonical "Bot Chat" session — upstream
+  owns that shape since v0.22.5, and our fresh-session patch is retired.**
+  A `bot-chat:<profile>` delivery is no longer a spawned `hermes chat`
+  child: it is a `bot_relay.deliver` RPC into that profile's RUNNING gateway
+  (durable admission record + receipt, idempotent by delivery id), admitted
+  as a turn in the profile's canonical Bot Chat — created on first delivery,
+  and the only session the door will accept unless this door itself moved a
+  previous delivery aside. Two consequences, both load-bearing:
+  the profile's gateway must be RUNNING for a wake to be admitted (no live
+  owner = the payload is parked and admitted on a later tick — a profile
+  whose gateway is stopped looks like a quiet queue), and wakes accumulate
+  in one transcript, bounded by compression at 80% of the tier's window
+  (§"Agent runtime invariants") rather than by a per-wake session. The
+  stack's own protection against stacked wakes is the one-session-per-item
+  gate (§"Routing work to a profile"), not a delivery timeout — that key
+  (`cron.bot_chat_delivery_timeout_seconds`) is gone in this base
+  (migration 50→51) and must not be re-rendered. **Interactive Discord chat
+  is unchanged** (the adapter's per-thread store — a different path). A work
+  item interrupted mid-turn is re-delivered by the resume-first queue into
+  the same session, so the agent sees its own prior turn AND the durable
+  state (issue/PR body, the session worktree, memory); those durable stores
+  remain the real state machine. (Release-queue specifics: §"Routing work to
+  a profile".)
 
 ## Local development (this repo)
 

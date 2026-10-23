@@ -361,9 +361,13 @@ worktree — the isolation this stack needs, it already has.
     prefixed `team: ` are the reconciler's and the only ones it prunes;
     anything you create is yours and will never be removed for you, which
     is precisely why it must clean up after itself.
-- **A job runs in a fresh session with no chat context**, and its FINAL
-  RESPONSE is what gets delivered — prompts must be self-contained and
-  cannot ask questions.
+- **A wake is admitted into the profile's canonical Bot Chat session, and its
+  FINAL RESPONSE is what gets delivered** — since v0.22.5 the delivery is a
+  `bot_relay.deliver` RPC to the profile's RUNNING gateway (not a spawned
+  `hermes chat`), so earlier wakes' turns can be in the transcript you see.
+  Prompts must still be self-contained — a cron turn cannot ask a human a
+  question — and a stopped gateway parks the delivery until a later tick
+  (a dead gateway looks exactly like a quiet queue).
 - **Script-only (`no_agent`) jobs cost zero tokens**: stdout is delivered
   verbatim and empty output is silence. Prefer that shape; wake an agent
   only when there is a decision to make.
