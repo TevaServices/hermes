@@ -185,8 +185,8 @@ through a shell history or chat transcript.
   model, callable as `ollama/<model-id>`, expanded in `/v1/models` from the
   provider's own list via `litellm_settings.check_provider_endpoint`) and
   `openrouter/*` (2026-10-06, `openrouter/<model-id>` on the shared
-  non-free ZDR-guarded key — the `firecrawl` group's `:free`-only rule and
-  separate key are untouched). **A wildcard id has NO declared window**
+  non-free ZDR-guarded key — the same key the `firecrawl` group rides since
+  2026-10-23). **A wildcard id has NO declared window**
   (models.toml declares windows per TIER) — fine for a try, not something an
   agent should rely on; explicit ids always beat the wildcard.
   **Bare-name aliases are the DEFAULT vocabulary** (2026-10-06): `glm-5.3-flash`,
@@ -261,9 +261,10 @@ through a shell history or chat transcript.
   fallback turns keep the tier's capability class. Correspondingly **no
   profile declares `fallback_model` any more** (see §"Agent runtime
   invariants"): re-routing the tier via OpenRouter, same quality, replaced
-  the escalation chain. NOT covered, on purpose: the `firecrawl` group (its
-  two free members fail over within the group; no fallback to a paid path)
-  and the `ollama/*` wildcard (single passthrough, no `default_fallbacks` —
+  the escalation chain. NOT covered, on purpose: the `firecrawl` group (a
+  single paid member on the shared key — resilience there is a
+  same-capability second member, never a cross-class fallback) and the
+  `ollama/*` wildcard (single passthrough, no `default_fallbacks` —
   a wildcard id must not acquire a silent paid path). Which backend served a
   request is observable in the response's `model` field and the
   `x-litellm-model-api-base`/`x-litellm-model-id` headers, plus litellm's
@@ -271,15 +272,29 @@ through a shell history or chat transcript.
   `litellm_settings.drop_params: true` — Honcho's `nomic-embed-text` calls
   4xxed on OpenAI-client default `encoding_format: float`, which the ollama
   provider rejects.
-- **The `firecrawl` group is NOT a tier: OpenRouter free models ONLY**
-  (`google/gemma-4-31b-it:free`, `nvidia/nemotron-3-super-120b-a12b:free`) —
-  Ollama Cloud strips `response_format: json_schema` (so /v1/extract and v2
-  json-format scrapes returned `json: null`), while OpenRouter passes it
-  through and SmartScrape extraction works. It is also the shape to copy for
-  any other lane that can never see private data.
+- **The `firecrawl` group is NOT a tier, and since 2026-10-23 it is a PAID
+  single-member group** (`openai/gpt-oss-20b`, $0.018/M in / $0.090/M out) on
+  the **shared `OPENROUTER_API_KEY`**. The reason the group exists is
+  unchanged: Ollama Cloud strips `response_format: json_schema` (so
+  `/v1/extract` and v2 json-format scrapes returned `json: null`), while
+  OpenRouter passes it through and SmartScrape extraction works. What
+  changed is the free-endpoint bet: both former members failed upstream
+  within days (`google/gemma-4-31b-it:free` 429 rate-limited,
+  `nvidia/nemotron-3-super-120b-a12b:free` 404 "Function … not found for
+  account") and took the extract lane plus the guard's forced classifier
+  with them, so the lane moved to the cheapest json_schema-capable PAID
+  endpoint (probed through the shared key with a strict schema). **ZDR is
+  irrelevant for this lane** — it only ever reads public web pages — which
+  is what makes the shared, ZDR-guarded key the right home; the separate
+  free key (`OPENROUTER_FREE_KEY`) is no longer referenced by anything.
+  One caveat rides the pick: gpt-oss-20b is a REASONING model, so a tight
+  `max_tokens` is partly spent thinking and can truncate the JSON (observed
+  at 200, clean at 2000+); Firecrawl's extract leaves room. It is still the
+  shape to copy for any other lane that can never see private data.
 - `litellm.env`: `LITELLM_MASTER_KEY`, `OLLAMA_API_KEY`,
   `OPENROUTER_API_KEY` (create at https://openrouter.ai/keys),
-  `OPENROUTER_FREE_KEY` (the `firecrawl` group's second key), the gateway's
+  `OPENROUTER_FREE_KEY` (now UNUSED — the `firecrawl` group moved to the
+  shared key on 2026-10-23; delete it when convenient), the gateway's
   `DATABASE_URL` (DB-backed since 2026-10-06), and the admin-UI SSO block:
   `PROXY_BASE_URL`, `GENERIC_CLIENT_ID`/`_SECRET` (Zitadel OIDC app), the
   three `GENERIC_*_ENDPOINT`s (the issuer's OIDC discovery values),
@@ -531,25 +546,25 @@ Firecrawl's own two defenses were evaluated first (live image +
   really running rather than silently skipping. It resolves its model via
   `getModel()`, so `MODEL_NAME=firecrawl` sends it to the LiteLLM
   `firecrawl` group.
-- **The `firecrawl` group carries its OWN key, and that is load-bearing.**
-  Both members are OpenRouter `:free` models and the account's OpenRouter
-  guardrail enforces ZDR, which excludes `:free` endpoints outright (404 "ZDR
-  violation (guardrail)") — for the `/responses` shape the classifier uses
-  AND the `/chat/completions` extraction shape alike, so it is the **model
-  group, not the call shape**, and it takes `/extract` and v2 json-format
-  scrapes down with it. Free endpoints and a ZDR guardrail are in tension by
-  construction, so the group runs on `OPENROUTER_FREE_KEY` — a free-models
-  key with **no ZDR guardrail** — and it is the only place that key appears;
-  the tiers keep the shared `OPENROUTER_API_KEY` (verified: the same `:free`
-  model 404s on the shared key and 200 on the free key, while the shared key
-  still served a paid tier). If the group 404s again, **check the key
-  first** — the account setting is at
-  `https://openrouter.ai/workspaces/default/guardrails`; the other ways out
-  (relaxing ZDR account-wide — the tiers would inherit it — or moving the
-  group to a paid ZDR endpoint — against its free-only design) are
-  deliberately avoided. Every failed call also cools the group down
-  (`cooldown_time: 60`), so a failed json scrape leaves it unusable for a
-  minute afterwards.
+- **The `firecrawl` group is a cheap PAID lane on the shared key (2026-10-23);
+  the free-endpoint experiment is over.** It used to run two `:free` models
+  on a separate non-ZDR key, because the account's ZDR guardrail excludes
+  `:free` endpoints outright (404 "ZDR violation (guardrail)") for the
+  `/responses` classifier shape AND the `/chat/completions` extraction shape
+  alike — a property of the **model group, not the call shape**. That bet
+  failed upstream within days: one member 429-rate-limited, the other 404 at
+  the provider ("Function … not found for account"), which silently took
+  `/extract`, v2 json scrapes and this classifier down with it. The lane now
+  points at `openai/gpt-oss-20b` (~$0.02/M in) on `OPENROUTER_API_KEY` —
+  public web content only, so ZDR is irrelevant here and the separate free
+  key is dead weight. Two things still true: every failed call cools the
+  group down (`cooldown_time: 60`), so a failed json scrape leaves it
+  unusable for a minute; and the classifier **fails open by design**, so
+  the live check above is how you confirm it is really running. That same
+  check is now also the fast way to see this lane break: a repeated
+  "guard call failed … (fail-open)" means the group is down again — look at
+  the provider's HTTP status before touching anything (a 429 is weather, a
+  404 on a specific provider is an OpenRouter endpoint retirement).
 - **Lockdown mode** is a true no-egress guarantee but is *scrape-only*, and
   self-hosted it is a refuse-everything switch, not a cache mode: with
   `INDEX_DATABASE_URL` unset the engine list is built empty under lockdown,
