@@ -70,18 +70,19 @@ CRON_SPEC = CONFIG / "cron.toml"
 CRON_SCRIPT_DIR = ROOT / "docker" / "hermes"
 # Merged into every rendered config (see render_profile) — a profile can
 # override any individual key via [config_extra.cron].
-STACK_CRON_DEFAULTS = {
-    # Upstream 600 kills a real agent turn mid-flight; see render_profile.
-    # 3600 was the first correction, but it is unbounded against a `*/5`
-    # self-pull: a delivery that runs an hour while its own job fires every
-    # 5 minutes stacks up to 12 overlapping wakes (observed 2026-09-25 —
-    # four bot_chat_pending files for one issue, one of them a 3600s
-    # timeout). 900 clears the longest legitimate turn this host runs while
-    # keeping the backlog bounded to ~3 ticks. The real fix for the
-    # stacking is the one-session-per-item gate in team-queue.sh; this is
-    # the backstop under it.
-    "bot_chat_delivery_timeout_seconds": 900,
-}
+STACK_CRON_DEFAULTS = {}
+# The one stack-wide cron override this dict used to carry —
+# `bot_chat_delivery_timeout_seconds: 900` — is GONE at the v0.22.5 bump,
+# removed for the same reason upstream removed the key (config migration
+# 50→51): a bot-chat delivery no longer spawns `hermes chat` synchronously
+# inside the job's execution, so there is no child to time out and kill.
+# It is now a `bot_relay.deliver` RPC into the target profile's running
+# gateway, admitted as a turn in that profile's canonical "Bot Chat"
+# session with a durable receipt. Do NOT re-add the key: it is unknown to
+# this base (the boot migration would strip it, logging a removal every
+# boot). The overlap protection that mattered — two wakes on one work item
+# — is the one-session-per-item gate in team-queue.sh, unchanged.
+
 # Approvals for EVERY profile — merged like STACK_CRON_DEFAULTS, and
 # overridable per profile via [config_extra.approvals].
 #
@@ -274,8 +275,8 @@ STACK_AUX_MODELS = {
     # model silently breaks long work.
     "compression": "smarter",
     # One call per NEW session, and a title is a handful of tokens: the
-    # cheapest lane is right by construction. Volume grows with the
-    # fresh-session-per-cron-wake shape (one wake = one new session).
+    # cheapest lane is right by construction. Volume grows with new sessions
+    # (interactive chats, and a first delivery into a profile's Bot Chat).
     "title_generation": "cheap",
     # Rewrites the latest user message into a retrieval query (8s timeout,
     # ~4k chars in / 320 out) — mechanical. Idle today: the Honcho memory
@@ -290,13 +291,16 @@ STACK_AUX_MODELS = {
 # Re-verify at a HERMES_REF bump:
 #   python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG; \
 #               print(sorted(DEFAULT_CONFIG['auxiliary']))"
-# (run under the image venv; v0.22.0 list is reproduced below — v0.22.0 gained
-# voice_chat.)
+# (run under the image venv; v0.22.5 list is reproduced below. Deltas at the
+# v0.22.5 bump: gained free_only, openrouter_model, stream_only_base_urls,
+# transient_retries; LOST kanban_estimator — a pin to it would now be a knob
+# that does nothing, so it is out of the guard set on purpose.)
 KNOWN_AUX_TASKS = {
-    "approval", "background_review", "compression", "curator", "goal_judge",
-    "kanban_decomposer", "kanban_estimator", "mcp", "memory_query_rewrite",
-    "moa_aggregator", "moa_reference", "monitor", "profile_describer",
-    "review", "skills_hub", "title_generation", "triage_specifier",
+    "approval", "background_review", "compression", "curator", "free_only",
+    "goal_judge", "kanban_decomposer", "mcp", "memory_query_rewrite",
+    "moa_aggregator", "moa_reference", "monitor", "openrouter_model",
+    "profile_describer", "review", "skills_hub", "stream_only_base_urls",
+    "title_generation", "transient_retries", "triage_specifier",
     "tts_audio_tags", "voice_chat", "vision",
 }
 
@@ -483,7 +487,7 @@ def gateway_fallback_targets() -> set[str] | None:
 # Config schema version used when the base image's own value can't be read
 # (local preview runs, where hermes_cli isn't installed). Keep in sync with
 # the HERMES_REF pin — the authoritative stamp is derived at build time.
-_FALLBACK_CONFIG_VERSION = 50
+_FALLBACK_CONFIG_VERSION = 51
 
 
 def latest_config_version() -> int:
@@ -1346,23 +1350,12 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
             model_overrides.setdefault(provider, {}).update(entries)
     config["model_overrides"] = model_overrides
 
-    # Cron: raise the bot-chat delivery cap for EVERY profile.
-    #
-    # A bot-chat delivery runs the target profile's agent for a FULL TURN,
-    # SYNCHRONOUSLY inside the cron job's execution, under a timeout whose
-    # upstream default is 600s — and on expiry that child is killed. A real
-    # work turn is far longer than 600s, so the default does not merely
-    # log a warning, it terminates the agent mid-task: observed live, the
-    # developer agent claimed its issue at 16:19 and was killed at 16:21
-    # having done nothing further.
-    #
-    # Stack-wide rather than per profile because the value is read by
-    # whichever scheduler fires the job, which under
-    # GATEWAY_MULTIPLEX_PROFILES is not necessarily the job's own profile.
-    # Holding the execution open also SERIALISES the 5-minute poll against
-    # a running turn — the next tick cannot stack a second wake on top of
-    # work already in flight. Merged (not replaced) so a profile may still
-    # override any individual key via [config_extra.cron].
+    # Cron: merge the stack-wide overrides (now empty — see
+    # STACK_CRON_DEFAULTS for the removed delivery timeout) so a profile may
+    # still set any cron key via [config_extra.cron]. Nothing here holds a
+    # job's execution open any more: a bot-chat delivery is an asynchronous
+    # RPC to the target profile's gateway, not a child process this stack
+    # sizes a timeout for.
     cron_cfg = dict(STACK_CRON_DEFAULTS)
     cron_cfg.update(config.get("cron") or {})
     config["cron"] = cron_cfg

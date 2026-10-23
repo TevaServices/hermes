@@ -38,7 +38,7 @@
 #      see the RUN below §"Base-image tool-store readability" (not a
 #      source patch: upstream's build artifact, fixed in a thin layer).
 #
-ARG HERMES_REF=v0.22.0
+ARG HERMES_REF=v0.22.5
 FROM nousresearch/hermes-agent:${HERMES_REF}
 
 # ── Source patches over upstream ──────────────────────────────────────
@@ -46,21 +46,23 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # Each must be re-anchored at every HERMES_REF bump, and DELETED once
 # upstream adopts the fix (the build says so — see below).
 #
-# FOUR patches currently.
+# THREE patches currently.
 #
-# 4. cron/scheduler_delivery.py — a cron wake must start a FRESH session, not
-# resume the profile's canonical "Bot Chat". The delivery hardcodes
-# `-c "Bot Chat" --create-if-missing`, so every wake a profile ever took
-# landed in ONE transcript that only grew, and every later wake replayed all
-# of it (observed live 2026-10-04: a profile's Bot Chat held 700+ messages /
-# ~150k tokens of history and the release lane paid for it on every
-# 5-minute wake). These jobs are work items, not a conversation, so the
-# patch titles each wake uniquely (`Bot Chat - <job> - <run id>`), which makes
-# --create-if-missing mint a fresh session. Interactive chat is untouched:
-# a Discord thread keeps its own persistent session (a different session
-# store entirely), and the live-owner lane above the CLI fallback is
-# unchanged. The canonical Bot Chat is no longer written by cron at all.
-# (`grep -n '"Bot Chat"' on that file finds the one literal this anchors.)
+# RETIRED at the v0.22.5 bump: a fourth patch (cron/scheduler_delivery.py)
+# minted a fresh session per cron wake by retitling the `hermes chat -c
+# "Bot Chat" --create-if-missing` child. v0.22.5 DELETED that child entirely
+# — a bot-chat delivery is now a `bot_relay.deliver` RPC into the target
+# profile's running gateway (durable admission, receipt, `cron.
+# bot_chat_delivery_timeout_seconds` migration 50→51 removes the old
+# synchronous timeout). The door admits only into the canonical "Bot Chat"
+# session (a caller may pin another id only when this door moved it aside),
+# so the patch cannot be re-anchored without fighting upstream's admission
+# model; the target code no longer exists. Consequence, stated plainly:
+# wakes share the profile's Bot Chat transcript again (bounded now by
+# compression at 80% of the tier window — see §"Agent runtime invariants"),
+# and a delivery needs the profile's gateway RUNNING (no live owner = the
+# payload is parked and admitted on a later tick). See AGENTS.md
+# §"Scheduled jobs" for the operating rule.
 #
 # 3. plugins/platforms/discord/adapter.py — self-heal voice after Discord
 # externally terminates the session. Discord kicks voice sessions
