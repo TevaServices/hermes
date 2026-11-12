@@ -491,16 +491,26 @@ resources.
   trip). The release profile's alt-Komodo path (§"Agent self-management")
   rides this integration; mach reaching the gateway at all was never
   needed by anything else.
-- **firecrawl**: the real concurrency knobs are `NUQ_WORKER_COUNT=1`
-  (`NUM_WORKERS_PER_QUEUE` only affects the legacy worker),
-  `MAX_CONCURRENT_JOBS=2`, `CRAWL_CONCURRENT_REQUESTS=2`,
-  `BROWSER_POOL_SIZE=1`; playwright has a memory-only limit (a `cpus` limit
-  above the host's core count is unschedulable). **Env var names churn
-  between releases** — when bumping `FIRECRAWL_VERSION`, diff `compose/
-  firecrawl.compose.yml` against upstream's `docker-compose.yaml` for the
-  new tag. Known trap: **`HOST` must stay `0.0.0.0`** (the default
-  `localhost` binds IPv6 loopback only — the in-container probe and the
-  published port both ECONNREFUSED, restart-looping forever). **The broker
+- **firecrawl**: the current image (pulled 2026-11-12) reads
+  `NUQ_WORKER_COUNT=1`; `MAX_CONCURRENT_JOBS=2`,
+  `CRAWL_CONCURRENT_REQUESTS=2` and `BROWSER_POOL_SIZE=1` are pre-2026-11
+  names kept only so a rollback stays right-sized. The browser service
+  variable was renamed **`PLAYWRIGHT_SERVICE_URL` -> `PLAYWRIGHT_MICROSERVICE_URL`**
+  and now wants the `/scrape` path; both are set so either image works. The
+  Playwright service reads `MAX_CONCURRENT_PAGES=2` (default 10 is too many
+  for this host); it has a memory-only limit (a `cpus` limit above the host's
+  core count is unschedulable). `HARNESS_STARTUP_TIMEOUT_MS=180000` covers the
+  cold start after a DB recreate, which has exceeded the 60s default here.
+  **Env var names churn between releases** — when bumping `FIRECRAWL_VERSION`,
+  diff `compose/firecrawl.compose.yml` against upstream's
+  `docker-compose.yaml` for the new tag. **The 2026-11-12 image is the first
+  deployed here with the top-level `checkPromptInjection`; the 2026-09-05
+  rollback tag rejects it.** Rolling the image back also requires rolling the
+  guard's classifier injection back to the nested-only shape — do not mix an
+  old API with a top-level-forcing guard. Known trap: **`HOST` must stay
+  `0.0.0.0`** (the default `localhost` binds IPv6 loopback only — the
+  in-container probe and the published port both ECONNREFUSED,
+  restart-looping forever). **The broker
   is LavinMQ, not rabbitmq (since 2026-09-22)** — `compose/lavinmq.
   compose.yml` serves `cloudamqp/lavinmq` under the `firecrawl-rabbitmq`
   alias: drop-in AMQP 0-9-1, idles at tens of MB, guest/guest
