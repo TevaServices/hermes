@@ -50,8 +50,9 @@ HERMES_GUARD_REF = "v2026.10.3"
 # FIRECRAWL_GUARD_MODE = "enforce"
 # FIRECRAWL_EGRESS = "open"   # open | cache-only | closed — see AGENTS.md
 
-# Optional — override locally with `mise set FIRECRAWL_PORT=3002`:
-# FIRECRAWL_PORT = "3002"
+# firecrawl-api deliberately has NO host publish (2026-11-12): it lives on
+# firecrawl-internal only, behind firecrawl-guard. A 127.0.0.1:3002 publish
+# would be a second ingress and make the fence optional again.
 
 # The Hermes dashboard s6 service — DISABLED by default; the flip surface
 # is the stack environment (komodo/resources.toml) for the real deploy,
@@ -93,6 +94,10 @@ run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-git-publish.sh", "sh scrip
 [tasks.net]
 description = "Create the shared external docker network (idempotent)"
 run = "docker network inspect hermes-net >/dev/null 2>&1 || docker network create hermes-net"
+
+[tasks.mint-firecrawl-key]
+description = "Mint a LiteLLM virtual key scoped to the firecrawl model group (writes no secret unless --out is given)"
+run = "sh scripts/mint-firecrawl-key.sh"
 
 [tasks.up]
 description = "Build and start all stacks (hermes, honcho, firecrawl, litellm, valkey)"

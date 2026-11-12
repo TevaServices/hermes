@@ -26,10 +26,16 @@ services:
     networks:
       hermes-net:
         aliases: [firecrawl-redis, honcho-redis]
+      # Firecrawl's services moved off hermes-net (firecrawl-internal);
+      # the same alias keeps every redis:// URL working on both planes.
+      firecrawl-internal:
+        aliases: [firecrawl-redis]
 
 networks:
   hermes-net:
     external: true
+  # Provided by firecrawl.compose.yml when the stack is merged.
+  firecrawl-internal:
 
 volumes:
   valkey-data:

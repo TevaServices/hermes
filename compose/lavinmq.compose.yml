@@ -33,12 +33,14 @@ services:
     volumes:
       - lavinmq-data:/var/lib/lavinmq
     networks:
-      hermes-net:
+      # Only Firecrawl's extract lane consumes this broker. Keep it off
+      # hermes-net: a compromised agent cannot reach the AMQP port at all.
+      firecrawl-internal:
         aliases: [firecrawl-rabbitmq]
 
 networks:
-  hermes-net:
-    external: true
+  # Provided by firecrawl.compose.yml when the stack is merged.
+  firecrawl-internal:
 
 volumes:
   lavinmq-data:

@@ -21,12 +21,13 @@ all deployed and kept up to date on a Linux host by [Komodo](https://komo.do).
    │                                 honcho-deriver          │
    │      │  MCP                    honcho-db                │
    │      ▼                                                 │
-   │  firecrawl-mcp (in-agent, stdio) ──► firecrawl-api       │
+   │  firecrawl-mcp (in-agent) ──► firecrawl-guard ──► firecrawl-api │
+   │  [hermes-net]                 [both]        [firecrawl-internal]  │
    │         firecrawl-playwright / db / lavinmq (extract)    │
    │                                                        │
    │  shared: valkey (aliases: firecrawl-redis, honcho-redis) │
    │  hermes-main / honcho / firecrawl ──► litellm ──►       │
-   │    Ollama Cloud / OpenRouter free, one group per tier   │
+   │    Ollama Cloud / OpenRouter, one group per tier        │
    └────────────────────────────────────────────────────────┘
 ```
 
@@ -71,13 +72,16 @@ render.py               compiles config/ -> /overlay/<profile> at image build
                         the dead-drop packages, with the sources baked at
                         /opt/hermes-stack-config/
 docker/hermes/          thin image over the official agent image + entrypoint
-compose/                four stacks: hermes, honcho, firecrawl, litellm (shared hermes-net)
+compose/                four stacks: hermes, honcho, firecrawl, litellm
+                        (hermes-net for clients; firecrawl-internal for the
+                        API/db/playwright/broker, reached only via the guard)
 secrets/                *.env.example templates (real files never committed)
 komodo/                 Resource Sync definitions + setup guide
 scripts/                host setup + credential/diagnostic helpers
                         (bootstrap-host.sh, create-github-apps.py,
                         set-team-discord-tokens.py, hostdeploy.py — the
-                        shared ssh-push deploy, discord-thread-doctor.py)
+                        shared ssh-push deploy, discord-thread-doctor.py,
+                        mint-firecrawl-key.sh — the scoped LiteLLM key)
                         + container cron shims (prune-repos.sh, refresh-repos.sh)
 ```
 
@@ -218,8 +222,9 @@ environment variable. This is the complete list — work through it once.
 
 | Variable | What it is |
 |---|---|
-| `LITELLM_MASTER_KEY` | `openssl rand -hex 32`; mirrored into the apps' key vars |
-| `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` | keys for the backends `config/litellm.yaml` declares (Ollama Cloud for the four tiers, OpenRouter free for Firecrawl) |
+| `LITELLM_MASTER_KEY` | `openssl rand -hex 32`; mirrored into the agents' and Honcho's key vars |
+| `OLLAMA_API_KEY`, `OPENROUTER_API_KEY` | keys for the backends `config/litellm.yaml` declares (Ollama Cloud for the four tiers, OpenRouter for the paid `firecrawl` group) |
+| Firecrawl's `OPENAI_API_KEY` | a LiteLLM **virtual key scoped to `firecrawl`** (not the master key), minted with `sh scripts/mint-firecrawl-key.sh` |
 | `TEAM_OWNER` | the GitHub account whose org-repos the profile packages work on — package queue scripts refuse to run without it (script-read vars ride the container env, which package env files never reach) |
 | `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` | the default agent's bot |
 | `DISCORD_HOME_CHANNEL` | where gateway system messages and the housekeeping jobs post |
@@ -305,14 +310,15 @@ and skills live in volumes and survive.
   `{{config_root}}` template) pointing at the secrets directory. mise exports
   these to all tasks; compose reads them from the process environment.
 - **`[tasks]`** — `render`, `validate`, `up`, `down`, `ps`, `logs`, `chat`,
-  `pull`, `net`, `check-updates`, `check-model-windows`, `clean`. `mise tasks`
-  lists them; `mise run up` runs render + net first via task dependencies.
+  `pull`, `net`, `mint-firecrawl-key`, `check-updates`, `check-model-windows`,
+  `clean`. `mise tasks` lists them; `mise run up` runs render + net first via
+  task dependencies.
 
 Per-machine overrides go in `mise.local.toml` (gitignored), e.g.:
 
 ```bash
 mise set HERMES_ENV_DIR=/etc/hermes
-mise set FIRECRAWL_PORT=3002
+mise set HERMES_GUARD_REF=v2026.10.3
 ```
 
 **Secrets note**: API keys and bot tokens are *runtime* container secrets, not
@@ -365,7 +371,11 @@ mise run check-model-windows   # each tier's declared window vs the provider's A
 - [ ] `hermes-main` starts; `docker logs hermes-main` shows the gateway connecting
 - [ ] `docker exec -it hermes-main hermes doctor` is green
 - [ ] Agent's Honcho MCP tools respond (`honcho-mcp` reachable over hermes-net)
-- [ ] Agent can scrape a page via Firecrawl (`curl 127.0.0.1:3002/v0/health/readiness`)
+- [ ] Agent can scrape a page via Firecrawl, through the guard
+      (`docker exec hermes-main curl -sS http://firecrawl-guard:3003/healthz`)
+- [ ] The API is unreachable from the agent plane
+      (`docker exec hermes-main getent hosts firecrawl-api` prints nothing;
+      `curl http://firecrawl-api:3002/` fails)
 
 ## Sources
 

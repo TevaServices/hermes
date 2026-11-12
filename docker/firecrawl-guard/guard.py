@@ -18,12 +18,14 @@ MCP layer covers:
       page reflected back, and wraps page text in an explicit
       untrusted-content envelope so the model reads it as data.
 
-It also FORCES Firecrawl's own `checkPromptInjection` onto json-format
-scrapes. That classifier is good (randomized anti-spoof tags, chunked with
-overlap, capability-aware prompt) but unreachable otherwise: it is a field on
-the `json` format object, `firecrawl-mcp`'s `jsonOptions` schema carries only
-{prompt, schema} and so drops it, and Firecrawl has no force-env for it. See
-AGENTS.md for the full findings.
+It also FORCES Firecrawl's own `checkPromptInjection` onto scrape, batch
+scrape, crawl and parse requests. That classifier is good (randomized
+anti-spoof tags, chunked with overlap, capability-aware prompt) but
+unreachable otherwise: `firecrawl-mcp`'s schema does not expose it, there is
+no force-env, and current Firecrawl accepts it at the top level (crawl nests
+scrape options under `scrapeOptions`) while older releases only knew the
+per-json-format flag. The guard sets both and overrides an explicit `false`.
+See AGENTS.md for the full findings.
 
 It also NORMALISES search-call drift: recent `firecrawl-mcp` versions
 default cloud-era `/v2/search` arguments the self-hosted API strictly
@@ -87,9 +89,12 @@ UPSTREAM_TIMEOUT = 180
 ENFORCING = MODE == "enforce"
 HEALTH_PATH = "/healthz"
 
-# The stack's own service names on hermes-net. A prompt-injected agent aiming
-# a scrape at one of these is reading the control plane, the gateway, or the
-# databases — nothing legitimate ever scrapes them, so this is a hard deny.
+# The stack's own service names, across both planes (hermes-net and
+# firecrawl-internal). A prompt-injected agent aiming a scrape at one of
+# these is reading the control plane, the gateway, the API, or the databases
+# — nothing legitimate ever scrapes them, so this is a hard deny. Network
+# placement is the real control; this list is defense-in-depth for names the
+# guard can still resolve.
 INTERNAL_HOSTS = {
     "localhost", "metadata.google.internal", "metadata",
     "litellm", "hermes-main", "komodo-core",
@@ -402,15 +407,62 @@ def sanitize_response(path: str, content_type: str, body: bytes) -> bytes:
 
 # --------------------------------------------------------- policy injection
 
+# Every endpoint whose body can carry a scrape's scrape options. `/crawl`
+# carries them under `scrapeOptions`; the rest are flat. Sub-paths (batch
+# scrape, crawl status) are matched by the trailing (?:/|$).
+PROMPT_INJECTION_PATH = re.compile(r"/(?:scrape|crawl|parse)(?:/|$)")
+
+
+def _formats(node: dict[str, Any]) -> list[Any]:
+    formats = node.get("formats")
+    return formats if isinstance(formats, list) else []
+
+
+def _has_raw_base64(node: dict[str, Any]) -> bool:
+    return any(isinstance(f, dict) and f.get("type") == "rawBase64"
+               for f in _formats(node))
+
+
+def _force_format_flags(node: dict[str, Any]) -> bool:
+    """Set the deprecated per-format/jsonOptions flag (older Firecrawl)."""
+    touched = False
+    for fmt in _formats(node):
+        if isinstance(fmt, dict) and fmt.get("type") == "json":
+            if fmt.get("checkPromptInjection") is not True:
+                fmt["checkPromptInjection"] = True
+                touched = True
+    # v1 only has the flag inside jsonOptions; a caller's `false` is
+    # overridden because this is a security control, not a preference.
+    opts = node.get("jsonOptions")
+    if isinstance(opts, dict) and opts.get("checkPromptInjection") is not True:
+        opts["checkPromptInjection"] = True
+        touched = True
+    return touched
+
+
+def _force_top_level(node: dict[str, Any]) -> bool:
+    if node.get("checkPromptInjection") is not True:
+        node["checkPromptInjection"] = True
+        return True
+    return False
+
 
 def inject_policy(path: str, body: bytes) -> bytes:
-    """Force Firecrawl's own prompt-injection classifier onto json scrapes.
+    """Force Firecrawl's own prompt-injection classifier onto scrape-shaped
+    requests.
 
-    `firecrawl-mcp` cannot ask for it (its jsonOptions schema is only
-    {prompt, schema}) and Firecrawl has no force-env, so this is the only
-    place the flag can be set. A caller's explicit value is left alone.
+    Current Firecrawl exposes `checkPromptInjection` at the top level of v2
+    scrape/parse/batch and inside crawl's `scrapeOptions`; older releases only
+    knew the per-json-format flag. Set both, and override an explicit `false`:
+    `firecrawl-mcp` cannot ask for the flag, the API has no force-env, and a
+    control the caller can disable is not a control.
+
+    `rawBase64` is the one combination the API rejects, so a request carrying
+    it keeps the per-format flag and skips the top-level one (binary data is
+    not prompt-injectable text; it is logged, not silently dropped).
     """
-    if "/scrape" not in path:
+    base = path.split("?", 1)[0]
+    if not PROMPT_INJECTION_PATH.search(base):
         return body
     try:
         payload = json.loads(body)
@@ -419,15 +471,28 @@ def inject_policy(path: str, body: bytes) -> bytes:
     if not isinstance(payload, dict):
         return body
 
-    formats = payload.get("formats")
-    if not isinstance(formats, list):
+    # /crawl reads scrape params from a nested object; a v2 crawl without
+    # one gets the prefault shape so the flag still applies.
+    if re.search(r"/crawl(?:/|$)", base):
+        target = payload.setdefault("scrapeOptions", {})
+        if not isinstance(target, dict):
+            return body
+    else:
+        target = payload
+
+    # `checkPromptInjection` + rawBase64 is a validation error upstream, and
+    # current releases lift the deprecated per-format flag to the top level —
+    # so skip the whole injection for such a request rather than turn a valid
+    # request into a 400. There is no markdown to classify anyway.
+    if _has_raw_base64(target):
+        log("prompt_injection_skipped", path=base, reason="rawBase64")
         return body
-    touched = False
-    for fmt in formats:
-        if isinstance(fmt, dict) and fmt.get("type") == "json":
-            if "checkPromptInjection" not in fmt:
-                fmt["checkPromptInjection"] = True
-                touched = True
+
+    touched = _force_format_flags(target)
+    # v1 has no top-level flag (it rejects unknown keys); the per-format and
+    # jsonOptions paths above are its only home.
+    if not base.startswith("/v1/"):
+        touched = _force_top_level(target) or touched
     return json.dumps(payload).encode() if touched else body
 
 

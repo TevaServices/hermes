@@ -84,21 +84,23 @@ services:
       # startup catalogue fetch.
       litellm:
         condition: service_healthy
+    # The API is NOT on hermes-net. It lives only on firecrawl-internal,
+    # which the guard also joins; every client therefore reaches it through
+    # the guard. A client that names firecrawl-api:3002 cannot resolve it,
+    # fail-closed. There is deliberately no published port: a host publish
+    # would hand the host (and the Docker host-gateway path) a second
+    # ingress and make the fence optional again.
     networks:
-      hermes-net:
+      firecrawl-internal:
         aliases: [firecrawl-api]
-    # Only the Hermes agents need this API (via hermes-net). Publish to
-    # loopback only if you want to curl it from the host.
-    ports:
-      - "127.0.0.1:${FIRECRAWL_PORT:-3002}:3002"
 
   # The fence on the agent's web path: firecrawl-mcp talks to this, and this
   # talks to firecrawl-api. It forces Firecrawl's own checkPromptInjection
-  # onto json scrapes, refuses egress carrying secrets or aimed at the
+  # onto scrape/crawl/parse, refuses egress carrying secrets or aimed at the
   # stack's own services, and sanitises what comes back (see
   # docker/firecrawl-guard/guard.py, and AGENTS.md for the findings behind
-  # it). No published port: the host loopback port above bypasses it, which
-  # is deliberate — a human curling 3002 is not the threat model.
+  # it). No published port: it is the only ingress to firecrawl-api, and
+  # that is enforced by the network split above, not by client config.
   #
   # Built by a Komodo Build like the rest of the stack (the stack runs
   # run_build = false, so the Build resource supplies this image); the
@@ -135,7 +137,12 @@ services:
       valkey:
         condition: service_started
     networks:
+      # Clients reach the guard here; the guard reaches the API and the
+      # shared Valkey over firecrawl-internal. Two networks, one process:
+      # the guard is the bridge, and the only one.
       hermes-net:
+        aliases: [firecrawl-guard]
+      firecrawl-internal:
         aliases: [firecrawl-guard]
     healthcheck:
       # The image has no curl; python is the probe (same shape as litellm's).
@@ -157,10 +164,11 @@ services:
   # agent-side npx spawn. It was fronted by the LiteLLM gateway's
   # mcp_servers until 2026-10-16; that surface served no consumer and was
   # removed from litellm.yaml. The Firecrawl credential stays inside the
-  # stack, and the guard stays in the path: FIRECRAWL_API_URL names
-  # firecrawl-guard:3003, NEVER firecrawl-api — the guard sees plain /v2
-  # REST from here, so its egress filter and sanitiser apply to every
-  # scrape the agents make.
+  # stack, and the guard is the only route: FIRECRAWL_API_URL names
+  # firecrawl-guard:3003, and firecrawl-api is on firecrawl-internal (not
+  # resolvable from here, no published port). The guard sees plain /v2
+  # REST from this service, so its egress filter and sanitiser apply to
+  # every scrape the agents make.
   #
   # Pinned to 3.20.1 DELIBERATELY (live-verified 2026-10-07): 3.21-3.28 of the
   # package register the Firecrawl *cloud* surface the self-hosted API does
@@ -237,7 +245,7 @@ services:
           # unschedulable, so cap memory only.
           memory: 1g
     networks:
-      - hermes-net
+      - firecrawl-internal
 
   firecrawl-db:
     image: ghcr.io/firecrawl/nuq-postgres:${FIRECRAWL_VERSION:-latest}
@@ -255,11 +263,16 @@ services:
     volumes:
       - firecrawl-db-data:/var/lib/postgresql/data
     networks:
-      - hermes-net
+      - firecrawl-internal
 
 networks:
   hermes-net:
     external: true
+  # Firecrawl's private network: the API, its datastores, the browser
+  # service, and the guard's upstream leg. Clients on hermes-net cannot
+  # resolve or route to any of it. NOT `internal: true` — Firecrawl needs
+  # ordinary internet egress for the pages it fetches.
+  firecrawl-internal:
 
 volumes:
   firecrawl-db-data:

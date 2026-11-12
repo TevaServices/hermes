@@ -77,6 +77,22 @@ services:
       REDIS_HOST: valkey
       REDIS_PORT: "6379"
       REDIS_DB: "3"
+      # Privacy guard, non-secret and belt-and-braces with config/litellm.yaml.
+      # STORE_PROMPTS_IN_SPEND_LOGS is the env twin of
+      # general_settings.store_prompts_in_spend_logs and is consulted even when
+      # the config value is false, so an old `true` in litellm.env would
+      # otherwise re-enable request/response-body storage. This `environment`
+      # entry beats `env_file`, keeping prompt bodies out of LiteLLM_SpendLogs.
+      STORE_PROMPTS_IN_SPEND_LOGS: "false"
+      # Never print the standard logging payload (it carries messages and
+      # completions) to the container log.
+      LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD: "false"
+      # DEBUG (LiteLLM's detailed-debug mode) prints the raw provider request,
+      # including prompt bodies, to stdout. WARNING is the effective default
+      # when unset; naming it here stops a stale `LITELLM_LOG=DEBUG` in
+      # litellm.env from turning that on. It also keeps uvicorn's INFO access
+      # lines out of the container log.
+      LITELLM_LOG: "WARNING"
     env_file:
       - ${HERMES_ENV_DIR:?export HERMES_ENV_DIR (absolute) — see mise.toml}/litellm.env
     healthcheck:
@@ -99,10 +115,17 @@ services:
     networks:
       hermes-net:
         aliases: [litellm]
+      # Firecrawl's LLM features (extract + the forced prompt-injection
+      # classifier) call the gateway from firecrawl-internal. The gateway
+      # is the bridge between the two planes, on purpose.
+      firecrawl-internal:
+        aliases: [litellm]
 
 networks:
   hermes-net:
     external: true
+  # Provided by firecrawl.compose.yml when the stack is merged.
+  firecrawl-internal:
 
 volumes:
   litellm-db-data:

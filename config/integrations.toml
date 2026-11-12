@@ -46,10 +46,11 @@ enabled = true
 # long-lived service is pinned at 3.20.1, healthchecked, already running
 # before any gateway boots, and connects in milliseconds.
 #
-# The fence stays on the path: the service's FIRECRAWL_API_URL names
-# firecrawl-guard:3003, NEVER firecrawl-api — the guard forwards to
-# firecrawl-api:3002 behind it, so its egress refusal, injection sanitising
-# and forced checkPromptInjection apply exactly as before (see
+# The fence is structural: the service's FIRECRAWL_API_URL names
+# firecrawl-guard:3003, and firecrawl-api is on firecrawl-internal only —
+# not resolvable from hermes-net, with no published port. The guard is the
+# sole ingress, so its egress refusal, injection sanitising and forced
+# checkPromptInjection apply to every scrape (see
 # docker/firecrawl-guard/guard.py and AGENTS.md). The Firecrawl credential
 # lives in the service's own env (firecrawl.env); the agents send no headers
 # and carry no firecrawl secret.

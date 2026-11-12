@@ -279,6 +279,10 @@ model_list:
   #    does. No group fallback by design: a second member would have to be
   #    same-capability to be worth it, and a 4xx still retries within the
   #    group.
+  # Firecrawl authenticates with a virtual key scoped to THIS group only
+  # (scripts/mint-firecrawl-key.sh); never put the master key in
+  # firecrawl.env. The key keeps a compromised extractor/classifier off every
+  # tier and caps spend with its own budget/RPM limit.
   - model_name: firecrawl
     litellm_params:
       model: openrouter/openai/gpt-oss-20b
@@ -403,6 +407,14 @@ litellm_settings:
   # nomic-embed-text calls were failing on it. Dropping is safe here: the
   # ollama provider returns floats regardless.
   drop_params: true
+  # Never hand prompt or completion content to a logging callback. LiteLLM
+  # replaces the messages/response bodies with "redacted-by-litellm" while
+  # still recording metadata (spend, tokens, model, latency), so privacy does
+  # not cost observability. The per-request opt-out header
+  # (LiteLLM-Disable-Message-Redaction) is only honoured for keys/teams whose
+  # metadata sets allow_client_message_redaction_opt_out — this stack never
+  # sets it, so callers cannot turn redaction back off.
+  turn_off_message_logging: true
 # ── Proxy/UI settings ────────────────────────────────────────────────────
 # The admin UI must not fall back to environment credentials (UI_USERNAME/
 # UI_PASSWORD — or the master key when UI_PASSWORD is unset) as a proxy-admin
@@ -412,6 +424,13 @@ litellm_settings:
 # API-only from here on.
 general_settings:
   disable_env_credential_login: true
+  # Keep request/response bodies out of LiteLLM_SpendLogs. This is LiteLLM's
+  # default, but state it explicitly: a config-file value is "config-owned", so
+  # the admin UI's "Store Prompts in Spend Logs" toggle cannot re-enable it.
+  # The env twin (STORE_PROMPTS_IN_SPEND_LOGS) is also forced false in
+  # compose/litellm.compose.yml because LiteLLM checks it even when this value
+  # is false, so a stale `true` in litellm.env would otherwise win.
+  store_prompts_in_spend_logs: false
 
 # ── MCP surfaces are NOT fronted here any more ────────────────────────────
 # The gateway carried two mcp_servers entries (firecrawl and mach) until
@@ -423,7 +442,9 @@ general_settings:
 #     consumer: the agents never used it (deliberately — the doubled toolset
 #     schema bill), the gateway's own boot listed it with benign ConnectError
 #     noise while the service was mid-npx-fetch, and no other MCP-capable
-#     client ever materialised.
+#     client ever materialised. If an older deployed config still carries the
+#     entry, it names an endpoint on firecrawl-internal that the gateway
+#     cannot resolve now: remove it, or point it at firecrawl-guard:3003.
 #   * mach — the agents connect straight to https://mach.teva.services/v2/mcp
 #     with their own Bearer key. The gateway's true_passthrough entry never
 #     reliably served them the real tools (its server-manager tools/list
