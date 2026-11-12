@@ -202,14 +202,19 @@ through a shell history or chat transcript.
   model, while a missing pair fails loudly. The `ollama/`-prefixed spelling
   shares the alias's chain (litellm strips the provider prefix); an
   undeclared bare name, the wildcards, and openrouter/-typed ids stay
-  chain-less and fail loudly — no `default_fallbacks`. The agents and Honcho
-  authenticate with the master key (`LITELLM_MASTER_KEY`, `openssl rand -hex
-  32`), mirrored into their env as `LITELLM_API_KEY` /
-  `LLM_OPENAI_API_KEY`. **Firecrawl is deliberately NOT on the master key**:
-  its `OPENAI_API_KEY` is a virtual key scoped to the `firecrawl` group only
-  (`scripts/mint-firecrawl-key.sh`), with a budget and RPM limit. Firecrawl
-  never needs another group, and a compromised extractor/classifier must not
-  become a path to every tier.
+  chain-less and fail loudly — no `default_fallbacks`. **No app holds the
+  master key** (`LITELLM_MASTER_KEY`, `openssl rand -hex 32`): it is the
+  admin-only key for `/key/*` management. Every consumer gets its own
+  virtual key scoped to the models it uses (`scripts/mint-service-key.sh`) —
+  Hermes (`LITELLM_API_KEY` + `OPENAI_API_KEY`, the tier/alias allow-list),
+  Honcho (`LLM_OPENAI_API_KEY`, `cheap` + `smart` + `nomic-embed-text`),
+  Open WebUI
+  (`OPENWEBUI_LITELLM_API_KEY`, `all-proxy-models`), and Firecrawl
+  (`firecrawl.env` `OPENAI_API_KEY`, the `firecrawl` group only,
+  `scripts/mint-firecrawl-key.sh`). A compromised app reaches only its own
+  allow-list, and one key can be revoked without disturbing the others.
+  Firecrawl never needs another group, and a compromised extractor/classifier
+  must not become a path to every tier.
 - **`config/litellm.yaml` is the backend file; the apps only ever send one of
   four TIER NAMES.** `cheap` / `smart` / `smarter` / `smartest` are LiteLLM
   `model_name` groups, and everything under a group's `litellm_params` —
@@ -310,7 +315,9 @@ through a shell history or chat transcript.
 - `litellm-db.env` (paired with the above — one generated `DATABASE_URL`
   password): `POSTGRES_USER=litellm`, `POSTGRES_PASSWORD`,
   `POSTGRES_DB=litellm`. See `secrets/litellm-db.env.example`.
-- `hermes-main.env`: `LITELLM_API_KEY` (the master key), `FIRECRAWL_API_KEY`
+- `hermes-main.env`: `LITELLM_API_KEY` (a virtual key scoped to the
+  stack's tier/alias allow-list — **not** the master key;
+  `scripts/mint-service-key.sh`), `FIRECRAWL_API_KEY`
   (must equal `TEST_API_KEY` in `firecrawl.env`) + `FIRECRAWL_API_URL`
   (`http://firecrawl-guard:3003` — the **built-in web plugin** reads the
   process env, not the MCP integration's `mcp_env`; without it the Firecrawl
@@ -366,7 +373,10 @@ through a shell history or chat transcript.
   (`models: ["firecrawl"]`, 30-day budget, RPM cap). The key is DB-backed;
   a LiteLLM DB rebuild invalidates it, and only a deploy (not a restart)
   re-reads the env file.
-- `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (LiteLLM — bare
+- `honcho.env`: `LLM_OPENAI_API_KEY` (a virtual key scoped to `cheap`,
+  `smart` and `nomic-embed-text` — **not** the master key;
+  `scripts/mint-service-key.sh`) +
+  `LLM_OPENAI_BASE_URL` (LiteLLM — bare
   `OPENAI_API_KEY` is NOT read; every default model config reuses the client
   built from these two), per-section `*_MODEL_CONFIG__MODEL` overrides
   (deriver, summaries, dream, dialectic levels — defaults point at OpenAI
