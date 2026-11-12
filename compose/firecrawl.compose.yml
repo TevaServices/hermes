@@ -41,10 +41,13 @@ x-firecrawl-common: &firecrawl-common
     # Right-sized small. The upstream defaults
     # (NUM_WORKERS_PER_QUEUE=8, NUQ_WORKER_COUNT=5, 10 concurrent
     # requests, 5 browsers) spawn a dozen node processes that starve the
-    # box — the API then misses its hardcoded 60s "port must be up"
-    # deadline and the harness restarts, forever. One worker per queue
-    # keeps it comfortably inside that window (and leaves CPU for the
-    # agent + honcho).
+    # box — the API then misses its startup port deadline and the harness
+    # restarts, forever. One worker per queue keeps it comfortably inside
+    # that window (and leaves CPU for the agent + honcho). The
+    # NUM_WORKERS_PER_QUEUE/MAX_CONCURRENT_JOBS/CRAWL_CONCURRENT_REQUESTS/
+    # BROWSER_POOL_SIZE names are the pre-2026-11 image's knobs; the current
+    # image reads NUQ_WORKER_COUNT and ignores them, so they are kept only
+    # so a rollback to the older image stays right-sized.
     NUQ_WORKER_COUNT: "1"
     NUM_WORKERS_PER_QUEUE: "1"
     MAX_CONCURRENT_JOBS: "2"
@@ -52,7 +55,16 @@ x-firecrawl-common: &firecrawl-common
     BROWSER_POOL_SIZE: "1"
     REDIS_URL: redis://firecrawl-redis:6379
     REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
+    # The current image (2026-11-12) renamed the browser-service variable
+    # from PLAYWRIGHT_SERVICE_URL to PLAYWRIGHT_MICROSERVICE_URL and wants
+    # the endpoint path. Keep the old name for the rollback image; it
+    # ignores the new one, and the new one ignores the old.
     PLAYWRIGHT_SERVICE_URL: http://firecrawl-playwright:3000
+    PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
+    # Cold start after a DB recreate has exceeded the old 60s hardcoded
+    # deadline on this 1-CPU host. The current image reads this; the old
+    # image ignores it.
+    HARNESS_STARTUP_TIMEOUT_MS: "180000"
     # Only the extract lane needs this (extract-queue.ts producer +
     # extract-worker consumer have no non-AMQP fallback upstream; the
     # scrape path's NuQ runs Postgres-only). The broker is LavinMQ under
@@ -238,6 +250,9 @@ services:
     environment:
       PORT: "3000"
       BLOCK_MEDIA: "false"
+      # The 2026-11 Playwright service reads this; cap it to the host's
+      # comfort rather than its default of 10 pages.
+      MAX_CONCURRENT_PAGES: "2"
     deploy:
       resources:
         limits:
