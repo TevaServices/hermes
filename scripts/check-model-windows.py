@@ -17,8 +17,8 @@ either file changes:
 
 It asks the PROVIDER, not a catalogue: POST ollama.com/api/show ->
 model_info.*.context_length, the method AGENTS.md documents for verifying a
-window by hand. Third-party catalogues disagree with it (models.dev reports a
-1M window for nemotron-3-nano:30b, which the provider says is 262144), which
+window by hand. Third-party catalogues disagree with it (models.dev has
+reported a 1M window where the provider says 262144), which
 is exactly why this asks the provider.
 
 Only Ollama Cloud tiers are checked against the provider's own API — this
@@ -68,7 +68,7 @@ USER_AGENT = "hermes-check-model-windows/1"
 _GROUP_RE = re.compile(r"^\s*-\s*model_name:\s*['\"]?([^'\"\s]+)['\"]?\s*$")
 _KV_RE = re.compile(r"^\s+([a-z_]+):\s*(\S+)\s*$")
 # A router-fallback line inside the router_settings block:
-#   - cheap: ["openrouter/nvidia/nemotron-3-nano-30b-a3b"]
+#   - cheap: ["openrouter/google/gemma-4-31b-it"]
 # One fallback LIST per line, a plain JSON array value — the literal shape
 # config/litellm.yaml documents as its contract.
 _FALLBACK_LINE_RE = re.compile(r"^\s*-\s*(\S+):\s*(\[.*\])\s*$")

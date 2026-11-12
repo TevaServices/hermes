@@ -46,7 +46,7 @@ config (`config/litellm.yaml`) is baked into the `litellm:main` image;
 config changes recreate the litellm container on deploy.
 
 **The models are four TIER NAMES, and they are what you send**: `cheap`
-(nemotron-3-nano:30b, 256k — the cheap-turn router, the light side tasks,
+(gemma4:31b, 256k — the cheap-turn router, the light side tasks,
 and every Honcho consumer), `smart` (beam:cloud — Beam 1.0, 1M, no vision —
 the planner's
 everyday tier; `gemma4` remains available as a bare alias), `smarter`

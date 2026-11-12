@@ -47,9 +47,9 @@ api_key_env = "ANTHROPIC_API_KEY"
 # each model name among its group members (Ollama Cloud + OpenRouter free)
 # and falls back on failure. Because base_url is set, render.py emits it
 # as a named Hermes `custom_providers:` entry and points `model.provider`
-# at the key name. The key is the LiteLLM master key (LITELLM_MASTER_KEY
-# in /etc/hermes/litellm.env), mirrored into hermes-main.env as
-# LITELLM_API_KEY.
+# at the key name. The key is a virtual key scoped to the stack's model
+# allow-list (scripts/mint-service-key.sh), NOT the LiteLLM master key —
+# mirrored into hermes-main.env as LITELLM_API_KEY.
 [providers.litellm]
 label = "LiteLLM gateway"
 base_url = "http://litellm:4000"

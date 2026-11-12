@@ -190,10 +190,11 @@ through a shell history or chat transcript.
   (models.toml declares windows per TIER) — fine for a try, not something an
   agent should rely on; explicit ids always beat the wildcard.
   **Bare-name aliases are the DEFAULT vocabulary** (2026-10-06): `glm-5.3-flash`,
-  `glm-5.3`, `kimi-k3`, `gemma4`, `beam`, `nemotron-3-nano` (+ later additions) —
-  unprefixed, no `:cloud` suffix (`nemotron-3-nano`'s `:30b` variant is
-  required by Ollama Cloud and lives inside `litellm_params`, never in the
-  caller's string). Each alias is a one-member Ollama Cloud group whose
+  `glm-5.3`, `kimi-k3`, `gemma4`, `beam` (+ later additions) —
+  unprefixed, no `:cloud` suffix (`beam`'s real id is `beam:cloud`, and
+  `deepseek-v4.1-flash-1017`'s is `deepseek-v4.1-flash:1017-cloud`; the
+  variant selector lives inside `litellm_params`, never in the caller's
+  string). Each alias is a one-member Ollama Cloud group whose
   `router_settings.fallbacks` chain names its OpenRouter twin — the provider
   namespaces genuinely differ (z-ai/…, moonshotai/…), so the pairing is an
   EXPLICIT table (litellm.yaml alias block + models.toml rows, in the same
@@ -202,14 +203,19 @@ through a shell history or chat transcript.
   model, while a missing pair fails loudly. The `ollama/`-prefixed spelling
   shares the alias's chain (litellm strips the provider prefix); an
   undeclared bare name, the wildcards, and openrouter/-typed ids stay
-  chain-less and fail loudly — no `default_fallbacks`. The agents and Honcho
-  authenticate with the master key (`LITELLM_MASTER_KEY`, `openssl rand -hex
-  32`), mirrored into their env as `LITELLM_API_KEY` /
-  `LLM_OPENAI_API_KEY`. **Firecrawl is deliberately NOT on the master key**:
-  its `OPENAI_API_KEY` is a virtual key scoped to the `firecrawl` group only
-  (`scripts/mint-firecrawl-key.sh`), with a budget and RPM limit. Firecrawl
-  never needs another group, and a compromised extractor/classifier must not
-  become a path to every tier.
+  chain-less and fail loudly — no `default_fallbacks`. **No app holds the
+  master key** (`LITELLM_MASTER_KEY`, `openssl rand -hex 32`): it is the
+  admin-only key for `/key/*` management. Every consumer gets its own
+  virtual key scoped to the models it uses (`scripts/mint-service-key.sh`) —
+  Hermes (`LITELLM_API_KEY` + `OPENAI_API_KEY`, the tier/alias allow-list),
+  Honcho (`LLM_OPENAI_API_KEY`, `cheap` + `smart` + `nomic-embed-text`),
+  Open WebUI
+  (`OPENWEBUI_LITELLM_API_KEY`, `all-proxy-models`), and Firecrawl
+  (`firecrawl.env` `OPENAI_API_KEY`, the `firecrawl` group only,
+  `scripts/mint-firecrawl-key.sh`). A compromised app reaches only its own
+  allow-list, and one key can be revoked without disturbing the others.
+  Firecrawl never needs another group, and a compromised extractor/classifier
+  must not become a path to every tier.
 - **`config/litellm.yaml` is the backend file; the apps only ever send one of
   four TIER NAMES.** `cheap` / `smart` / `smarter` / `smartest` are LiteLLM
   `model_name` groups, and everything under a group's `litellm_params` —
@@ -219,7 +225,9 @@ through a shell history or chat transcript.
   `config/models.toml`, see §"Agent runtime invariants"). Current backends
   (windows verified via `POST ollama.com/api/show`, re-checkable with `mise
   run check-model-windows`):
-  **cheap** = `nemotron-3-nano:30b` (256k; `smart_model_routing`'s cheap lane
+  **cheap** = `gemma4:31b` (Gemma 4 31B, 256k; the low-cost lane — it
+  replaced `nemotron-3-nano:30b`, retired upstream on 2026-11-09, and shares
+  the `gemma4` alias's backend. `smart_model_routing`'s cheap lane
   for short/simple turns, Hermes' mechanical aux lanes (title generation,
   memory-query rewrite — see §"Auxiliary side tasks"), and Honcho's VOLUME
   lanes: the deriver, which runs on every message, plus the `minimal`
@@ -253,7 +261,7 @@ through a shell history or chat transcript.
   ≥ the tier's, tools-capable, checked by `mise run
   check-model-windows` against OpenRouter's catalog too; `render.py` fails
   the build if a fallback names a missing group): `cheap` →
-  `openrouter/nvidia/nemotron-3-nano-30b-a3b`, `smart` →
+  `openrouter/google/gemma-4-31b-it`, `smart` →
   `openrouter/reflection/beam-1.0-501b-a23b`, `smarter` →
   `openrouter/deepseek/deepseek-v4.1-flash-1017`, `smartest` →
   `openrouter/deepseek/deepseek-v4.1-flash-1017`; the five ids are also `model_name`
@@ -310,7 +318,9 @@ through a shell history or chat transcript.
 - `litellm-db.env` (paired with the above — one generated `DATABASE_URL`
   password): `POSTGRES_USER=litellm`, `POSTGRES_PASSWORD`,
   `POSTGRES_DB=litellm`. See `secrets/litellm-db.env.example`.
-- `hermes-main.env`: `LITELLM_API_KEY` (the master key), `FIRECRAWL_API_KEY`
+- `hermes-main.env`: `LITELLM_API_KEY` (a virtual key scoped to the
+  stack's tier/alias allow-list — **not** the master key;
+  `scripts/mint-service-key.sh`), `FIRECRAWL_API_KEY`
   (must equal `TEST_API_KEY` in `firecrawl.env`) + `FIRECRAWL_API_URL`
   (`http://firecrawl-guard:3003` — the **built-in web plugin** reads the
   process env, not the MCP integration's `mcp_env`; without it the Firecrawl
@@ -366,7 +376,10 @@ through a shell history or chat transcript.
   (`models: ["firecrawl"]`, 30-day budget, RPM cap). The key is DB-backed;
   a LiteLLM DB rebuild invalidates it, and only a deploy (not a restart)
   re-reads the env file.
-- `honcho.env`: `LLM_OPENAI_API_KEY` + `LLM_OPENAI_BASE_URL` (LiteLLM — bare
+- `honcho.env`: `LLM_OPENAI_API_KEY` (a virtual key scoped to `cheap`,
+  `smart` and `nomic-embed-text` — **not** the master key;
+  `scripts/mint-service-key.sh`) +
+  `LLM_OPENAI_BASE_URL` (LiteLLM — bare
   `OPENAI_API_KEY` is NOT read; every default model config reuses the client
   built from these two), per-section `*_MODEL_CONFIG__MODEL` overrides
   (deriver, summaries, dream, dialectic levels — defaults point at OpenAI
