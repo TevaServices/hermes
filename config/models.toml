@@ -23,10 +23,10 @@
 #                    change. Verify with the provider's own API — for
 #                    Ollama Cloud, POST ollama.com/api/show ->
 #                    model_info.*.context_length. Third-party catalogues get
-#                    these wrong (models.dev currently reports a 1M window
-#                    for nemotron-3-nano:30b, which the provider says is
-#                    262144). `mise run check-model-windows` compares this
-#                    file against the provider for every Ollama-backed tier.
+#                    these wrong (models.dev has reported a 1M window where
+#                    the provider says 262144). `mise run
+#                    check-model-windows` compares this file against the
+#                    provider for every Ollama-backed tier.
 #                    NEVER set this below the provider's window: Hermes
 #                    hard-rejects anything under 64K (MINIMUM_CONTEXT_LENGTH
 #                    in agent/agent_init.py, enforced here by render.py), and
@@ -90,7 +90,7 @@
 provider = "litellm"
 model = "cheap"
 context_length = 262144
-description = "Nemotron 3 nano 30B (MoE, 3B active) via the gateway — the low-cost lane: the cheap-turn router, light aux side tasks, and Honcho's volume lanes (deriver, light dialectic)"
+description = "Gemma 4 31B (dense, 262k) via the gateway — the low-cost lane: the cheap-turn router, light aux side tasks, and Honcho's volume lanes (deriver, light dialectic). Replaced nemotron-3-nano:30b, which Ollama retired on 2026-11-09 (HTTP 410)"
 
 [models.smart]
 provider = "litellm"
@@ -148,13 +148,7 @@ description = "Gemma 4 bare alias (the cloud variant) — Ollama Cloud first, fa
 provider = "litellm"
 model = "beam"
 context_length = 1048576
-description = "Beam 1.0 bare alias — Ollama Cloud first (the real id is beam:cloud, per the nemotron-3-nano pattern), falls to openrouter/reflection/beam-1.0-501b-a23b (same backend as the smart tier)"
-
-[models.nemotron-3-nano]
-provider = "litellm"
-model = "nemotron-3-nano"
-context_length = 262144
-description = "Nemotron 3 nano bare alias — the `:30b` variant is required at Ollama Cloud (bare 404s) and lives inside litellm_params; falls to openrouter/nvidia/nemotron-3-nano-30b-a3b (same backend as the cheap tier)"
+description = "Beam 1.0 bare alias — Ollama Cloud first (the real id is beam:cloud, per the variant-selector pattern), falls to openrouter/reflection/beam-1.0-501b-a23b (same backend as the smart tier)"
 
 [models."deepseek-v4.1-flash"]
 provider = "litellm"
@@ -166,7 +160,7 @@ description = "DeepSeek v4.1 flash bare alias — the Sep 10 build (Ollama Cloud
 provider = "litellm"
 model = "deepseek-v4.1-flash-1017"
 context_length = 1048576
-description = "DeepSeek V4.1 Flash 1017 bare alias (the Oct 17 checkpoint) — Ollama Cloud first (the real id is deepseek-v4.1-flash:1017-cloud, per the nemotron-3-nano pattern), falls to openrouter/deepseek/deepseek-v4.1-flash-1017 (same backend as the smarter tier)"
+description = "DeepSeek V4.1 Flash 1017 bare alias (the Oct 17 checkpoint) — Ollama Cloud first (the real id is deepseek-v4.1-flash:1017-cloud, per the variant-selector pattern), falls to openrouter/deepseek/deepseek-v4.1-flash-1017 (same backend as the smarter tier)"
 
 [models.minimax-m3]
 provider = "litellm"

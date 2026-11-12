@@ -190,10 +190,11 @@ through a shell history or chat transcript.
   (models.toml declares windows per TIER) — fine for a try, not something an
   agent should rely on; explicit ids always beat the wildcard.
   **Bare-name aliases are the DEFAULT vocabulary** (2026-10-06): `glm-5.3-flash`,
-  `glm-5.3`, `kimi-k3`, `gemma4`, `beam`, `nemotron-3-nano` (+ later additions) —
-  unprefixed, no `:cloud` suffix (`nemotron-3-nano`'s `:30b` variant is
-  required by Ollama Cloud and lives inside `litellm_params`, never in the
-  caller's string). Each alias is a one-member Ollama Cloud group whose
+  `glm-5.3`, `kimi-k3`, `gemma4`, `beam` (+ later additions) —
+  unprefixed, no `:cloud` suffix (`beam`'s real id is `beam:cloud`, and
+  `deepseek-v4.1-flash-1017`'s is `deepseek-v4.1-flash:1017-cloud`; the
+  variant selector lives inside `litellm_params`, never in the caller's
+  string). Each alias is a one-member Ollama Cloud group whose
   `router_settings.fallbacks` chain names its OpenRouter twin — the provider
   namespaces genuinely differ (z-ai/…, moonshotai/…), so the pairing is an
   EXPLICIT table (litellm.yaml alias block + models.toml rows, in the same
@@ -224,7 +225,9 @@ through a shell history or chat transcript.
   `config/models.toml`, see §"Agent runtime invariants"). Current backends
   (windows verified via `POST ollama.com/api/show`, re-checkable with `mise
   run check-model-windows`):
-  **cheap** = `nemotron-3-nano:30b` (256k; `smart_model_routing`'s cheap lane
+  **cheap** = `gemma4:31b` (Gemma 4 31B, 256k; the low-cost lane — it
+  replaced `nemotron-3-nano:30b`, retired upstream on 2026-11-09, and shares
+  the `gemma4` alias's backend. `smart_model_routing`'s cheap lane
   for short/simple turns, Hermes' mechanical aux lanes (title generation,
   memory-query rewrite — see §"Auxiliary side tasks"), and Honcho's VOLUME
   lanes: the deriver, which runs on every message, plus the `minimal`
@@ -258,7 +261,7 @@ through a shell history or chat transcript.
   ≥ the tier's, tools-capable, checked by `mise run
   check-model-windows` against OpenRouter's catalog too; `render.py` fails
   the build if a fallback names a missing group): `cheap` →
-  `openrouter/nvidia/nemotron-3-nano-30b-a3b`, `smart` →
+  `openrouter/google/gemma-4-31b-it`, `smart` →
   `openrouter/reflection/beam-1.0-501b-a23b`, `smarter` →
   `openrouter/deepseek/deepseek-v4.1-flash-1017`, `smartest` →
   `openrouter/deepseek/deepseek-v4.1-flash-1017`; the five ids are also `model_name`
