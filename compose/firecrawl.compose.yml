@@ -65,6 +65,11 @@ x-firecrawl-common: &firecrawl-common
     # deadline on this 1-CPU host. The current image reads this; the old
     # image ignores it.
     HARNESS_STARTUP_TIMEOUT_MS: "180000"
+    # The 2026-11 image's legacy queue worker refuses jobs when the host's
+    # CPU load is above 0.8. This host idles around 0.85-0.9 from unrelated
+    # work, which stalled the worker continuously; 0.98 keeps it accepting
+    # while still refusing under genuine saturation.
+    MAX_CPU: "0.98"
     # Only the extract lane needs this (extract-queue.ts producer +
     # extract-worker consumer have no non-AMQP fallback upstream; the
     # scrape path's NuQ runs Postgres-only). The broker is LavinMQ under
