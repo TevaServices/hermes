@@ -14,6 +14,13 @@
 # reach them directly.
 
 services:
+  hermes-main:
+    environment:
+      # The Teva cutover serves only the default profile. The copied state
+      # volume still carries the old team profile homes; multiplexing would
+      # try to start them with the main bot token and fail duplicate-credential.
+      GATEWAY_MULTIPLEX_PROFILES: "false"
+
   litellm:
     ports:
       - "127.0.0.1:4000:4000"
