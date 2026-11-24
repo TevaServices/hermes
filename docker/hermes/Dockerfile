@@ -17,6 +17,9 @@
 #      it, and so a rebase of the patch invalidates everything after.
 #   1. gh CLI (pinned tarball) + the GitHub App token helper + git
 #      credential helper — the agent manages its own infra over git/gh.
+#   1b. mach CLI (pinned release) — the sealed exec path and the client the
+#       Zoho wrapper re-ships; the old data-volume copy was 0.1.0-dev and
+#       is not on PATH.
 #   2. The declarative config sources (config/, render.py) rendered at
 #      BUILD time into /overlay — profiles ship as image layers, replacing
 #      the old committed-build/ approach. The overlay COPY is the final
@@ -202,6 +205,25 @@ RUN case "${TARGETARCH}" in \
 # token per invocation (see that script). Anything that must bypass the
 # shim calls gh-real directly. The shim is COPY'd with the other stack
 # helpers below.
+
+# mach CLI (pinned release) — the sealed exec path (`mach exec --e2e`), the
+# fleet/secrets CLI, and the binary the Zoho wrapper re-ships. The container
+# previously had only an old 0.1.0-dev checkout under /opt/data/mach (not on
+# PATH, and without --e2e/--inject). Install the published release at the
+# front of the default PATH; keep this pin in step with the mach-server
+# release (0.13.8). Native arch only, like the gh layer above.
+ARG MACH_VERSION=0.13.8
+RUN case "${TARGETARCH}" in \
+      amd64|arm64) ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL --retry 3 \
+      "https://github.com/TevaServices/mach/releases/download/v${MACH_VERSION}/mach_${MACH_VERSION}_linux_${TARGETARCH}.zip" \
+      -o /tmp/mach.zip \
+ && python3 -m zipfile -e /tmp/mach.zip /tmp/mach-dist \
+ && install -m 0755 /tmp/mach-dist/mach /usr/local/bin/mach \
+ && rm -rf /tmp/mach.zip /tmp/mach-dist \
+ && mach version
 
 # Vendored dashboard plugin: xraysight/hermes-memory-ui. Cloned at BUILD
 # time from a pinned full commit SHA (tags are mutable; a full SHA is
