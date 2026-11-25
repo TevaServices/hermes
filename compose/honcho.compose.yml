@@ -86,8 +86,9 @@ services:
   # endpoint, so Honcho's semantic search needs a stack-local embedder.
   # This server runs nomic-embed-text ONLY (274 MB, 768-dim vectors);
   # EMBEDDING_VECTOR_DIMENSIONS in honcho.env MUST match (768).
+  # Previous pin for rollback: 0.33.3 (replaced 2026-11-25).
   ollama:
-    image: ollama/ollama:0.33.3
+    image: ollama/ollama:0.40.18
     container_name: ollama
     restart: unless-stopped
     volumes:
@@ -98,7 +99,7 @@ services:
   # One-shot model pull: retries until the server is up, then exits.
   # Idempotent — re-runs harmlessly after a reboot or volume wipe.
   ollama-init:
-    image: ollama/ollama:0.33.3
+    image: ollama/ollama:0.40.18
     container_name: ollama-init
     restart: "no"
     environment:
