@@ -162,6 +162,8 @@ enabled = false
 #   MLOps (40): GPU-model training/serving guides — no GPU on this host.
 #   Integration skills (29): require credentials/binaries/services this box
 #   does not have (email, SaaS tokens, Tenor, Obsidian vault, emulators, …).
+#   Coding-agent guides: codex, opencode, claude-code — Hermes does its own
+#   coding (the Claude Code wrapper was retired 2026-11-28).
 [config_extra.skills]
 disabled = [
     "airtable",
@@ -172,6 +174,7 @@ disabled = [
     "box",
     "chroma",
     "clip",
+    "claude-code",
     "codex",
     "computer-use",
     "distributed-llm-pretraining-torchtitan",
