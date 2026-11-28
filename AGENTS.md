@@ -47,7 +47,7 @@ komodo's compose).
   moving or deleting a `v*` tag. The webhook fires on the *push* a squash
   merge produces — merge = deploy is literally the same event.
 - **Images are built by Komodo Builds — never compose build** (the stack runs
-  `run_build = false`; images `hermes-agent:v0.22.5`, `litellm:main`,
+  `run_build = false`; images `hermes-agent:v0.23.5`, `litellm:main`,
   `honcho:main`, `honcho-mcp:main`, `builder = "<your-builder>"`). The
   `hermes-agent` and `litellm` Builds use a **repo-root build context**
   (`build_path = "."`) — the Dockerfiles COPY `docker/hermes/*`, `config/` +
@@ -1311,24 +1311,25 @@ or if a skill tells an agent to `git push`.
 
 ### Security tuning (guard friction)
 
-This stack's agents live in `terminal`, and three guard behaviours blocked
-the script-shaped work we *want* them to do, so all three were loosened
-deliberately.
+This stack's agents live in `terminal`, and guard behaviours blocked the
+script-shaped work we *want* them to do, so the ones within our control were
+loosened deliberately.
 
-1. **`tools/approval_detection.py` source patch** (was `tools/approval.py`
-   before v2026.9.14) — `docker/hermes/patches/`, applied in the Dockerfile
-   with `git apply` (the base image has no `patch` binary; `git apply` works
-   outside a repo, which matters because `.dockerignore` drops `.git`).
-   Upstream hardline-blocks any command whose grep-operand scanner surfaces
-   a word it cannot tokenize — which happens whenever `grep` appears inside
-   a quoted `$(...)` (the common `sed -n "$(grep -n 'x' f | cut -d: -f1),+45p" f`
-   shape). The block is unconditional (no `--yolo`, approval mode, or
-   `command_allowlist` reaches it) and was the single largest source of
-   blocked calls, every one a false positive. The patch skips an
-   unparseable operand instead of failing the whole command, fail-closed
-   (skipping only declines to mask text as data, which the hardline path
-   discards anyway). Deleting it later is signalled by the build (§"Bumping
-   HERMES_REF").
+1. **The `tools/approval_detection.py` source patch is RETIRED (v0.23.5).**
+   Upstream hardline-blocked any command whose grep-operand scanner surfaced
+   a word it could not tokenize — which happened whenever `grep` appeared
+   inside a quoted `$(...)` (the common
+   `sed -n "$(grep -n 'x' f | cut -d: -f1),+45p" f` shape). The block was
+   unconditional (no `--yolo`, approval mode, or `command_allowlist`
+   reached it) and was the single largest source of blocked calls, every
+   one a false positive. v0.23.5 fixed the ROOT CAUSE: the span lexer moved
+   to `tools/approval_shell_tokens.py` and now stops at the end of the
+   simple command (`;`, `|`, `&`, newline, closing `)`/backtick) while
+   tracking `$(...)` depth, so a nested grep no longer reads as unbalanced
+   quoting. Verified at the tag: `_quoted_grep_pattern_spans` returns
+   `([], False)` for the canonical shape. Genuinely malformed quoting still
+   fails closed. The patch file is deleted; §"Bumping HERMES_REF" notes that
+   the build's reverse-apply NOTICE is the signal to remove any patch.
 2. **Tirith pre-approvals, config only — Tirith itself stays ON.**
    `render.py` seeds `command_allowlist` with `tirith:<rule_id>` keys for
    every profile; `approval_detection.py` loads that list at module import,

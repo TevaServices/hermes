@@ -11,10 +11,12 @@
 #
 # What we add on top (kept minimal — each COPY/RUN is a separate final
 # layer so config-only pushes invalidate only the last one):
-#   0. A source patch to upstream tools/approval_detection.py — see
-#      docker/hermes/patches/ and AGENTS.md §"Security tuning (guard
-#      friction)". Placed FIRST so a config-only push still cache-hits
-#      it, and so a rebase of the patch invalidates everything after.
+#   0. Source patches to upstream gateway/platforms/base.py (auto-TTS under
+#      HERMES_WRITE_SAFE_ROOT) and the Discord adapter (voice self-heal) —
+#      see docker/hermes/patches/ and AGENTS.md §"Security tuning (guard
+#      friction)" / §"Discord". Placed FIRST so a config-only push still
+#      cache-hits them, and so a rebase of a patch invalidates everything
+#      after.
 #   1. gh CLI (pinned tarball) + the GitHub App token helper + git
 #      credential helper — the agent manages its own infra over git/gh.
 #   1b. mach CLI (pinned release) — the sealed exec path and the client the
@@ -41,7 +43,7 @@
 #      see the RUN below §"Base-image tool-store readability" (not a
 #      source patch: upstream's build artifact, fixed in a thin layer).
 #
-ARG HERMES_REF=v0.22.5
+ARG HERMES_REF=v0.23.5
 FROM nousresearch/hermes-agent:${HERMES_REF}
 
 # ── Source patches over upstream ──────────────────────────────────────
@@ -49,7 +51,18 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # Each must be re-anchored at every HERMES_REF bump, and DELETED once
 # upstream adopts the fix (the build says so — see below).
 #
-# THREE patches currently.
+# TWO patches currently.
+#
+# RETIRED at the v0.23.5 bump: the grep-operand patch (its scanner lived in
+# tools/approval.py until v2026.9.14 moved it to approval_detection.py).
+# Upstream fixed the root cause instead of the symptom: the span lexer moved to
+# tools/approval_shell_tokens.py and now stops at the end of the simple
+# command (`;`, `|`, `&`, newline, closing `)`/backtick) while tracking
+# `$(...)` depth, so the canonical quoted-substitution shape
+# (`sed -n "$(grep -n X f | cut -d: -f1),+45p" f`) no longer reads as
+# unbalanced quoting. Verified at the v0.23.5 tag: `_quoted_grep_pattern_spans`
+# returns `([], False)` for that shape. Genuinely malformed quoting still
+# fails closed, which is the behavior we want.
 #
 # RETIRED at the v0.22.5 bump: a fourth patch (cron/scheduler_delivery.py)
 # minted a fresh session per cron wake by retitling the `hermes chat -c
@@ -67,7 +80,7 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # payload is parked and admitted on a later tick). See AGENTS.md
 # §"Scheduled jobs" for the operating rule.
 #
-# 3. plugins/platforms/discord/adapter.py — self-heal voice after Discord
+# 2. plugins/platforms/discord/adapter.py — self-heal voice after Discord
 # externally terminates the session. Discord kicks voice sessions
 # server-side ("We were externally disconnected from voice" — discord.py
 # logs the reason at DEBUG only, so at INFO the only trace is "The voice
@@ -81,7 +94,7 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # grace, when a user (re)joins while we hold a dead binding, and on demand
 # from play_tts before falling back to an attachment).
 #
-# 2. gateway/platforms/base.py — build_auto_tts_output_path() must not
+# 1. gateway/platforms/base.py — build_auto_tts_output_path() must not
 # point /tmp when HERMES_WRITE_SAFE_ROOT is set. This stack sets
 # HERMES_WRITE_SAFE_ROOT=/opt/data (Dockerfile below), and the TTS tool
 # hard-rejects any output_path outside the safe root with
@@ -94,20 +107,6 @@ FROM nousresearch/hermes-agent:${HERMES_REF}
 # redirects to the TTS tool's default dir (HERMES_HOME/cache/audio,
 # under the safe root) only when /tmp is outside the configured safe
 # roots; stock behavior (no HERMES_WRITE_SAFE_ROOT) is byte-identical.
-#
-# 1. tools/approval_detection.py (the grep-operand scanner lived in
-#    tools/approval.py until v2026.9.14 moved it): `grep` inside a quoted
-# `$(...)` command substitution makes the
-# grep-operand scanner surface an inner word it then can't tokenize
-# (unbalanced quote) -> hardline-blocks the entire command, even though
-# the block is unconditional (not bypassable by --yolo, /yolo,
-# approvals.mode, or command_allowlist) and reports ~150-byte commands
-# as "command parser limit or malformed executable payload". That shape
-# is exactly the scripting this stack asks its agents for, so it was
-# blocking the behaviour we want. The patch skips an unparseable operand
-# instead of failing the command; it is fail-closed, because skipping
-# only declines to MASK text as data (and the hardline path discards the
-# masked variant anyway, using only the malformed flag).
 #
 # `git apply` rather than `patch` (the base image has no patch binary);
 # it works outside a git repo, which matters because .dockerignore drops
@@ -347,15 +346,19 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
 # path; the supervised chromium-cdp service below serves CDP on
 # 127.0.0.1:9333 (enabled per-deploy via HERMES_CHROMIUM_CDP, like the
 # dashboard service).
-# Three bases, three browser shapes (the newest wins):
-#   v0.22.0+:  pm's pinned full Chromium staged into HERMES_RUNTIME_DIR — the
-#     build already resolved the executable and baked its ABSOLUTE path to
-#     /etc/hermes/agent-browser-executable-path (upstream Dockerfile; layout
-#     per arch: chrome-linux64/chrome on amd64, chromium-linux-arm64/... on
-#     arm64). The old PLAYWRIGHT_BROWSERS_PATH layout is GONE in this base.
+# Bases, newest first (the first existing path wins):
+#   v0.23.5+:  pm's pinned full Chromium staged into HERMES_RUNTIME_DIR, with
+#     the resolved ABSOLUTE binary baked to /etc/hermes/chromium-executable-path
+#     (renamed from agent-browser-executable-path at the v0.23.5 bump; layout
+#     per arch: chrome-linux64/chrome on amd64, chrome-linux-arm64/... on
+#     arm64). hermes_cli/browser_runtime.py reads the new name.
+#   v0.22.x:   the same PM-staged Chromium, baked to the older
+#     /etc/hermes/agent-browser-executable-path.
 #   v2026.9.x: chromium_headless_shell-1243/chrome-headless-shell-linux-<arch>/chrome-headless-shell
 #   older:     chromium_headless_shell-1234/chrome-linux/headless_shell
-RUN if [ -s /etc/hermes/agent-browser-executable-path ] && [ -x "$(cat /etc/hermes/agent-browser-executable-path)" ]; then \
+RUN set -e; if [ -s /etc/hermes/chromium-executable-path ] && [ -x "$(cat /etc/hermes/chromium-executable-path)" ]; then \
+      ln -sf "$(cat /etc/hermes/chromium-executable-path)" /usr/local/bin/chromium-headless-shell; \
+    elif [ -s /etc/hermes/agent-browser-executable-path ] && [ -x "$(cat /etc/hermes/agent-browser-executable-path)" ]; then \
       ln -sf "$(cat /etc/hermes/agent-browser-executable-path)" /usr/local/bin/chromium-headless-shell; \
     else \
       SHELL="$( { ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-linux/headless_shell 2>/dev/null; \
@@ -363,7 +366,8 @@ RUN if [ -s /etc/hermes/agent-browser-executable-path ] && [ -x "$(cat /etc/herm
                 } | sort -V | tail -1)" \
       && test -n "$SHELL" && test -x "$SHELL" \
       && ln -sf "$SHELL" /usr/local/bin/chromium-headless-shell; \
-    fi
+    fi; \
+    /usr/local/bin/chromium-headless-shell --version >/dev/null
 
 # Claude Code wrapper tooling (coding-agent delegation on the profile's
 # own model via the LiteLLM gateway). Staged under /opt/claude-hermes
