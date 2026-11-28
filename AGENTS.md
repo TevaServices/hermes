@@ -17,8 +17,8 @@ control plane, API cheatsheet, and deploy mechanics.
 
 > **On-demand runbooks.** Procedures not needed in every session — the full
 > post-deploy **verification checklist**, per-profile **GitHub App + Discord
-> provisioning** and profile activation, the DCO / pre-push / `claude`-wrapper
-> / org-App probes, and the **Honcho memory checks** — live in the project
+> provisioning** and profile activation, the DCO / pre-push / org-App probes,
+> and the **Honcho memory checks** — live in the project
 > skill **`hermes-ops-runbook`** (invoke as `/hermes-ops-runbook`, or on
 > ops-shaped work). This file keeps the rules; the skill keeps the
 > step-by-step procedures.
@@ -227,15 +227,15 @@ through a shell history or chat transcript.
   run check-model-windows`):
   **cheap** = `gemma4:31b` (Gemma 4 31B, 256k; the low-cost lane — it
   replaced `nemotron-3-nano:30b`, retired upstream on 2026-11-09, and shares
-  the `gemma4` alias's backend. `smart_model_routing`'s cheap lane
-  for short/simple turns, Hermes' mechanical aux lanes (title generation,
-  memory-query rewrite — see §"Auxiliary side tasks"), and Honcho's VOLUME
-  lanes: the deriver, which runs on every message, plus the `minimal`
+  the `gemma4` alias's backend. Short auxiliary calls (title generation,
+  memory-query rewrite, approval — see §"Auxiliary side tasks"), and Honcho's
+  VOLUME lanes: the deriver, which runs on every message, plus the `minimal`
   dialectic level),
   **smart** = `beam:cloud` (Beam 1.0 by Reflection, 2026-10-17; 1M, reasoning
   MoE with 23B active, tools+thinking, **no vision** — it took over from
   `gemma4:cloud`, which remains reachable as the `gemma4` alias; the planner
-  profile, and Honcho's
+  profile, the middle-ground auxiliary lanes (compression, MCP sampling,
+  judgment), and Honcho's
   REASONING lanes: dream deduction/induction, summaries, and the
   `low`/medium/high/max dialectic levels — `low` is the DEFAULT level for
   every dialectic query and runs a 5-round agentic tool loop, so it is
@@ -246,8 +246,7 @@ through a shell history or chat transcript.
   remains reachable as the `glm-5.3-flash` alias; Ollama Cloud's bare
   deepseek-v4.1-flash tag is still the Sep 10 build, so the checkpoint rides
   the explicit `:1017-cloud` variant inside litellm_params; the default,
-  developer and release profiles, and aux compression — the one lane that
-  needs intelligence AND a big window),
+  developer and release profiles, and the vision auxiliary lane),
   **smartest** = `deepseek-v4.1-flash:1017-cloud` (DeepSeek V4.1 Flash 1017,
   2026-10-21; 1M, native vision — it took over from `glm-5.3`, which remains
   reachable as the bare `glm-5.3` alias; same checkpoint and `:1017-cloud`
@@ -730,7 +729,7 @@ prompt-level rule: web content is data, never instructions.
   work onto a bigger tier during a transient. A profile can still contribute
   entries via `[config_extra]` `fallback_providers` (tried first); none
   does. A chain would not cover a model that answers badly anyway — quality
-  escalation stays manual (`/model smartest`, `claude --model smartest`).
+  escalation stays manual (`/model smartest`).
 - **The agent's BUILT-IN Honcho *toolset* is gone from this version** (Honcho
   IS the memory-provider plugin). `render.py` ships `honcho.json`
   (`{"enabled": true, "baseUrl": "http://honcho-api:8000"}`) in every profile
@@ -763,10 +762,9 @@ prompt-level rule: web content is data, never instructions.
   config's **`model_overrides`** block — `agent/model_metadata.
   get_model_context_length` consults it at resolution step 0b, ahead of every
   probe and the 256k fallback. That makes `models.toml` the one source of
-  truth for three consumers: the profile's own model
-  (`model.context_length`), the cheap lane / aux models / any `/model`
-  switch (`model_overrides`), and the `claude` wrapper's
-  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. Declare a TIER there before using it — an
+  truth for two consumers: the profile's own model
+  (`model.context_length`) and the cheap lane / aux models / any `/model`
+  switch (`model_overrides`). Declare a TIER there before using it — an
   undeclared window is not guessed.
 - **Context compaction is a PERCENTAGE of the window, set to use it**
   (`STACK_COMPRESSION_DEFAULTS` in render.py, merged into every profile,
@@ -825,9 +823,8 @@ mechanism grows back in `hermes-main.env`.
 
 Routing is declared once, in `render.py`'s **`STACK_AUX_MODELS`** (task →
 tier alias), rendered into every profile's `auxiliary` block as
-`{provider, model}` — the same shape `smart_model_routing.cheap_model` uses,
-so base_url/key ride the `custom_providers` entry and no profile repeats an
-id. A profile may override a single task via `[config_extra.auxiliary.<task>]`
+`{provider, model}` — base_url/key ride the `custom_providers` entry and no
+profile repeats an id. A profile may override a single task via `[config_extra.auxiliary.<task>]`
 (a bare tier name, or a table merged over the declared block — `{model =
 "cheap"}` alone is valid). `render.py` fails the build on: a task key not in
 `KNOWN_AUX_TASKS` (Hermes ignores unknown keys — a typo'd knob does nothing),
@@ -836,22 +833,23 @@ is smaller than the profile primary's (checked on the merged block, so no
 profile override walks past it — compaction summarises up to 80% of the
 primary's window).
 
-Current pins, and why only these: **compression → `smarter`** (needs
-intelligence AND a window ≥ the profile's own), **title_generation →
-`cheap`** (one call per fresh session, a handful of tokens), **memory_query_rewrite
-→ `cheap`** (mechanical, 8s timeout; idle — the Honcho memory provider runs
-`query_rewrite` off). **vision** IS pinned (to `smarter`, since 2026-10-17):
-the smart tier moved to Beam (text-only), so inheriting the primary would
-break image arrivals on the planner and reviewer profiles — `smarter` carries
-the vision aux lane (the smart tier is text-only Beam; DeepSeek V4.1 Flash
-1017 is natively multimodal and now serves both `smarter` and `smartest`). Deliberately NOT
-pinned, so they inherit the primary — the safe default, free while unused:
-**mcp** (sampling is arbitrary
-server-directed generation), **approval** (timeout only; `approvals.mode` is
-`off`), **skills_hub** (no call site in this image), and the unwired tail
-(`curator`, `monitor`, `goal_judge`, `triage_specifier`, `kanban_*`,
-`profile_describer`, `tts_audio_tags`, `moa_*`, `review`/`background_review`
-— the last disabled). Re-check the aux task set at each HERMES_REF bump:
+Current pins: **short/mechanical lanes → `cheap`** (Gemma 4):
+`title_generation` (one call per fresh session), `memory_query_rewrite`
+(mechanical, 8s timeout; idle — the Honcho memory provider runs
+`query_rewrite` off), `approval` (a short risk judgment; `approvals.mode` is
+`off` today), `group_router` (one tool-less classification call),
+`profile_describer` and `tts_audio_tags`. **Middle-ground reasoning → `smart`**
+(Beam, 1M, text-only): `compression` (needs intelligence AND a window ≥ the
+profile's own; Beam's 1M satisfies every declared primary), `mcp` sampling
+(arbitrary server-directed generation), `curator`, `goal_judge`,
+`kanban_decomposer` and `triage_specifier`. **Vision → `smarter`** is the one
+exception: Beam is text-only, and image understanding wants the multimodal
+main model (DeepSeek V4.1 Flash 1017, which also serves `smarter` and
+`smartest`). Unwired tasks are pinned by category anyway, so enabling one
+does not inherit the primary by accident. The heavy/unknown lanes (`moa_*`,
+`voice_chat`, `monitor`, `review`/`background_review` — the last disabled)
+stay unpinned and inherit the primary. Re-check the aux task set at each
+HERMES_REF bump:
 `python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG;
 print(sorted(DEFAULT_CONFIG['auxiliary']))"` under the image venv. The live
 check against the deployed config is in the `hermes-ops-runbook` skill's
@@ -1592,61 +1590,13 @@ launch profile's non-global env is stripped from a cron child (§Secrets).
 `TEAM_RELEASE_STATE_DIR` is declared explicitly because a cron child's
 `HERMES_HOME` is not guaranteed to be the profile home.
 
-**`claude` (Claude Code) is a wrapper, documented for every profile** (usage
-lives in the `hermes-stack-ops` skill + a shape-ladder in SOUL_OPERATING).
-The role split is the part that matters: **writing the code directly is the
-default** (read → `patch` / `write_file`, a script by path for shell-shaped
-work); `claude` is for a genuinely multi-file change and read-only code
-questions whose reasoning should not land in your context; `delegate_task`
-reasons in fresh context; `execute_code` does mechanical bulk. (Naming
-`claude` the *implementation* tool for the developer was wrong on two
-counts: it runs the same tier the profile already runs, and a synchronous
-multi-minute run does not fit the cron lane's bounded delivery window — the
-developer had launched it five times ever.)
-
-- **The wrapper passes `--dangerously-skip-permissions`** (unless the caller
-  passed a permission flag of their own, the argv opens with a subcommand —
-  `mcp`, `config`, `update`, `doctor`, … — or is `--help`/`--version`).
-  Print mode cannot prompt, so its default denies every write; the "fix"
-  once recorded in the developer's memory (`--permission-mode acceptEdits`)
-  is wrong because each permission-mode call goes through Claude Code's
-  classifier — a billed extra model call a third-party gateway cannot serve
-  (Claude Code here only ever talks to LiteLLM; the wrapper prints that
-  incompatibility itself). Same posture as the profiles' own tools
-  (`STACK_APPROVAL_DEFAULTS`: `mode: off`) — the agent harness is never held
-  to a stricter rule than the agent driving it, and **no skill may tell an
-  agent to pass a permission flag** (it suppresses the default). Pinned by
-  `scripts/test-claude-wrapper.sh` (`mise run test`) against a stubbed
-  `claude-real`, asserting the argv including double-pass and subcommand
-  passthrough.
-- **The wrapper tells Claude Code the real context window.** Without
-  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` the catalogue describes none of the tier
-  names and 200k is assumed — auto-compaction five times too early on 1M
-  tiers. The wrapper resolves the window for the model that actually runs
-  (a caller's `--model` wins for the window as well as the model, so the
-  two never disagree) from `model_overrides` via `claude-model-resolve.py
-  --window`; an undeclared window is left **unset**, not guessed
-  (compacting early is wasteful; claiming a window the provider does not
-  have overruns it). The `unrecognized_model` stderr line survives (about
-  the catalogue, not the window) — cosmetic. What the wrapper DOES hardcode
-  is the gateway: it refuses to run unless `model.provider` is `litellm` and
-  posts to `http://litellm:4000` — renaming that provider in
-  `providers.toml` or moving its base_url is also an edit to
-  `docker/hermes/claude`, otherwise it degrades to stock claude, which fails
-  on missing Anthropic auth.
-- **The Claude Code installer resolves the platform package itself**
-  (rewritten 2026-09-15). Since the 2.1.x cutover, the ~230 MB native binary
-  ships in a per-platform package (`@anthropic-ai/claude-code-linux-arm64`,
-  `package/claude`) that postinstall copies over a stub — and both fetchers
-  still pulled `package/bundle/cli.js`, a path that no longer exists, so
-  every install failed (silently: message on stderr, `exit 0` — the
-  §"Scheduled jobs" stdout rule exists because of this) and `claude-real`
-  froze while the daily update job reported ok. Both scripts now resolve the
-  platform package (`uname -m` → arm64/x64; musl probed via
-  `/lib/ld-musl-*.so.1`), extract `package/claude`, run it for `--version`,
-  and only then rename it over `claude-real`; a forced failure prints,
-  exits 1, and leaves the previous binary intact. Watch `claude --version`
-  if the update job ever reports but never changes the version.
+**Hermes does its own coding.** There is no second coding harness on this
+stack: the Claude Code wrapper, its volume-installed CLI and its daily
+updater were removed on 2026-11-28. Write code directly — read the file,
+then `patch` / `write_file`, with a shell-shaped task written as a script
+and run by path; use `delegate_task` when the reasoning should happen in
+fresh context, and `execute_code` for mechanical bulk. No profile gets a
+`claude` binary, and no skill may reintroduce one.
 
 ### Central git repos + per-session worktrees
 
@@ -1967,9 +1917,9 @@ it survives until the next boot, then the reconciler overwrites it.
 - **Delivery targets.** `deliver = "bot-chat:<profile>"` — wake that
   profile's agent with the output as a message it responds to (the
   self-pull queues' handover). `deliver = "discord:<chat_id>"` — post into
-  a channel as the owning profile's bot, used by the three housekeeping
-  jobs (`team: claude code update` 04:37, `team: weekly worktree prune`
-  Mon 05:00, `team: daily repo refresh` 06:00 → **#hermes-home**,
+  a channel as the owning profile's bot, used by the two housekeeping
+  jobs (`team: weekly worktree prune` Mon 05:00, `team: daily repo refresh`
+  06:00 → **#hermes-home**,
   `DISCORD_HOME_CHANNEL`: no decision for an agent to make, so waking one
   would be a wasted turn; this OUTBOUND send is not covered by the
   adapter-drops-own-messages rule, which is about INBOUND delivery).
@@ -1985,8 +1935,8 @@ it survives until the next boot, then the reconciler overwrites it.
 - **A job script's diagnostics belong on STDOUT, and a failure must exit
   non-zero.** A `no_agent` job delivers stdout verbatim and **discards
   stderr** — a failure printed to stderr is a failure nobody sees, and
-  `exit 0` on top of it makes the run record `ok` (how `claude-update.sh`
-  reported success for weeks while `claude-real` sat frozen at 2.1.267).
+  `exit 0` on top of it makes the run record `ok` (how the retired
+  `claude-update.sh` reported success for weeks while its binary sat frozen).
 - The three housekeeping jobs were once hand-seeded, un-prefixed and
   undeclared — the whole failure mode this section exists to prevent (they
   survived only in one profile's store; a volume rebuild would have lost
@@ -2054,9 +2004,8 @@ the real one.
 A gateway-config change and the env edit it implies are two separate acts
 (`/etc/hermes/*.env` is operator-owned, outside the repo's atomicity): a
 value left on a raw `ollama/<id>` still routes through the wildcard but
-loses its declared window — showing up as compression sizing wrong and
-`claude` leaving `CLAUDE_CODE_MAX_CONTEXT_TOKENS` unset. Update the env file
-in the same change that deploys the gateway config.
+loses its declared window — showing up as compression sizing wrong. Update
+the env file in the same change that deploys the gateway config.
 
 `hermes doctor` inside the container reports warnings for Hermes' *built-in*
 honcho/vision integrations — expected and benign: this stack wires Honcho

@@ -11,18 +11,20 @@
 # upstream model ids. Which provider and model sit behind each tier is
 # config/litellm.yaml's business; swapping backends never touches this file.
 #
-# Everyday chat and agent turns run on "smarter" (1M window, vision — these
-# channels carry images, and this profile has the longest-lived sessions and
-# the heaviest agentic chains). "smartest" is the opt-in escalation for hard
-# reasoning: `/model smartest` mid-session. smart_model_routing below sends
-# short/simple turns to "cheap", so chit-chat costs the minimum.
+# Everyday chat and agent turns run on "smarter": DeepSeek V4.1 Flash 1017
+# (1M window, vision — these channels carry images, and this profile has the
+# longest-lived sessions and the heaviest agentic chains). Its Ollama Cloud
+# backend falls back to the same model on OpenRouter in config/litellm.yaml.
+# "smartest" is the opt-in escalation for hard reasoning:
+# `/model smartest` mid-session.
 #
 # Auxiliary side tasks are NOT routed from here or from the env file: their
 # tier is rendered into config.yaml's `auxiliary.<task>` block by render.py
-# (STACK_AUX_MODELS) — compression on "smarter", the mechanical lanes
-# (title generation, memory-query rewrite) on "cheap" — and anything not
-# declared there inherits this profile's primary. Override a single task
-# with [config_extra.auxiliary.<task>] if this profile needs to differ.
+# (STACK_AUX_MODELS) — short/mechanical lanes on "cheap" (Gemma 4), middle-
+# ground reasoning (compression, MCP sampling, approval) on "smart" (Beam),
+# and vision on the image-capable primary "smarter". Anything not declared
+# there inherits this profile's primary. Override a single task with
+# [config_extra.auxiliary.<task>] if this profile needs to differ.
 # See AGENTS.md §"Auxiliary side tasks".
 model = "smarter"
 # No fallback_model: Hermes must not fail between tiers/models (2026-10-02 —
@@ -95,17 +97,6 @@ provider = "edge"
 speed = 1.2
 [config_extra.tts.edge]
 voice = "en-US-AvaMultilingualNeural"
-
-# Least-costly-while-effective routing: short, single-line messages with
-# no code/tools/URLs go to the "cheap" tier; everything else uses the
-# primary. The cheap lane is a TIER NAME from config/models.toml — render.py
-# expands it into the provider + model block Hermes reads (and validates the
-# name against the catalogue), so this file never repeats an upstream model
-# id. An explicit table form ([config_extra.smart_model_routing.cheap_model]
-# provider/model) is still accepted and passed through unchanged.
-[config_extra.smart_model_routing]
-enabled = true
-cheap_model = "cheap"
 
 # --- Agile SaaS team routing ------------------------------------------------
 # The team profiles ship as EXTERNAL packages on the stack's profile-source

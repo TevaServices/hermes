@@ -6,17 +6,17 @@
 # id. They send one of four names, and everything to the right of
 # `litellm_params:` is yours to point anywhere:
 #
-#   cheap    — cheapest competent work: the short/simple-turn lane
-#              (smart_model_routing), the light auxiliary side tasks
-#              (session search, web extract, skills hub) and Honcho's
-#              VOLUME lanes (the deriver, which runs on every message, and
-#              the minimal/low dialectic levels).
-#   smart    — the everyday tier: the planner profile, plus Honcho's
+#   cheap    — cheapest competent work: the short auxiliary tasks (title
+#              generation, memory-query rewrite, approval, the group router)
+#              and Honcho's VOLUME lanes (the deriver, which runs on every
+#              message, and the minimal/low dialectic levels).
+#   smart    — the middle ground: the planner profile, context compression,
+#              MCP sampling and the judgment auxiliary lanes, plus Honcho's
 #              REASONING lanes (dream deduction/induction, summaries, and
 #              the medium/high/max dialectic levels).
 #   smarter  — the workhorse (1M window at flash economics): the default,
-#              developer and release profiles, and context compression, run
-#              here.
+#              developer and release profiles, and the vision auxiliary
+#              lane, run here.
 #   smartest — the top of the ladder: judgment work (the reviewer profile)
 #              and the opt-in escalation an agent reaches for with
 #              `/model smartest`.
@@ -304,8 +304,8 @@ model_list:
   #
   #    NOTE the window caveat: a model reached through the wildcard has no
   #    declared context window (config/models.toml declares windows per
-  #    TIER), so Hermes and the `claude` wrapper fall back to their own
-  #    guesses for it. Promote a model to a tier before relying on it.
+  #    TIER), so Hermes falls back to its own guess for it. Promote a model
+  #    to a tier before relying on it.
   - model_name: "ollama/*"
     litellm_params:
       model: openai/*

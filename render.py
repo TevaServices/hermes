@@ -226,7 +226,7 @@ STACK_COMPRESSION_DEFAULTS = {
 # config/models.toml. Rendered into each profile's `auxiliary.<task>` block
 # as {provider, model}; a profile may override one task via
 # [config_extra.auxiliary.<task>] (or name a tier directly, as
-# smart_model_routing does).
+# STACK_AUX_MODELS does).
 #
 # WHY THIS LIVES IN config.yaml AND NOT IN THE ENV FILE (2026-10-04):
 # hermes-main.env used to carry AUXILIARY_COMPRESSION_MODEL /
@@ -260,30 +260,40 @@ STACK_COMPRESSION_DEFAULTS = {
 #   moa_*           — unwired or disabled here; these are the ones to think
 #                     about when one is turned on, not to pin blind now.
 STACK_AUX_MODELS = {
-    # Vision MUST run on a model that actually takes images
-    # (tools/vision_tools.py). Left unpinned while `smart` carried vision —
-    # inheriting the primary was then right for every profile. The smart
-    # tier moved to Beam (text-only) on 2026-10-17, so two of the four tiers
-    # (smart, smartest) now have no vision and a planner/reviewer image
-    # arrival would fail on an inherited primary; `smarter` is the one
-    # image-capable tier (GLM 5.3 flash carried its vision until 2026-10-17;
-    # DeepSeek V4.1 Flash 1017 is natively multimodal), so the pin is now
-    # right for everyone. Revisit if a tier swap changes the picture.
+    # The profile primary is the `smarter` tier (DeepSeek V4.1 Flash 1017,
+    # 1M, vision). Auxiliary work runs one step down:
+    #   cheap   (Gemma 4 31B, 256K)   — short/mechanical calls
+    #   smart   (Beam 1.0, 1M, text) — the middle ground
+    #   smarter (DeepSeek)           — only where image quality needs it
+    #
+    # Vision is the one exception: Beam is text-only, and Gemma 4's image
+    # understanding is weaker than the primary, so image arrivals keep the
+    # image-capable main model. Compression needs a window >= the profile's
+    # own; Beam's 1M satisfies every declared primary and is cheaper than
+    # DeepSeek. Heavy/unknown lanes (moa_*, voice_chat, monitor, review) stay
+    # unpinned and inherit the primary.
     "vision": "smarter",
-    # Compaction summarises a conversation that reached 80% of the profile's
-    # OWN window, so this lane needs intelligence AND a window >= the primary's
-    # (asserted per profile in render_profile) — the one aux lane where a small
-    # model silently breaks long work.
-    "compression": "smarter",
-    # One call per NEW session, and a title is a handful of tokens: the
-    # cheapest lane is right by construction. Volume grows with new sessions
-    # (interactive chats, and a first delivery into a profile's Bot Chat).
+    "compression": "smart",
     "title_generation": "cheap",
-    # Rewrites the latest user message into a retrieval query (8s timeout,
-    # ~4k chars in / 320 out) — mechanical. Idle today: the Honcho memory
-    # provider runs with query_rewrite off. Pinned so that turning it on is
-    # a plugin flag, not a new spend on the workhorse tier.
     "memory_query_rewrite": "cheap",
+    # Approval is a short risk judgment; upstream recommends a fast/cheap
+    # model here. Inert while approvals.mode is off, but pinned so turning
+    # it on does not silently spend the primary.
+    "approval": "cheap",
+    # MCP sampling is arbitrary server-directed generation: give it the
+    # middle tier rather than the workhorse.
+    "mcp": "smart",
+    # One short, tool-less classification call for Bot Mode rooms.
+    "group_router": "cheap",
+    # Reasoning lanes that are unwired/disabled in this image today; pinned
+    # by category so enabling one does not inherit the primary by accident.
+    "curator": "smart",
+    "goal_judge": "smart",
+    "kanban_decomposer": "smart",
+    "triage_specifier": "smart",
+    # Short generation/classification calls.
+    "profile_describer": "cheap",
+    "tts_audio_tags": "cheap",
 }
 
 # The aux task set of the base image, as a typo guard. A task key that is not
@@ -889,32 +899,13 @@ def build_model_config(model_key: str, models: dict, providers: dict) -> tuple[d
     return model_block, custom_providers
 
 
-def cheap_model_block(profile: str, alias: str, models: dict) -> dict:
-    """The smart_model_routing cheap-lane block Hermes reads, from a tier name.
-
-    Same shape an explicit `[config_extra.smart_model_routing.cheap_model]`
-    table renders as: the named provider plus the gateway's model name. The
-    provider's base_url and key ride the `custom_providers` entry render.py
-    emits for that provider name, so nothing is repeated here — which is the
-    point: a profile names a TIER, and the backend stays in one file.
-    """
-    if alias not in models:
-        raise ConfigError(
-            f"profile '{profile}': smart_model_routing.cheap_model is "
-            f"'{alias}', which is not a tier in config/models.toml. Known: "
-            f"{', '.join(sorted(models))}"
-        )
-    model = models[alias]
-    return {"provider": model["provider"], "model": model["model"]}
-
-
 def aux_model_block(profile: str, task: str, alias: str, models: dict) -> dict:
     """The `auxiliary.<task>` block Hermes reads, from a tier alias.
 
-    Same shape as cheap_model_block: the named provider plus the gateway's
-    model name, with base_url/key riding the `custom_providers` entry
-    render.py emits for that provider. Nothing is repeated here, so a
-    profile names a TIER and the backend stays in config/litellm.yaml.
+    The named provider plus the gateway's model name, with base_url/key
+    riding the `custom_providers` entry render.py emits for that provider.
+    Nothing is repeated here, so a profile names a TIER and the backend
+    stays in config/litellm.yaml.
 
     The tier NAME matters beyond routing: `model_overrides` carries each
     tier's true context window, which is how the compression lane sizes
@@ -1005,20 +996,14 @@ def build_model_overrides(models: dict) -> dict:
 
     `models.toml` states each tier's TRUE provider window as
     `context_length`; this is the same value in the shape Hermes reads:
-    `model_overrides.<provider>.<model_id>.context_window`. One source, two
-    consumers:
-
-      * Hermes' own context-length resolution
-        (agent/model_metadata.get_model_context_length) consults this block
-        at step 0b — before any probe, catalogue lookup, or the 256K
-        fallback. So the cheap lane, the auxiliary models, and any /model
-        switch get the real window instead of a guess (the catalogue probe
-        cannot resolve an ID through the litellm base_url, which is why
-        models.toml states the windows at all).
-      * The `claude` wrapper reads it back to export
-        CLAUDE_CODE_MAX_CONTEXT_TOKENS. Claude Code's own model catalogue
-        knows none of these tier names, so without it Claude Code assumes
-        200K and auto-compacts a 1M-context session five times too early.
+    `model_overrides.<provider>.<model_id>.context_window`. One source,
+    consumed by Hermes' own context-length resolution
+    (agent/model_metadata.get_model_context_length), which consults this
+    block at step 0b — before any probe, catalogue lookup, or the 256K
+    fallback. So the cheap lane, the auxiliary models, and any /model
+    switch get the real window instead of a guess (the catalogue probe
+    cannot resolve an ID through the litellm base_url, which is why
+    models.toml states the windows at all).
 
     Grouped by provider because that is the block's shape; every tier in
     models.toml currently rides the litellm gateway. The window belongs to
@@ -1374,19 +1359,6 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
             f"the name."
         )
 
-    # smart_model_routing.cheap_model may be a TIER NAME (a plain string —
-    # the shape the default profile writes) rather than the {provider, model}
-    # table Hermes reads. Expanding it here means a profile never repeats an
-    # upstream model id, and an unknown tier is a build error rather than a
-    # cheap lane that 404s on every short turn. An explicit table passes
-    # through unchanged, so a profile can still point the lane at a model
-    # that is not a tier.
-    routing = config.get("smart_model_routing")
-    if isinstance(routing, dict) and isinstance(routing.get("cheap_model"), str):
-        routing["cheap_model"] = cheap_model_block(
-            name, routing["cheap_model"], models
-        )
-
     # The fallback chain: the tier a failing primary moves to. Hermes reads
     # `fallback_providers` (hermes_cli/fallback_config.get_fallback_chain),
     # consumed by the agent's provider init AND the cron setup, and tries each
@@ -1474,7 +1446,7 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     #
     # Merged PER TASK, so [config_extra.auxiliary.title_generation] can set
     # just `model` without having to restate the provider, and a bare tier
-    # name is accepted the way smart_model_routing accepts one.
+    # name is accepted (the shape STACK_AUX_MODELS uses).
     aux_cfg: dict = {}
     for task, alias in STACK_AUX_MODELS.items():
         aux_cfg[task] = aux_model_block(name, task, alias, models)
@@ -1493,14 +1465,15 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     # to restore if the posture is dialled back. Merged so a profile may
     # override via [config_extra.auxiliary.approval].
     aux_extra = profile.get("config_extra", {}).get("auxiliary", {}) or {}
-    approval_cfg = {"timeout": 60}
+    approval_cfg = dict(aux_cfg.get("approval") or {})
+    approval_cfg["timeout"] = 60
     approval_cfg.update(aux_extra.get("approval") or {})
     aux_cfg["approval"] = approval_cfg
     for task, value in aux_extra.items():
         if task == "approval":
             continue
         if isinstance(value, str):
-            # A bare tier name, as smart_model_routing.cheap_model accepts one.
+            # A bare tier name, as STACK_AUX_MODELS uses.
             aux_cfg[task] = aux_model_block(name, task, value, models)
             continue
         if isinstance(value, dict):

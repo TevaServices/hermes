@@ -184,8 +184,7 @@ RUN set -e; find /opt/hermes/tools -xdev ! -perm -o+r -exec chmod a+rX {} +; \
 #
 # TARGETARCH is Docker's own build-arg (amd64 / arm64), so the image builds
 # on either architecture with no host assumptions. gh's release names use
-# the same two words. (The claude-* scripts do the equivalent at runtime
-# with `uname -m`.)
+# the same two words.
 ARG GH_VERSION=2.100.0
 ARG TARGETARCH
 RUN case "${TARGETARCH}" in \
@@ -305,9 +304,6 @@ COPY docker/hermes/refresh-repos.sh /usr/local/bin/refresh-repos.sh
 # GitHub creates them server-side through the API; this replays the branch
 # as API-created commits so they verify (see the file's own header).
 COPY docker/hermes/git-publish.py /usr/local/bin/git-publish.py
-# claude-update.sh also lands here (not only in /opt/claude-hermes/) so
-# the reconciler can seed it as the default profile's daily job script.
-COPY docker/hermes/claude-update.sh /usr/local/bin/claude-update.sh
 # Org GitHub App plumbing: the gh shim (real binary is gh-real above),
 # the org token minter/cache, and the git credential router.
 COPY docker/hermes/gh /usr/local/bin/gh
@@ -334,7 +330,6 @@ RUN chmod 0755 /usr/local/bin/github-app-token.sh \
                /usr/local/bin/prune-repos.sh \
                /usr/local/bin/refresh-repos.sh \
                /usr/local/bin/git-publish.py \
-               /usr/local/bin/claude-update.sh \
                /usr/local/bin/gh \
                /usr/local/bin/gh-org-token \
                /usr/local/bin/git-credential-hermes.sh
@@ -368,24 +363,6 @@ RUN set -e; if [ -s /etc/hermes/chromium-executable-path ] && [ -x "$(cat /etc/h
       && ln -sf "$SHELL" /usr/local/bin/chromium-headless-shell; \
     fi; \
     /usr/local/bin/chromium-headless-shell --version >/dev/null
-
-# Claude Code wrapper tooling (coding-agent delegation on the profile's
-# own model via the LiteLLM gateway). Staged under /opt/claude-hermes
-# (image layer, read-only at runtime) — /opt/data is volume-shadowed so
-# it CANNOT be pre-baked; the provisioner copies these onto the volume at
-# boot and installs the claude-real CLI there too (persistent, so the
-# CLI itself is NOT baked into the image). The claude-update cron keeps
-# it current. See the hermes-stack-ops skill for the full contract.
-COPY docker/hermes/claude /opt/claude-hermes/claude
-COPY docker/hermes/claude-model-resolve.py /opt/claude-hermes/claude-model-resolve.py
-COPY docker/hermes/claude-env.sh /opt/claude-hermes/claude-env.sh
-COPY docker/hermes/claude-shell-functions.sh /opt/claude-hermes/claude-shell-functions.sh
-COPY docker/hermes/claude-provision.sh /opt/claude-hermes/claude-provision.sh
-COPY docker/hermes/claude-update.sh /opt/claude-hermes/claude-update.sh
-RUN chmod 0755 /opt/claude-hermes/claude \
-               /opt/claude-hermes/claude-model-resolve.py \
-               /opt/claude-hermes/claude-provision.sh \
-               /opt/claude-hermes/claude-update.sh
 
 # Declarative config: sources + renderer, compiled at BUILD time (no
 # committed build/ artifacts in git — the renderer IS the verification).

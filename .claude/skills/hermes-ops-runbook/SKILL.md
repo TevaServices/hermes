@@ -212,36 +212,6 @@ docker exec -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
 #      first).
 ```
 
-## The `claude` wrapper's argv
-
-Skip flag for a real run, never for a subcommand — AGENTS.md §"Agent
-self-management".
-
-```bash
-sh scripts/test-claude-wrapper.sh                   # offline; no container
-# Live: the argv claude-real receives (needs an image built AFTER the
-# CLAUDE_HERMES_DIR override landed — on an older one the wrapper ignores
-# the var and answers the prompt instead of echoing argv):
-docker exec -u hermes -e HERMES_HOME=/opt/data/profiles/developer \
-  -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
-  set -a; . /opt/data/profiles/developer/.env; set +a
-  d=$(mktemp -d); mkdir -p "$d/claude-hermes"
-  printf "#!/bin/sh\nfor a in \"\$@\"; do echo \"\$a\"; done\n" > "$d/claude-hermes/claude-real"
-  chmod +x "$d/claude-hermes/claude-real"
-  cp /opt/data/tools/claude-hermes/claude-model-resolve.py "$d/claude-hermes/"
-  CLAUDE_HERMES_DIR="$d/claude-hermes" claude -p hi --max-turns 3'
-#   -> the profile model, `-p`, `hi`, `--max-turns 3`,
-#      `--dangerously-skip-permissions` — and NOT a second permission flag.
-#      `claude mcp list` shows no skip flag at all.
-# The real thing, once, to prove it still reaches the gateway:
-docker exec -u hermes -e HERMES_HOME=/opt/data/profiles/developer \
-  -e HOME=/opt/data/profiles/developer/home hermes-main sh -c '
-  set -a; . /opt/data/profiles/developer/.env; set +a
-  cd "$(mktemp -d)" && claude -p "Reply with exactly: OK" --max-turns 2'
-#   -> OK, exit 0. A write is the part that used to fail — ask it to create
-#      a file and check the file exists afterwards.
-```
-
 ## Org GitHub Apps (after landing the org env vars + PEMs)
 
 ```bash
