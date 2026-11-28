@@ -44,6 +44,23 @@ integrations = ["honcho", "firecrawl", "mach"]
 # privileged intents toggled in the Discord developer portal.
 platforms = ["discord"]
 
+# Stack-wide skills (config/skills/) load into every rendered profile, but
+# this one is NOT a member of the team: the team protocol skills
+# (workflow/identity/label conventions for the planner, developer, reviewer
+# and release profiles) describe a job this profile never does. A skill's
+# name + description ride the system prompt's skill index on EVERY turn, so
+# excluding them here is a per-turn context saving, not a cosmetic tidy —
+# and no team package is provisioned on this host at all.
+#
+# render.py turns this into BOTH halves (see stack_skill_exclusions): the
+# skill is not copied into the overlay's skills/, AND it is added to the
+# rendered skills.disabled — the boot overlay merge never deletes a skills
+# dir, so a home that already has the files stops loading them either way.
+# The remaining stack-wide skills (hermes-stack-ops) and this profile's own
+# (komodo-ops) still load. A profile-local skill of the same name is
+# unaffected — only the stack-wide copies are filtered.
+skills_exclude = ["team-conventions", "team-github-token"]
+
 # Free-form Hermes config passthrough: every key under [config_extra]
 # is merged verbatim into the generated config.yaml top level. Use it
 # for settings render.py has no abstraction for (check the Hermes

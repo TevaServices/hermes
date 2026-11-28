@@ -1560,6 +1560,21 @@ logged correctly, and reached nothing). Config belongs in the container
 set: deploy stacks, run builds, re-apply the resource sync — but NOT change
 control-plane resources (that's the komodo repo, human-reviewed via push).
 
+**A profile can opt OUT of individual stack-wide skills** with
+`skills_exclude = ["<skill-dir>", ...]` in its `profile.toml` (`render.py`
+→ `stack_skill_exclusions`). One declaration, two effects: the skill is not
+copied into that profile's overlay **and** it is appended to the rendered
+`skills.disabled` — the second half is load-bearing, because the boot overlay
+apply is a MERGE that never deletes a skills dir, so removing it from the
+image alone would leave an existing home's copy in the skill index. The
+**default (main) profile excludes `team-conventions` + `team-github-token`**:
+it is not a member of the team (and no team package is provisioned on the
+Teva host at all), so that protocol is per-turn system-prompt context for a
+workflow this profile never runs; the team profiles keep them because their
+packages render without the key. Unknown names fail the BUILD (a typo would
+look declared and exclude nothing), and a profile-local skill of the same
+name is unaffected.
+
 **A SECOND, separate control plane: `<org>/komodo`.** Its own core, servers
 and key (no shared state with the homelab one). The release profile is the
 only role that drives it, and since 2026-10-10 it reaches that control

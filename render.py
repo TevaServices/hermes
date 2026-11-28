@@ -13,7 +13,8 @@ Writes, per profile:
   build/<name>/config.yaml      Hermes config (model, providers, mcp_servers, extras)
   build/<name>/.env.example     env var placeholders the profile needs
   build/<name>/SOUL.md          copied from the profile dir
-  build/<name>/skills/          copied from the profile dir, if present
+  build/<name>/skills/          stack-wide skills (config/skills/, minus the
+                                profile's skills_exclude) + the profile's own
 
 The build/<name>/ directory is the container overlay mounted at /overlay.
 Repo sources are the source of truth: re-run after any edit. Generated
@@ -1196,6 +1197,48 @@ def collect_profile_placeholders(profile: dict) -> set[str]:
     return found
 
 
+def stack_skill_exclusions(name: str, profile: dict) -> set[str]:
+    """Stack-wide skills (config/skills/) this profile opts OUT of.
+
+    Declared as `skills_exclude = ["<skill-dir>", ...]` in profile.toml. The
+    stack-wide skills merge into EVERY rendered profile, but not every
+    profile belongs to the same system: the default (main) agent is not a
+    member of the team, so the team protocol skills are noise in its skill
+    index — and that index rides the system prompt on every turn, so an
+    unused skill costs context forever.
+
+    render_profile gives the declaration two effects: the skill is NOT
+    COPIED into the overlay's skills/ (so a fresh home never has it), and it
+    is added to the rendered `skills.disabled` (so a home that already has
+    the directory — earlier image, package-shipped skill — stops loading it
+    too; the boot overlay merge never deletes a dir).
+
+    Unknown names fail the render: a typo would exclude nothing while
+    looking declared — the same knob-that-does-nothing failure the aux
+    task list guards against. A profile's OWN skill under
+    config/profiles/<name>/skills/ is unaffected; this key only filters the
+    stack-wide set, and a profile-local skill still wins on a name clash.
+    """
+    raw = profile.get("skills_exclude")
+    if raw is None:
+        return set()
+    if not isinstance(raw, list) or not all(isinstance(s, str) for s in raw):
+        raise ConfigError(
+            f"profile '{name}': skills_exclude must be a list of skill "
+            f"directory names (under config/skills/), got {raw!r}"
+        )
+    shared = CONFIG / "skills"
+    known = {p.name for p in shared.iterdir()} if shared.is_dir() else set()
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        raise ConfigError(
+            f"profile '{name}': skills_exclude names {', '.join(unknown)} — "
+            f"no such stack-wide skill. Known: "
+            f"{', '.join(sorted(known)) or '(none)'}"
+        )
+    return set(raw)
+
+
 # ----------------------------------------------------------------- rendering
 
 def render_profile(name: str, profile: dict, profile_dir: Path,
@@ -1225,6 +1268,28 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
     if mcp_servers:
         config["mcp_servers"] = mcp_servers
     config.update(profile.get("config_extra", {}))
+
+    # A profile may opt OUT of individual stack-wide skills (see
+    # stack_skill_exclusions); ONE declaration drives both halves:
+    #   * the skill is not copied into the overlay's skills/ (below), so a
+    #     fresh profile home never has the files;
+    #   * it is listed in the rendered `skills.disabled`, because the boot
+    #     overlay MERGE never deletes a directory — a home that already
+    #     carried the skill (an earlier image, a package that shipped it)
+    #     would otherwise keep loading it into the skill index, which is
+    #     exactly the per-turn context this key exists to reclaim.
+    skills_excluded = stack_skill_exclusions(name, profile)
+    if skills_excluded:
+        skills_cfg = config.setdefault("skills", {})
+        if not isinstance(skills_cfg, dict):
+            raise ConfigError(
+                f"profile '{name}': skills must be a table (skills.disabled "
+                f"is a list), got {type(skills_cfg).__name__} — skills_exclude "
+                f"needs to merge into it"
+            )
+        disabled = list(skills_cfg.get("disabled") or [])
+        disabled.extend(sorted(skills_excluded - set(disabled)))
+        skills_cfg["disabled"] = disabled
 
     # A profile's [discord] table is the ONE declaration of its channel
     # fence (see discord_block); the renderer writes the nested
@@ -1595,12 +1660,23 @@ def render_profile(name: str, profile: dict, profile_dir: Path,
         fh.write("\n" + SOUL_OPERATING.read_text(encoding="utf-8"))
 
     # Stack-wide skills (config/skills/) merge into EVERY rendered profile
-    # — operating-manual skills every agent in this stack should carry.
-    # Profile-specific skills are copied after, so same-named ones win.
+    # — operating-manual skills every agent in this stack should carry —
+    # MINUS the profile's `skills_exclude` (see stack_skill_exclusions: the
+    # main profile is not a team member and opts out of the team protocol
+    # skills). Copied entry by entry rather than as a tree so the exclusion
+    # matches TOP-LEVEL skill dirs only. Profile-specific skills are copied
+    # after, so same-named ones win.
     shared_skills = CONFIG / "skills"
     if shared_skills.is_dir():
         (out_dir / "skills").mkdir(parents=True, exist_ok=True)
-        shutil.copytree(shared_skills, out_dir / "skills", dirs_exist_ok=True)
+        for entry in sorted(shared_skills.iterdir()):
+            if entry.name in skills_excluded:
+                continue
+            dest = out_dir / "skills" / entry.name
+            if entry.is_dir():
+                shutil.copytree(entry, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(entry, dest)
     skills = profile_dir / "skills"
     if skills.is_dir():
         shutil.copytree(skills, out_dir / "skills", dirs_exist_ok=True)

@@ -1,0 +1,37 @@
+# Teva target overlay — only used by the Teva Komodo stack on docker01.
+#
+# The source/homelab deployment keeps its existing NetBird forwarder stack and
+# does not include this file in its Komodo stack file_paths.
+#
+# Purpose:
+#   * publish LiteLLM on host loopback so a host-network forwarder can reach it
+#   * expose LiteLLM (4000) and the Hermes dashboard (9119) on the host's
+#     NetBird address only, for the NetBird reverse proxy
+#
+# The dashboard is already published on 127.0.0.1:9119 by
+# compose/hermes.compose.yml; this file only adds the mesh-side forwarder.
+# The services are not published on 0.0.0.0, so the VPC and internet cannot
+# reach them directly.
+
+services:
+  litellm:
+    ports:
+      - "127.0.0.1:4000:4000"
+
+  litellm-forwarder:
+    image: alpine/socat
+    container_name: hermes-litellm-forwarder
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - TCP-LISTEN:4000,bind=100.91.204.199,fork,reuseaddr
+      - TCP:127.0.0.1:4000
+
+  dashboard-forwarder:
+    image: alpine/socat
+    container_name: hermes-dashboard-forwarder
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - TCP-LISTEN:9119,bind=100.91.204.199,fork,reuseaddr
+      - TCP:127.0.0.1:9119
