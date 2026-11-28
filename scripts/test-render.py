@@ -146,15 +146,14 @@ ok("every declared task names a tier that exists in models.toml")
 
 # The base image's own aux task set (probed from DEFAULT_CONFIG['auxiliary']
 # under the image venv). Pinned here so a HERMES_REF bump that adds/drops a
-# task is caught offline: v0.22.5 gained free_only, openrouter_model,
-# stream_only_base_urls, transient_retries and lost kanban_estimator.
+# task is caught offline: v0.23.5 gained group_router and lost skills_hub.
 check("known tasks match the image's aux task set",
       sorted(render.KNOWN_AUX_TASKS),
       sorted({"approval", "background_review", "compression", "curator",
-              "free_only", "goal_judge", "kanban_decomposer", "mcp",
-              "memory_query_rewrite", "moa_aggregator", "moa_reference",
+              "free_only", "goal_judge", "group_router", "kanban_decomposer",
+              "mcp", "memory_query_rewrite", "moa_aggregator", "moa_reference",
               "monitor", "openrouter_model", "profile_describer", "review",
-              "skills_hub", "stream_only_base_urls", "title_generation",
+              "stream_only_base_urls", "title_generation",
               "transient_retries", "triage_specifier", "tts_audio_tags",
               "vision", "voice_chat"}))
 
@@ -229,8 +228,8 @@ check("a bare tier name override expands", overridden["title_generation"],
 partial = renders({"title_generation": {"model": "smarter"}})
 check("a {model} override keeps the declared provider", partial["title_generation"],
       {"provider": "litellm", "model": "smarter"})
-added = renders({"skills_hub": {"provider": "litellm", "model": "cheap"}})
-check("a profile may add a task the stack does not pin", added["skills_hub"],
+added = renders({"group_router": {"provider": "litellm", "model": "cheap"}})
+check("a profile may add a task the stack does not pin", added["group_router"],
       {"provider": "litellm", "model": "cheap"})
 check_raises("a non-table, non-string override is a build error",
              with_aux({"title_generation": 3}))

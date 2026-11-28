@@ -292,17 +292,18 @@ STACK_AUX_MODELS = {
 # Re-verify at a HERMES_REF bump:
 #   python3 -c "from hermes_cli.config_defaults import DEFAULT_CONFIG; \
 #               print(sorted(DEFAULT_CONFIG['auxiliary']))"
-# (run under the image venv; v0.22.5 list is reproduced below. Deltas at the
-# v0.22.5 bump: gained free_only, openrouter_model, stream_only_base_urls,
-# transient_retries; LOST kanban_estimator — a pin to it would now be a knob
-# that does nothing, so it is out of the guard set on purpose.)
+# (run under the image venv; the v0.23.5 list is reproduced below. Deltas at
+# the v0.23.5 bump: gained group_router (Bot Mode Group Chat routing — this
+# stack runs no Group Chats, so it stays unpinned and inherits the primary);
+# LOST skills_hub (no call site in this image) — a pin to it would now be a
+# knob that does nothing, so it is out of the guard set on purpose.)
 KNOWN_AUX_TASKS = {
     "approval", "background_review", "compression", "curator", "free_only",
-    "goal_judge", "kanban_decomposer", "mcp", "memory_query_rewrite",
-    "moa_aggregator", "moa_reference", "monitor", "openrouter_model",
-    "profile_describer", "review", "skills_hub", "stream_only_base_urls",
-    "title_generation", "transient_retries", "triage_specifier",
-    "tts_audio_tags", "voice_chat", "vision",
+    "goal_judge", "group_router", "kanban_decomposer", "mcp",
+    "memory_query_rewrite", "moa_aggregator", "moa_reference", "monitor",
+    "openrouter_model", "profile_describer", "review",
+    "stream_only_base_urls", "title_generation", "transient_retries",
+    "triage_specifier", "tts_audio_tags", "voice_chat", "vision",
 }
 
 # `profile` is dropped: the rendered file is already per-profile.
@@ -488,7 +489,7 @@ def gateway_fallback_targets() -> set[str] | None:
 # Config schema version used when the base image's own value can't be read
 # (local preview runs, where hermes_cli isn't installed). Keep in sync with
 # the HERMES_REF pin — the authoritative stamp is derived at build time.
-_FALLBACK_CONFIG_VERSION = 51
+_FALLBACK_CONFIG_VERSION = 54
 
 
 def latest_config_version() -> int:

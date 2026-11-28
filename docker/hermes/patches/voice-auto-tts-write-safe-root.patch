@@ -26,9 +26,9 @@
 +    if safe_roots and not any(
 +        tmp_parent == r or tmp_parent.startswith(r + os.sep) for r in safe_roots
 +    ):
-+        from tools.tts_tool import DEFAULT_OUTPUT_DIR
++        from tools.tts_tool import _default_output_dir
 +
-+        base = os.path.join(DEFAULT_OUTPUT_DIR, "hermes_voice")
++        base = os.path.join(_default_output_dir(), "hermes_voice")
 +    else:
 +        base = os.path.join(tmp_parent, "hermes_voice")
 +    audio_path = os.path.join(base, stem)
