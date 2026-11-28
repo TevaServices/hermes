@@ -428,6 +428,50 @@ check_raises("a shared script that exists nowhere is a build error",
              lambda: render.load_cron_jobs(spec2, {"p1"}, [scratch]))
 
 # ---------------------------------------------------------------------------
+# 10. stack-wide skill exclusions (skills_exclude)
+# ---------------------------------------------------------------------------
+# The stack-wide skills ride every profile's skill INDEX, and that index is
+# part of the system prompt on every turn. The main agent is not a member of
+# the team, so the team protocol skills are pure per-turn context cost there
+# — the case this pins. A profile that does not opt out keeps them.
+print("# 10. skills_exclude")
+render.render_profile("skillprobe", default_profile, DEFAULT_DIR, models,
+                      providers, integrations)
+sk = {p.name for p in (render.BUILD / "skillprobe" / "skills").iterdir()}
+check("the main profile renders NO team skill",
+      sorted(sk & {"team-conventions", "team-github-token"}), [])
+check("it keeps the stack operating manual", "hermes-stack-ops" in sk, True)
+check("it keeps its own profile skill", "komodo-ops" in sk, True)
+# The second half: a profile home that already HAS the skill dir (the boot
+# overlay merge never deletes one, and this host's volume did) must stop
+# loading it — so the exclusion is rendered into skills.disabled too.
+cfg_text = (render.BUILD / "skillprobe" / "config.yaml").read_text()
+disabled_block = cfg_text.split("skills:", 1)[1].split("\nmodel_overrides:", 1)[0]
+check("the excluded skills are rendered as DISABLED",
+      all(f'"{n}"' in disabled_block
+          for n in ("team-conventions", "team-github-token")), True)
+check("skills.disabled was not created empty by the exclusion",
+      "disabled:" in disabled_block, True)
+plain = {"model": "smarter", "integrations": [], "platforms": [],
+         "config_extra": {}}
+render.render_profile("skillprobe2", plain, DEFAULT_DIR, models, providers,
+                      integrations)
+sk2 = {p.name for p in (render.BUILD / "skillprobe2" / "skills").iterdir()}
+check("a profile with no exclusion keeps the team skills",
+      sorted(sk2 & {"team-conventions", "team-github-token"}),
+      ["team-conventions", "team-github-token"])
+plain_cfg = (render.BUILD / "skillprobe2" / "config.yaml").read_text()
+check("and does not gain a skills block from it", "skills:" in plain_cfg, False)
+check_raises("an unknown skills_exclude name is a build error",
+             lambda: render.render_profile(
+                 "skillprobe3", {**plain, "skills_exclude": ["team-convention"]},
+                 DEFAULT_DIR, models, providers, integrations))
+check_raises("a non-list skills_exclude is a build error",
+             lambda: render.render_profile(
+                 "skillprobe4", {**plain, "skills_exclude": "team-conventions"},
+                 DEFAULT_DIR, models, providers, integrations))
+
+# ---------------------------------------------------------------------------
 # summary
 # ---------------------------------------------------------------------------
 _scratch.cleanup()
