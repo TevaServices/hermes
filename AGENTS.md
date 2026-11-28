@@ -1152,20 +1152,14 @@ web console is `https://netlockrmm.tevaservices.com`. Auth is a Bearer token
 minted in the console (`Settings → API tokens`; form `nlk_<id>_<secret>`,
 shown once, account permissions checked on every request).
 
-- **The token is a host FILE, not an env var** — the same split as
-  `KOMODO_AUTH_HEADER`, for the same reason (Hermes strips credential env vars
-  from tool subprocesses, GHSA-rhgp-j443-p4rf): `/etc/hermes/netlock-api-token`
-  (root:group 640, riding the env-dir mount visible in-container at
-  `/run/hermes-pem/netlock-api-token`) → the entrypoint copies it into the
-  default profile's tool-home (`$HERMES_HOME/home/netlock-api-token`, 600) on
-  every boot, and compose declares `NETLOCK_API_TOKEN_FILE` pointing at that
-  copy. Call shape: `curl -H "Authorization: Bearer $(cat
-  "$NETLOCK_API_TOKEN_FILE")" "$NETLOCK_API_URL/v1/devices"` — the non-secret
-  base URL rides `hermes-main.env` as `NETLOCK_API_URL` (launch-profile env:
-  visible to the default profile's agent turns and cron children; other
-  profiles' cron children strip it, which is correct — they don't hold the
-  token either). **Default profile only**, mirroring komodo-ops; widening is
-  the `KOMODO_ALT_AUTH_HEADER` two-line move.
+- **Hermes holds no NetLock credential.** The default profile reaches the API
+  through its mach integration: a `mach exec` on the RMM host with the API
+  token injected by NAME from mach's sealed store. There is deliberately no
+  NetLock token file, no `NETLOCK_API_TOKEN_FILE`, and no `NETLOCK_API_URL` in
+  the container — the token never enters the Hermes environment, a tool-home
+  or a tool subprocess, and this public repo carries no machine/secret names.
+  The call shape is the same `curl … /v1/…` invocation, executed through mach;
+  keep it default-profile-only, mirroring komodo-ops.
 - **CrowdSec fronts the API and is stricter than the token's own rate limit.**
   Pace calls ≥1.2 s, strictly sequential, no parallel fan-out; a 403 with an
   EMPTY body (no `server:`/`x-request-id:` headers — unlike every app
