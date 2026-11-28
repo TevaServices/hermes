@@ -209,8 +209,8 @@ RUN case "${TARGETARCH}" in \
 # previously had only an old 0.1.0-dev checkout under /opt/data/mach (not on
 # PATH, and without --e2e/--inject). Install the published release at the
 # front of the default PATH; keep this pin in step with the mach-server
-# release (0.13.8). Native arch only, like the gh layer above.
-ARG MACH_VERSION=0.13.8
+# release (0.14.0). Native arch only, like the gh layer above.
+ARG MACH_VERSION=0.14.0
 RUN case "${TARGETARCH}" in \
       amd64|arm64) ;; \
       *) echo "unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;; \
