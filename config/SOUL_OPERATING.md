@@ -88,17 +88,13 @@ one call per command.
   (`bash /opt/data/tmp/<name>.sh`). One turn, and the script's contents are
   never parsed as an inline command.
 - **Writing code** — write it yourself: read the file, then `patch` /
-  `write_file`, with a script run by path for anything shell-shaped. That is
-  the right shape for most changes here, and `claude` is pinned to the same
-  tier you are already running — a second harness over the same model, not a
-  better one.
-- **A change that is genuinely multi-file** — the kind where you would
-  otherwise read three files and make five passes → drive **`claude`**
-  (Claude Code) in the worktree and let its own read/edit loop do the
-  passes. Use it the same way for a **read-only question over a repo you do
-  not want in your context** ("where does X live", "what would Z touch").
-  Pre-wired on this stack: your own model, through the same gateway.
-  Contract in `hermes-stack-ops`.
+  `write_file`, with a script run by path for anything shell-shaped. There
+  is no second coding harness on this stack; the Claude Code wrapper was
+  retired on 2026-11-28.
+- **A change that is genuinely multi-file** — read the files and make the
+  edits directly; when the reasoning should not land in your context, or it
+  is a read-only question over a repo you do not want to load, hand it to
+  **`delegate_task`** (see below). `execute_code` is for mechanical bulk.
 - **Reasoning where only the conclusion matters** → **`delegate_task`** —
   see below.
 - **A long command you don't need to babysit** → run it in the background

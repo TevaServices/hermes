@@ -88,8 +88,8 @@ run = 'python docker/hermes/render-drop-profiles.py --validate --drop-dir "$HERM
 # package's protocol tests live in ITS repo: tests/test-team-labels.sh —
 # the stack repo no longer knows those profiles.)
 [tasks.test]
-description = "Run the repo's offline tests (gh shim owner routing, verified publish, git repo helper, git hooks, claude wrapper argv, entrypoint secret copy, ssh secret push, discord doctor routes, firecrawl guard, aux lane rendering)"
-run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-git-publish.sh", "sh scripts/test-git-repo.sh", "sh scripts/test-git-hooks.sh", "sh scripts/test-claude-wrapper.sh", "sh scripts/test-entrypoint-secrets.sh", "sh scripts/test-hostdeploy.sh", "sh scripts/test-discord-thread-doctor.sh", "sh scripts/test-firecrawl-guard.sh", "python scripts/test-render.py"]
+description = "Run the repo's offline tests (gh shim owner routing, verified publish, git repo helper, git hooks, entrypoint secret copy, ssh secret push, discord doctor routes, firecrawl guard, aux lane rendering)"
+run = ["sh scripts/test-gh-shim.sh", "sh scripts/test-git-publish.sh", "sh scripts/test-git-repo.sh", "sh scripts/test-git-hooks.sh", "sh scripts/test-entrypoint-secrets.sh", "sh scripts/test-hostdeploy.sh", "sh scripts/test-discord-thread-doctor.sh", "sh scripts/test-firecrawl-guard.sh", "python scripts/test-render.py"]
 
 [tasks.net]
 description = "Create the shared external docker network (idempotent)"

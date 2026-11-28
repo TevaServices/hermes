@@ -66,8 +66,8 @@ all resolve (the old alias names never did — they existed only in the repo).
 
 `render.py` FAILS THE BUILD when a tier has no group on the gateway, and
 turns each tier into the rendered config's `model_overrides` block — the one
-line Hermes (the cheap lane, the aux models, any `/model` switch) and the
-`claude` wrapper both read, so the window is never guessed. Repoint a tier
+line Hermes (the cheap lane, the aux models, any `/model` switch) reads, so
+the window is never guessed. Repoint a tier
 at a differently-windowed model and its `context_length` must move in the
 same change; `mise run check-model-windows` verifies the pair against the
 provider's own API (`POST https://ollama.com/api/show` ->
@@ -196,108 +196,15 @@ baked helper — do NOT `git clone` into your own space:
   worktrees are always kept. `HERMES_REPOS_DIR` / `HERMES_WORKTREES_DIR`
   override the locations.
 
-### Claude Code (`claude`) — available to EVERY profile
+### Coding is Hermes' own work
 
-`claude` is not the developer's tool; every profile has it. It is the
-shape for **writing or changing code** — reach for it instead of editing
-files one tool call at a time. It is a wrapper (baked in
-`docker/hermes/claude*`, copied to `/opt/data/tools/claude-hermes/` at
-boot) around a volume-installed `claude-real` native binary (the
-`@anthropic-ai/claude-code-linux-arm64` platform package, symlinked into
-`/opt/data/bin` and `/usr/local/bin`).
-
-Every invocation re-reads the rendered `config.yaml` for `$HERMES_HOME` —
-so each profile gets its own model — and pins Claude Code to exactly the
-model Hermes is running (`model.default`, a tier name like `smarter`),
-routed through the LiteLLM gateway via
-`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` (`$LITELLM_API_KEY`) — never
-Anthropic directly, and never a hardcoded model id. The cheap-model slot
-(`ANTHROPIC_SMALL_FAST_MODEL`) follows `smart_model_routing.cheap_model`.
-An explicit `--model` flag always wins; without gateway creds it degrades
-to stock claude.
-
-It also sets **`CLAUDE_CODE_MAX_CONTEXT_TOKENS`** to the running model's
-real window, out of the config's `model_overrides` block (which
-`render.py` emits from every `context_length` in `config/models.toml`).
-Claude Code's own model catalogue describes none of these tier names, so
-without this it assumes **200k** and auto-compacts a 1M-context session
-five times too early. The window follows the model, `--model` included —
-never the profile default — and a model the config does not declare
-leaves the variable unset rather than guessed. So: **a new model needs an
-entry in `config/models.toml`** (id + true window) before you can run it
-here; that one line serves Hermes' own resolution, the cheap/auxiliary
-lanes, and `claude`.
-
-**Permissions: the wrapper passes `--dangerously-skip-permissions` for you.
-Do not pass a permission flag of your own.** Claude Code has its own
-permission layer, separate from Hermes'. In print mode it cannot prompt, so
-its default denies every write — an agent's first bare `claude -p` walls
-there and has to invent an escape. The `acceptEdits` / plan modes are the
-wrong escape: they route each call through Claude Code's permission
-*classifier*, a billed extra model call that a third-party gateway cannot
-serve, and this stack reaches Claude Code **only** through LiteLLM (the
-wrapper prints that incompatibility itself). So the wrapper skips the layer
-outright — the same posture the profiles already run under for their own
-tools (`render.py`'s `STACK_APPROVAL_DEFAULTS`: `mode: off` +
-`unattended_mode: approve`). Passing your own `--permission-mode` or
-`--dangerously-skip-permissions` suppresses the wrapper's default and keeps
-whatever you passed; subcommands and `--help`/`--version` are left alone.
-
-**Driving it**
-
-- One-shot (preferred): `claude -p '<task>' --max-turns 10`, run in the
-  project worktree. Put the acceptance criteria in the task text.
-- Multi-turn / iterative: `tmux new-session -d -s cc …`, driven with
-  send-keys / capture-pane.
-- A run is long and synchronous: never sit in it, and never poll it with a
-  `sleep`-and-check loop — that spends a whole delivery window and can be
-  killed mid-write (it cost four hours on mach#26). Background it with its
-  output to a log and `notify_on_complete`, or give it to a job that
-  outlives the turn.
-- A hard multi-step refactor may opt up a tier: `--model smartest` instead
-  of the profile's default (`smarter` for the default, developer and
-  release profiles).
-- In claude's shell, `claude_model` prints the active model;
-  `/opt/data/tools/claude-hermes/claude-model-resolve.py <config.yaml>`
-  prints provider + primary + cheap model for a given profile, and
-  `… --window <model-id> <config.yaml>` prints the window the wrapper will
-  export for that model (exit 1 = not declared, so no window will be set).
-- **You stay accountable for what lands.** After it finishes, read
-  `git diff`, run the repo's tests/lint yourself, and commit under your
-  own identity. A `claude` run is a claim until you have verified it.
-- **When NOT to use it**: `claude` writes code. For reasoning whose
-  intermediate output should stay out of your context, use
-  `delegate_task` (below); for a mechanical multi-step shell/file job,
-  `execute_code` is cheaper.
-
-**Updates are NOT pinned**: the entrypoint provisions the registry's
-`latest` at boot (idempotent), and the declared no-agent cron job
-`team: claude code update` (script `claude-update.sh`, daily 4:37am)
-swaps `claude-real` atomically when the registry moves. Silent when up to
-date. Model/config changes reach the wrapper on the next container start
-(config re-apply); until then pass `--model <id>` explicitly.
-
-**The installer's shape is load-bearing.** Since the 2.1.x cutover the
-wrapper package `@anthropic-ai/claude-code` ships only `install.cjs` + a
-`bin/claude.exe` stub; the ~230 MB native binary lives in a per-platform
-package (`@anthropic-ai/claude-code-linux-arm64` here) at
-`package/claude`. The old installer fetched `package/bundle/cli.js` from
-the wrapper tarball — a path that had stopped existing — so **every**
-install failed (boot included) and `claude-real` sat frozen for weeks.
-The installer now resolves the platform package itself, extracts
-`package/claude`, runs it for `--version`, and only then renames it over
-`claude-real`. If you ever need to debug it: a failing install prints its
-reason on **stdout** and exits non-zero, deliberately — a `no_agent` job
-discards stderr, and a failure hidden on stderr is a failure that reports
-`ok` forever.
-
-**Expected noise**: `unrecognized_model` from Claude Code on any tier name
-or `ollama/*` id — cosmetic; it is talking to the gateway, not Anthropic. (If you
-instead see its *auto-compact* notice — "keeps this session within 200k
-tokens (the context window it assumes)" — the window lookup did not apply:
-the model is missing from `config/models.toml`, or you bypassed the wrapper
-by calling `claude-real` directly.) `--max-turns` is print-mode-only
-(prevents runaways).
+There is no second coding harness on this stack: the Claude Code wrapper and
+its updater were removed on 2026-11-28. Write code directly — read the file,
+then `patch` / `write_file`; put anything shell-shaped in a script and run it
+by path. For a multi-file change, or a read-only question whose reasoning
+should not land in your context, use `delegate_task` (next section);
+`execute_code` is for mechanical bulk. Do not reintroduce a `claude` binary,
+wrapper, or installer job.
 
 ### Subagents (`delegate_task`) — fresh context, isolated
 
@@ -375,10 +282,10 @@ worktree — the isolation this stack needs, it already has.
   failure exits non-zero.** stderr is discarded, so `echo … >&2` in a job
   script is the same as deleting the message — and `exit 0` on a failure
   is worse, because the run records `ok` and the job cheerfully redelivers
-  the wrong thing forever. That exact combination (`package/bundle/cli.js`
-  gone, failure on stderr, `exit 0`) hid a completely broken Claude Code
-  installer for weeks. Exit non-zero and the scheduler delivers its own
-  failure notice, deduped per signature.
+  the wrong thing forever. That exact shape (a fetch path that no longer
+  existed, failure on stderr, `exit 0`) hid a completely broken installer
+  for weeks. Exit non-zero and the scheduler delivers its own failure
+  notice, deduped per signature.
 - **Delivery targets**: `bot-chat:<profile>` wakes that profile's agent
   (use it when a decision is needed — always name the profile);
   `discord:<chat_id>` posts into a channel as an outbound message (the

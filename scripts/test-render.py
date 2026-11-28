@@ -162,15 +162,21 @@ check("known tasks match the image's aux task set",
 # ---------------------------------------------------------------------------
 print("# 2. the rendered shape")
 rendered = renders()
-check("compression renders on the smarter tier", rendered["compression"],
-      {"provider": "litellm", "model": "smarter"})
+check("compression renders on the smart tier (Beam, 1M)",
+      rendered["compression"], {"provider": "litellm", "model": "smart"})
 check("title_generation renders on the cheap tier", rendered["title_generation"],
       {"provider": "litellm", "model": "cheap"})
 check("memory_query_rewrite renders on the cheap tier",
       rendered["memory_query_rewrite"], {"provider": "litellm", "model": "cheap"})
-check("approval keeps its timeout", rendered["approval"], {"timeout": "60"})
-check("vision renders on the smarter tier (the one image-capable tier — "
-      "smart moved to Beam, text-only, 2026-10-17)",
+check("approval runs on the cheap tier and keeps its timeout",
+      rendered["approval"],
+      {"provider": "litellm", "model": "cheap", "timeout": "60"})
+check("mcp sampling runs on the smart tier", rendered["mcp"],
+      {"provider": "litellm", "model": "smart"})
+check("group_router runs on the cheap tier", rendered["group_router"],
+      {"provider": "litellm", "model": "cheap"})
+check("vision renders on the smarter tier (the image-capable main — "
+      "smart is Beam, text-only)",
       rendered["vision"], {"provider": "litellm", "model": "smarter"})
 # A lane pinned to an upstream id would lose its declared window (the reason
 # models.toml states windows per TIER).

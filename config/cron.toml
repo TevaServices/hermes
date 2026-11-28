@@ -145,19 +145,6 @@
 # lanes (same schema, same reconciler) — see
 # docker/hermes/render-drop-profiles.py.
 
-# Keep Claude Code current. Silent when already current — the script's
-# stdout IS the delivery, so an up-to-date run says nothing. A FAILED
-# install prints its reason on STDOUT and exits non-zero (it used to
-# print to stderr and exit 0, which is how a totally broken install
-# reported `ok` every day for weeks while claude-real sat frozen).
-[[jobs]]
-profile = "default"
-name = "team: claude code update"
-schedule = "37 4 * * *"
-script = "claude-update.sh"
-no_agent = true
-deliver = "discord:@@DISCORD_HOME_CHANNEL@@"  # #hermes-home
-
 # Weekly prune of per-session git worktrees. Silent unless it removed
 # something.
 [[jobs]]

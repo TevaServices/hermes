@@ -37,16 +37,12 @@
 #                    per-provider+model windows, resolution step 0b), which
 #                    is what makes this file the ONE source of truth on the
 #                    agent side: the profile's own model reads it as
-#                    model.context_length, the cheap lane / auxiliary models
-#                    / any /model switch read it from model_overrides, and
-#                    the `claude` wrapper reads it back for
-#                    CLAUDE_CODE_MAX_CONTEXT_TOKENS — Claude Code knows none
-#                    of these ids and would otherwise assume a 200K window
-#                    and auto-compact a 1M session five times too early. A
-#                    model the wrapper is asked for that is NOT declared
-#                    here gets no window at all (it compacts early rather
-#                    than overrunning the provider), so declare it before
-#                    use.
+#                    model.context_length, and the cheap lane / auxiliary
+#                    models / any /model switch read it from
+#                    model_overrides. A model the stack is asked for that is
+#                    NOT declared here gets no window at all (it compacts
+#                    early rather than overrunning the provider), so declare
+#                    it before use.
 #   description    — free-form note shown by `mise run render`
 #
 # An alias served by a NATIVE provider instead of the gateway sets
@@ -55,21 +51,21 @@
 # gateway, and a bare `gateway` key here would read as a collision.)
 #
 # Routing policy (who runs what):
-#   cheap    — the low-cost lane. Short/simple turns (smart_model_routing in
-#              the default profile), Hermes' mechanical auxiliary side tasks
-#              (title generation, memory-query rewrite — the pinned set is
-#              STACK_AUX_MODELS in render.py), and Honcho's VOLUME lanes
-#              (the deriver, which runs on every message, and the minimal
-#              dialectic level).
-#   smart    — everyday work: the planner profile, Honcho's REASONING lanes
-#              (dream deduction/induction, summaries, and the medium/high/max
-#              dialectic levels) and the default dialectic level, `low` — a
-#              5-round agentic loop over the memory graph, which is reasoning
-#              work however light its name sounds.
+#   cheap    — the low-cost lane. Short auxiliary calls (title generation,
+#              memory-query rewrite, approval, the group router — the pinned
+#              set is STACK_AUX_MODELS in render.py), and Honcho's VOLUME
+#              lanes (the deriver, which runs on every message, and the
+#              minimal dialectic level).
+#   smart    — the middle ground: the planner profile, context compression,
+#              MCP sampling and the judgment auxiliary lanes, Honcho's
+#              REASONING lanes (dream deduction/induction, summaries, and the
+#              medium/high/max dialectic levels) and the default dialectic
+#              level, `low` — a 5-round agentic loop over the memory graph,
+#              which is reasoning work however light its name sounds.
 #   smarter  — the workhorse: a 1M window at flash economics. The default,
-#              developer and RELEASE profiles, and context compression —
-#              which summarizes a potentially ~1M context, so it needs BOTH
-#              intelligence and the window. (Release is here rather than on
+#              developer and RELEASE profiles, and the vision auxiliary
+#              lane — image understanding wants the multimodal main model.
+#              (Release is here rather than on
 #              the top tier because its work is execution-grade, not
 #              judgement: read a gate back, follow a procedure, parse a CI
 #              job log, call an API — and a release turn reads whole job
