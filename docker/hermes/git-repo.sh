@@ -43,8 +43,11 @@
 #       fetches every <host>/<owner>/<repo>.git under $REPOS. Always
 #       updates remote-tracking refs (origin/*) AND the local mirror of
 #       the default branch (refs/heads/<branch>) so worktrees cut from
-#       the clone's local branches are current. Network failures are
-#       reported but never fatal (a stale clone beats a dead script).
+#       the clone's local branches are current. A per-repo failure is
+#       reported and the sweep continues (a stale clone beats no clone),
+#       but the no-arg form EXITS NONZERO if ANY repo failed — the daily
+#       refresh job depends on that to alert. The single-repo form exits
+#       nonzero on failure too; `worktree` is the lenient caller.
 #   git-repo.sh worktree <git-url> [branch] [dest]
 #       ensure + fetch + `git worktree add` for THIS session; prints the
 #       worktree path. Defaults: branch = remote default branch, dest =
@@ -103,9 +106,10 @@ ensure() {
 # and never moved again.
 #
 # Safe under set -eu: network failure -> message + return 1, and callers
-# decide. `fetch` with no arg loops over every clone and never fails the
-# command (stale clone beats dead script), but still exits nonzero if
-# EVERY clone failed so cron can signal.
+# decide. No-arg `fetch` keeps going after a failed repo (a stale clone
+# beats a dead script) but exits nonzero if ANY failed, so the daily
+# refresh cron can signal: partial failure is an incident, not idle — a
+# mirror that cannot move serves stale branches to every new worktree.
 fetch_bare() {
   bare="$1"
   if ! git -C "$bare" fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune 2>/tmp/git-repo-fetch.err; then
@@ -148,7 +152,11 @@ case "$cmd" in
         if fetch_bare "$bare"; then ok=$((ok + 1)); else rc=1; fi
       done
       echo "git-repo fetch: $ok/$total repo(s) refreshed"
-      # All-failed -> nonzero so cron/monitoring can signal; partial ok -> 0.
+      # ANY failed repo -> nonzero: the daily refresh job surfaces it. A
+      # clone that cannot fetch is a stale mirror; one that is PERMANENTLY
+      # unreachable (repo transferred/deleted, or not visible to this
+      # host's GitHub App) is fixed by re-pointing or retiring the clone —
+      # see refresh-repos.sh's fail() hint.
       [ "$total" -gt 0 ] && [ "$ok" -eq 0 ] && exit 1
       exit "$rc"
     fi
