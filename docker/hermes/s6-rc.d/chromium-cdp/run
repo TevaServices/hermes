@@ -50,6 +50,18 @@ chown hermes:hermes "$CDP_DATA" 2>/dev/null || true
 # (no user namespaces for an unprivileged uid). The process runs as that
 # unprivileged user with no access to secrets, and this is a local-only
 # endpoint (binds 127.0.0.1).
+#
+# HOME must be reset before the privilege drop. `with-contenv` repopulates
+# HOME from /init as /root (upstream's dashboard/run carries the same
+# warning), and uid 10000 cannot write there: Chrome's crashpad handler
+# then dies with "chrome_crashpad_handler: --database is required" and the
+# whole process traps with SIGTRAP, so the service restart-loops (observed
+# on the v0.23.5 base 2026-11-28; the previous base tolerated it). A
+# `docker exec -u hermes` run sets HOME=/opt/data and works, which is what
+# made the difference visible. Keep this and the cd in step with
+# /etc/s6-overlay/s6-rc.d/dashboard/run.
+export HOME=/opt/data
+cd /opt/data
 exec s6-setuidgid hermes "$SHELL_BIN" \
     --headless \
     --remote-debugging-address=127.0.0.1 \
