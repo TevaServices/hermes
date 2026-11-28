@@ -141,6 +141,23 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${HERMES_DASHBOARD_HOS
 #   enabled: 30x redirect to login or 401. A 200 WITHOUT a session means the
 #   auth gate is NOT engaged — investigate immediately.
 docker logs hermes-main 2>&1 | grep -i '\[dashboard\]' | tail -5   # no auth-provider errors
+# The stack's housekeeping crons: every job ok, failure_streak 0. A non-zero
+# streak (or an incident in `hermes cron incidents`) is real — the daily
+# repo refresh, for one, fails EVERY day when a central clone cannot fetch.
+docker exec hermes-main python3 -c "
+import json
+for j in json.load(open('/opt/data/cron/jobs.json'))['jobs']:
+    print(j['name'], '|', j['last_status'], '| streak', j['failure_streak'])"
+#   -> "team: daily repo refresh | ok | streak 0" (and the other two)
+#   error -> read last_error: it names each clone and the git error. A clone
+#   that cannot fetch is a STALE MIRROR, and a permanently unreachable one —
+#   the repo was transferred or deleted, or the profile's GitHub App cannot
+#   see it — never heals on its own: re-point the clone's origin, or MOVE it
+#   out of /opt/data/repos (never delete it; a mirror can hold local-only
+#   s/<session> branches). Observed 2026-11-28: a volume carried
+#   github.com/bcross/{hermes,komodo,trader}.git to a host whose only App is
+#   TevaServices -> 16 consecutive daily failures ("Repository not found");
+#   after moving the three aside the sweep was 4/4 and silent.
 ```
 
 ## Team label protocol (offline, and the live probe for a misfiled label)
